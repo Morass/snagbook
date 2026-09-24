@@ -1,0 +1,167 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1d1d1f;
+  --muted: #6e6e73;
+  --line: #e3e3e6;
+  --bar: #f6f6f7;
+  --hover: #ebebed;
+  --on: #dde8ff;
+  --accent: #0a66ff;
+  --code-bg: #f2f2f4;
+  --pop: #ffffff;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e20;
+    --fg: #ececee;
+    --muted: #9a9aa0;
+    --line: #36363a;
+    --bar: #262628;
+    --hover: #333337;
+    --on: #213a66;
+    --accent: #4d8dff;
+    --code-bg: #2a2a2e;
+    --pop: #2c2c30;
+    --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  }
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+body { display: flex; flex-direction: column; }
+
+#toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 10px;
+  background: var(--bar);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.tb {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: 13px -apple-system, sans-serif;
+  cursor: default;
+}
+.tb:hover { background: var(--hover); }
+.tb.on { background: var(--on); }
+.sep { width: 1px; height: 18px; background: var(--line); margin: 0 5px; }
+.menu { position: relative; }
+.menu.heading .tb { min-width: 86px; text-align: left; }
+.menu .pop {
+  display: none;
+  position: absolute;
+  top: 30px;
+  left: 0;
+  background: var(--pop);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  z-index: 10;
+  min-width: 130px;
+}
+.menu.open .pop { display: block; }
+.menu.colors .pop { display: none; min-width: 0; grid-template-columns: repeat(7, 26px); gap: 2px; }
+.menu.colors.open .pop { display: grid; }
+.pop-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  padding: 5px 9px;
+  border-radius: 5px;
+  font: 13px -apple-system, sans-serif;
+}
+.menu.colors .pop-item { padding: 3px; width: 26px; }
+.pop-item:hover { background: var(--hover); }
+.swatch { display: block; width: 18px; height: 18px; border-radius: 50%; }
+.swatch.none { border: 1.5px solid var(--muted); box-sizing: border-box; background: linear-gradient(135deg, transparent 45%, var(--muted) 45%, var(--muted) 55%, transparent 55%); }
+.a-color { font-weight: 700; border-bottom: 3px solid transparent; padding: 0 2px; }
+.a-size { font-weight: 600; }
+
+#editor { flex: 1; overflow: auto; }
+.ProseMirror {
+  outline: none;
+  padding: 18px 28px 40vh;
+  max-width: 860px;
+  margin: 0 auto;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  font-variant-ligatures: none;
+  caret-color: var(--accent);
+}
+.ProseMirror p { margin: 0 0 0.6em; }
+.ProseMirror h1, .ProseMirror h2, .ProseMirror h3 { line-height: 1.25; margin: 0.9em 0 0.4em; }
+.ProseMirror h1 { font-size: 1.7em; }
+.ProseMirror h2 { font-size: 1.35em; }
+.ProseMirror h3 { font-size: 1.12em; }
+.ProseMirror ul, .ProseMirror ol { padding-left: 1.6em; margin: 0 0 0.6em; }
+.ProseMirror li > .li-body > p { margin: 0.1em 0; }
+.ProseMirror li.task { list-style: none; position: relative; }
+.ProseMirror li.task > input { position: absolute; left: -1.45em; top: 0.3em; margin: 0; width: 15px; height: 15px; accent-color: var(--accent); }
+.ProseMirror li.task[data-checked="true"] > .li-body { color: var(--muted); text-decoration: line-through; }
+.ProseMirror blockquote { border-left: 3px solid var(--line); margin: 0 0 0.6em; padding-left: 1em; color: var(--muted); }
+.ProseMirror code { background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.3em; font: 0.9em ui-monospace, Menlo, monospace; }
+.ProseMirror pre { background: var(--code-bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+.ProseMirror pre code { background: none; padding: 0; }
+.ProseMirror pre.raw, .ProseMirror code.raw { color: var(--muted); }
+.ProseMirror hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
+.ProseMirror a { color: var(--accent); }
+.ProseMirror-selectednode { outline: 2px solid var(--accent); }
+
+.img-wrap { position: relative; display: inline-block; max-width: 100%; line-height: 0; margin: 2px 0; }
+.img-wrap img { max-width: 100%; border-radius: 6px; box-shadow: 0 0 0 1px var(--line); }
+.img-wrap .resize {
+  position: absolute; right: -5px; bottom: -5px; width: 12px; height: 12px;
+  border-radius: 3px; background: var(--accent); border: 2px solid var(--bg);
+  cursor: nwse-resize; opacity: 0; transition: opacity 0.12s;
+}
+.img-wrap:hover .resize, .img-wrap.selected .resize { opacity: 1; }
+.img-wrap.selected img { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.video-card {
+  position: relative; display: inline-flex; flex-direction: column; max-width: 100%;
+  border-radius: 8px; overflow: hidden; background: #000; margin: 2px 0; line-height: 1.3;
+  box-shadow: 0 0 0 1px var(--line); vertical-align: top;
+}
+.video-card .poster { display: block; max-width: 520px; width: 100%; min-height: 120px; object-fit: contain; background: #111; cursor: pointer; }
+.video-card .poster.missing { min-width: 320px; min-height: 180px; }
+.video-card video { display: block; max-width: 100%; max-height: 70vh; }
+.video-card .play {
+  position: absolute; left: 50%; top: calc(50% - 14px); transform: translate(-50%, -50%);
+  width: 54px; height: 54px; border-radius: 50%; border: 0; font-size: 20px; padding-left: 5px;
+  background: rgba(0, 0, 0, 0.55); color: #fff; cursor: pointer;
+}
+.video-card .play:hover { background: rgba(10, 102, 255, 0.85); }
+.video-card .caption { display: block; padding: 5px 10px; font-size: 12px; color: #ddd; background: #161618; }
+.video-card.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.ProseMirror-gapcursor { display: none; pointer-events: none; position: absolute; }
+.ProseMirror-gapcursor:after { content: ""; display: block; position: absolute; top: -2px; width: 20px; border-top: 1px solid var(--fg); animation: ProseMirror-cursor-blink 1.1s steps(2, start) infinite; }
+@keyframes ProseMirror-cursor-blink { to { visibility: hidden; } }
+.ProseMirror-focused .ProseMirror-gapcursor { display: block; }
+.ProseMirror-hideselection *::selection { background: transparent; }
+.ProseMirror-hideselection { caret-color: transparent; }

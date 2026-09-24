@@ -1,0 +1,6 @@
+.build/
+build/
+web/node_modules/
+.swiftpm/
+*.xcodeproj
+.DS_Store
