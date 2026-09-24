@@ -53,7 +53,7 @@ final class AppModel: ObservableObject {
         if let err = configStore.loadError {
             alert = AlertInfo(title: "Settings could not be read", message: "\(err)\n\nSnagbook is using its defaults and will not change that file until it can read it.")
         }
-        if let last = config.lastSession, let s = try? Session.open(last) {
+        if let last = config.lastSession, let s = try? Session.open(last, fallbackHeader: config.header) {
             use(s)
         }
     }
@@ -67,6 +67,7 @@ final class AppModel: ObservableObject {
             show(error)
         }
         config = configStore.config
+        if session?.fallbackHeader != config.header { session?.fallbackHeader = config.header }
     }
 
     // MARK: - sessions
@@ -88,7 +89,7 @@ final class AppModel: ObservableObject {
     func openSession(_ path: String) {
         Task {
             await editor.flush()
-            do { use(try Session.open(path)) } catch { show(error) }
+            do { use(try Session.open(path, fallbackHeader: config.header)) } catch { show(error) }
         }
     }
 
@@ -430,7 +431,7 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([session.url.appendingPathComponent(Session.readmeName)])
     }
 
-    func setSessionHeader(_ text: String) {
+    func setSessionHeader(_ text: String?) {
         guard let session else { return }
         do { try session.setHeader(text) } catch { show(error) }
         objectWillChange.send()

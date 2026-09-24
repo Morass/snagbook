@@ -12,8 +12,9 @@ public struct Manifest: Codable, Equatable {
     public var format: Int = 1
     public var id: String
     public var created: Date
-    /// The header text as the user wrote it, placeholders unfilled.
-    public var header: String
+    /// This session's own header, placeholders unfilled. Nil: follow the global header
+    /// (`Session.fallbackHeader`), so changing it in the settings reaches every session.
+    public var header: String?
     /// Display order.
     public var items: [ItemRecord]
     public var nextItem: Int
@@ -32,6 +33,10 @@ public final class Session {
     /// How to spell the folder for people and other programs ("~/…").
     public let displayPath: String
     public private(set) var manifest: Manifest
+    /// The header used when the session has none of its own (the app's global setting).
+    public var fallbackHeader: String = Config.defaultHeader {
+        didSet { if manifest.header == nil, oldValue != fallbackHeader { try? writeReadme() } }
+    }
 
     public static let manifestName = "session.json"
     public static let readmeName = "README.md"
@@ -62,18 +67,20 @@ public final class Session {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         let display = (root.hasSuffix("/") ? String(root.dropLast()) : root) + "/" + name
         let s = Session(url: url, displayPath: Paths.abbreviate(Paths.expand(display)),
-                        manifest: Manifest(id: hash, created: now, header: config.header, items: [], nextItem: 1))
+                        manifest: Manifest(id: hash, created: now, header: nil, items: [], nextItem: 1))
+        s.fallbackHeader = config.header
         try s.save()
         return s
     }
 
     /// Open an existing session folder. `path` may use "~".
-    public static func open(_ path: String) throws -> Session {
+    public static func open(_ path: String, fallbackHeader: String = Config.defaultHeader) throws -> Session {
         let url = Paths.url(path)
         let data: Data
         do { data = try Data(contentsOf: url.appendingPathComponent(manifestName)) } catch { throw SnagError.notASession(path) }
         let manifest = try decoder.decode(Manifest.self, from: data)
         let s = Session(url: url, displayPath: Paths.abbreviate(Paths.expand(path)), manifest: manifest)
+        s.fallbackHeader = fallbackHeader
         s.repair()
         return s
     }
@@ -193,7 +200,8 @@ public final class Session {
         try save()
     }
 
-    public func setHeader(_ header: String) throws {
+    /// Give this session its own header; nil goes back to the global one.
+    public func setHeader(_ header: String?) throws {
         manifest.header = header
         try save()
     }
@@ -261,7 +269,7 @@ public final class Session {
     // MARK: - README and hand-off
 
     public var renderedHeader: String {
-        Header.render(manifest.header, session: displayPath, date: manifest.created, items: manifest.items.count)
+        Header.render(manifest.header ?? fallbackHeader, session: displayPath, date: manifest.created, items: manifest.items.count)
     }
 
     /// README.md: the header, then every item's note with its links pointing into the item's

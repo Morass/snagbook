@@ -302,25 +302,38 @@ struct HeaderEditor: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) var dismiss
     @State private var text = ""
+    @State private var own = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Session header").font(.headline)
-            Text("Written at the top of this session's README.md and used by Copy Hand-off. Placeholders: {session} {readme} {date} {items}.")
+            Text("Written at the top of README.md and used by Copy Hand-off. Placeholders: {session} {readme} {date} {items}.")
                 .font(.callout).foregroundStyle(.secondary)
-            TextEditor(text: $text).font(.system(.body, design: .monospaced)).frame(minHeight: 220)
+            Picker("", selection: $own) {
+                Text("Use the global header (Settings › General)").tag(false)
+                Text("This session has its own header").tag(true)
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+            TextEditor(text: $text).font(.system(.body, design: .monospaced)).frame(minHeight: 200)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(.separator))
+                .disabled(!own)
+                .opacity(own ? 1 : 0.6)
             HStack {
-                Button("Use Default") { text = model.config.header }
-                Button("Save as Default for New Sessions") { model.updateConfig { $0.header = text } }
+                Button("Save as the Global Header") { model.updateConfig { $0.header = text } }
+                    .disabled(!own || text == model.config.header)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Save") { model.setSessionHeader(text); dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Save") { model.setSessionHeader(own ? text : nil); dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
-        .frame(width: 620, height: 420)
-        .onAppear { text = model.session?.manifest.header ?? model.config.header }
+        .frame(width: 620, height: 440)
+        .onAppear {
+            own = model.session?.manifest.header != nil
+            text = model.session?.manifest.header ?? model.config.header
+        }
+        .onChange(of: own) { _, isOwn in if !isOwn { text = model.config.header } }
     }
 }
 

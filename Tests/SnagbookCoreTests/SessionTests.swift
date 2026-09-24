@@ -133,6 +133,31 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(s.handoff(style: .header), "No placeholder\n\n\(s.displayPath)/README.md")
     }
 
+    func testSessionsFollowTheGlobalHeaderUntilGivenTheirOwn() throws {
+        var cfg = Config()
+        cfg.header = "old {session}"
+        let s = try Session.create(root: root, config: cfg)
+        s.fallbackHeader = "new header"
+        let readme = { try String(contentsOf: s.url.appendingPathComponent("README.md"), encoding: .utf8) }
+        XCTAssertTrue(try readme().hasPrefix("new header\n"))
+        XCTAssertTrue(try Session.open(s.url.path, fallbackHeader: "from settings").handoff(style: .header).hasPrefix("from settings"))
+        try s.setHeader("mine")
+        s.fallbackHeader = "ignored"
+        XCTAssertTrue(try readme().hasPrefix("mine\n"))
+        XCTAssertEqual(try Session.open(s.url.path, fallbackHeader: "x").manifest.header, "mine")
+        try s.setHeader(nil)
+        XCTAssertTrue(try readme().hasPrefix("ignored\n"))
+    }
+
+    func testOldSessionsWithAStoredHeaderStillOpen() throws {
+        let s = try Session.create(root: root, config: Config())
+        let u = s.url.appendingPathComponent("session.json")
+        var json = try String(contentsOf: u, encoding: .utf8)
+        json = json.replacingOccurrences(of: "\"id\"", with: "\"header\" : \"frozen\",\n  \"id\"")
+        try json.write(to: u, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try Session.open(s.url.path).manifest.header, "frozen")
+    }
+
     func testMoveItem() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem(); try s.addItem(); try s.addItem()
