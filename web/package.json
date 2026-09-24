@@ -6,7 +6,7 @@
   "description": "The note editor inside Snagbook: ProseMirror over plain Markdown.",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "license": "MIT",
   "dependencies": {
