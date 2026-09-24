@@ -199,6 +199,18 @@ enum SelfTest {
         let clip = model.pasteboard.string(forType: .string) ?? ""
         check(clip.contains(session.displayPath), "Copy Hand-off puts the session path on the clipboard: \(clip.prefix(80))")
 
+        // 11b. Sessions have names and can be switched without restarting anything.
+        model.renameSession("Inventory pass")
+        check(model.session?.title == "Inventory pass" && Session.list(root: model.config.sessionsFolder).contains { $0.title == "Inventory pass" }, "a session can be named, and the list shows the name")
+        let firstPath = session.displayPath
+        model.newSession()
+        for _ in 0..<30 where model.session?.displayPath == firstPath { await settle(100) }
+        check(model.session?.displayPath != firstPath && model.selectedID != nil, "New Session switches to a fresh session with its first item")
+        model.openSession(firstPath)
+        for _ in 0..<30 where model.session?.displayPath != firstPath { await settle(100) }
+        await settle()
+        check(model.session?.title == "Inventory pass" && model.items.contains { $0.id == second }, "switching back reopens the named session where it was")
+
         // 12. Delete moves an item's folder away and forgets it.
         model.delete(second, confirm: false)
         await settle()
@@ -241,7 +253,7 @@ enum SelfTest {
     }
 
     static func interactions(_ model: AppModel) async {
-        // The region picker: a drag becomes a region, a click with nothing under it the screen.
+        // The region picker: a drag becomes a region, a click does nothing, F is the screen.
         guard let screen = NSScreen.main else { return check(false, "a screen exists") }
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: screen.frame.width, height: screen.frame.height), styleMask: [.borderless], backing: .buffered, defer: false)
         win.isReleasedWhenClosed = false
@@ -262,11 +274,18 @@ enum SelfTest {
             check(false, "dragging in the picker selects a region")
         }
         picked = nil
+        picker.mouseDown(with: mouse(.leftMouseDown, picker, NSPoint(x: 400, y: 400)))
+        picker.mouseUp(with: mouse(.leftMouseUp, picker, NSPoint(x: 401, y: 401)))
+        check(picked == nil, "a click without a drag picks nothing (no window picking)")
         picker.keyDown(with: key("f", code: 3, in: picker))
         check(picked?.kind == "screen" && picked?.rect == screen.frame, "F in the picker takes the whole screen")
         picker.keyDown(with: key("\u{1b}", code: 53, in: picker))
         check(cancelled, "Esc in the picker cancels")
         win.orderOut(nil)
+
+        // Record goes straight from the drawn rectangle to recording (no second press).
+        let c = model.capture
+        check(c.recordButtonTitle == "Record", "the Record button says Record when idle")
 
         // The mark-up canvas: drags draw, keys switch tools, Return saves.
         guard let session = model.session, let id = model.selectedID else { return check(false, "an item for the canvas test") }

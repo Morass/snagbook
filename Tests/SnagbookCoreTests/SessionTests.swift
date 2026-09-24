@@ -158,6 +158,17 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try Session.open(s.url.path).manifest.header, "frozen")
     }
 
+    func testSessionNamesDefaultToTheirStartAndShowInTheList() throws {
+        let s = try Session.create(root: root, config: Config(), now: date("2026-09-24T18:30:00Z"))
+        XCTAssertTrue(s.title.hasPrefix("Session 24 Sep, "), s.title)
+        try s.setTitle("  Inventory pass ")
+        XCTAssertEqual(try Session.open(s.url.path).title, "Inventory pass")
+        XCTAssertEqual(Session.list(root: root).first?.title, "Inventory pass")
+        XCTAssertTrue(try String(contentsOf: s.url.appendingPathComponent("README.md"), encoding: .utf8).contains("Session: **Inventory pass**"))
+        try s.setTitle("")
+        XCTAssertTrue(s.title.hasPrefix("Session 24 Sep"))
+    }
+
     func testMoveItem() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem(); try s.addItem(); try s.addItem()

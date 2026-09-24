@@ -103,7 +103,7 @@ struct ShortcutSettings: View {
     var body: some View {
         Form {
             Section("Work in any app, including full-screen games") {
-                KeyboardShortcuts.Recorder("Select region / record / stop:", name: .record)
+                KeyboardShortcuts.Recorder("Record (drag a rectangle) / stop:", name: .record)
                 KeyboardShortcuts.Recorder("Screenshot:", name: .screenshot)
                 KeyboardShortcuts.Recorder("New item:", name: .newItem)
                 KeyboardShortcuts.Recorder("Show or hide the notebook:", name: .showNotebook)
@@ -118,9 +118,8 @@ struct ShortcutSettings: View {
                 shortcut("Heading 1–3 / body text", "⌥⌘1–3  ⌥⌘0")
                 shortcut("Bullets / numbers / checklist", "⇧⌘8  ⇧⌘7  ⇧⌘9")
             }
-            Section("While selecting a region") {
-                shortcut("Whole screen", "F or Return")
-                shortcut("Pick a window", "click without dragging")
+            Section("While dragging the rectangle") {
+                shortcut("Whole screen instead", "F")
                 shortcut("Cancel", "Esc")
             }
         }

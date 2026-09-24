@@ -8,20 +8,20 @@ import SwiftUI
 /// little control strip under the region.
 @MainActor
 final class CaptureController: ObservableObject {
-    enum Intent { case place, shoot }
-    enum Phase: Equatable { case idle, picking, placed, recording, saving }
+    enum Intent { case record, shoot }
+    enum Phase: Equatable { case idle, picking, recording, saving }
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var target: CaptureTarget?
     @Published private(set) var recordingStarted: Date?
-    /// The last region used, offered again (Return) the next time a region is picked.
-    private(set) var lastTarget: CaptureTarget?
 
     unowned let model: AppModel
     private let overlay = RegionOverlay()
     private var recorder: Recorder?
     private var recordingFile: URL?
     private var recordingItem: Int?
+    /// The notebook stepped aside for this capture and comes back when it is filed.
+    private var restoreNotebook = false
 
     init(model: AppModel) {
         self.model = model
@@ -33,7 +33,6 @@ final class CaptureController: ObservableObject {
     var recordButtonTitle: String {
         switch phase {
         case .recording: return "Stop"
-        case .placed: return "Start Recording"
         case .saving: return "Saving…"
         default: return "Record"
         }
@@ -41,41 +40,46 @@ final class CaptureController: ObservableObject {
 
     // MARK: - entry points
 
-    /// ⌃⌘R: pick a region; again: record it; again: stop.
+    /// Record: drag a rectangle and recording starts. Again (or Stop): stop and file it.
     func recordAction() {
         switch phase {
-        case .idle: pick(.place)
+        case .idle: pick(.record)
         case .picking: cancel()
-        case .placed: startRecording()
         case .recording: stopRecording()
         case .saving: break
         }
     }
 
-    /// ⌃⌘S: photograph the placed region (also while recording), or pick one and shoot.
+    /// Screenshot: drag a rectangle and it is taken. While recording: the recorded area.
     func screenshotAction() {
         switch phase {
         case .idle: pick(.shoot)
-        case .picking: break
-        case .placed, .recording: if let target { shoot(target) }
-        case .saving: break
+        case .recording: if let target { shoot(target) }
+        case .picking, .saving: break
         }
     }
 
     func pick(_ intent: Intent) {
         guard Permissions.ensureScreenRecording(model) else { return }
         phase = .picking
-        overlay.startPicking(intent: intent, suggestion: lastTarget)
+        // Started from the notebook: step aside so whatever is behind it can be selected.
+        if NSApp.isActive, let w = WindowPlacement.notebook, w.isVisible {
+            restoreNotebook = true
+            w.orderOut(nil)
+            NSApp.deactivate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.overlay.startPicking(intent: intent) }
+        } else {
+            overlay.startPicking(intent: intent)
+        }
     }
 
-    /// Called by the overlay when the user has chosen.
+    /// Called by the overlay when the rectangle is drawn.
     func picked(_ t: CaptureTarget, intent: Intent) {
         target = t
-        lastTarget = t
         switch intent {
-        case .place:
-            phase = .placed
-            overlay.showPlaced(t, recording: false)
+        case .record:
+            phase = .idle
+            startRecording(t)
         case .shoot:
             phase = .idle
             overlay.hideAll()
@@ -91,13 +95,18 @@ final class CaptureController: ObservableObject {
             phase = .idle
             target = nil
             overlay.hideAll()
+            bringNotebookBack()
         }
     }
 
-    func reselect() {
-        overlay.hideAll()
-        phase = .idle
-        pick(.place)
+    /// True once: the caller should show the notebook again (the mark-up window asks).
+    func takeRestoreNotebook() -> Bool {
+        defer { restoreNotebook = false }
+        return restoreNotebook
+    }
+
+    private func bringNotebookBack() {
+        if takeRestoreNotebook() { WindowPlacement.show() }
     }
 
     // MARK: - screenshot
@@ -107,7 +116,9 @@ final class CaptureController: ObservableObject {
             do {
                 let image = try await ScreenGrabber.screenshot(t)
                 model.screenshotTaken(image, source: t.summary)
+                if !model.config.capture.annotateScreenshots { bringNotebookBack() }
             } catch {
+                bringNotebookBack()
                 model.show(error)
             }
         }
@@ -115,8 +126,8 @@ final class CaptureController: ObservableObject {
 
     // MARK: - recording
 
-    func startRecording() {
-        guard let t = target, phase == .placed else { return }
+    func startRecording(_ t: CaptureTarget) {
+        guard phase == .idle else { return }
         let id: Int
         do { id = try model.ensureItem() } catch { return model.show(error) }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Snagbook-recording-\(UUID().uuidString)", isDirectory: true)
@@ -135,16 +146,18 @@ final class CaptureController: ObservableObject {
         recordingItem = id
         phase = .recording
         recordingStarted = Date()
-        overlay.showPlaced(t, recording: true)
+        overlay.showRecording(t)
         Task {
             do {
                 try await rec.start(t, settings: model.config.capture, to: file)
             } catch {
                 recorder = nil
-                phase = .placed
+                phase = .idle
                 recordingStarted = nil
-                overlay.showPlaced(t, recording: false)
+                target = nil
+                overlay.hideAll()
                 try? FileManager.default.removeItem(at: dir)
+                bringNotebookBack()
                 model.show(error)
             }
         }
@@ -171,6 +184,7 @@ final class CaptureController: ObservableObject {
             phase = .idle
             target = nil
             overlay.hideAll()
+            bringNotebookBack()
         }
     }
 
@@ -222,16 +236,7 @@ struct CapturePill: View {
                 ProgressView().controlSize(.small)
                 Text("Saving…").foregroundStyle(.white)
             default:
-                Button { capture.startRecording() } label: {
-                    HStack(spacing: 5) { Circle().fill(.red).frame(width: 9, height: 9); Text("Record") }
-                }
-                .buttonStyle(PillButton()).help("Start recording (⌃⌘R)")
-                Button { capture.screenshotAction() } label: { Label("Shot", systemImage: "camera") }.buttonStyle(PillButton()).help("Screenshot (⌃⌘S)")
-                Button { capture.reselect() } label: { Image(systemName: "rectangle.dashed") }.buttonStyle(PillButton()).help("Select again")
-                if let t = capture.target {
-                    Text("\(t.pixelSize.width)×\(t.pixelSize.height)").font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.7))
-                }
-                Button { capture.cancel() } label: { Image(systemName: "xmark") }.buttonStyle(PillButton()).help("Close (Esc)")
+                EmptyView()
             }
         }
         .font(.system(size: 12, weight: .medium))

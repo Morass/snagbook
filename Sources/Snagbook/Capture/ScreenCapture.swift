@@ -181,29 +181,3 @@ enum Permissions {
         if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(u) }
     }
 }
-
-/// Windows on screen, front to back, for "click a window to pick it".
-enum WindowFinder {
-    struct Info {
-        var rect: CGRect // AppKit global
-        var owner: String
-    }
-
-    static func windows() -> [Info] {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
-        let mainHeight = NSScreen.screens.first?.frame.height ?? 0
-        let me = getpid()
-        return list.compactMap { w in
-            guard (w[kCGWindowLayer as String] as? Int) == 0,
-                  (w[kCGWindowOwnerPID as String] as? Int32) != me,
-                  let b = w[kCGWindowBounds as String] as? [String: CGFloat],
-                  let x = b["X"], let y = b["Y"], let width = b["Width"], let height = b["Height"],
-                  width > 40, height > 40 else { return nil }
-            let alpha = w[kCGWindowAlpha as String] as? Double ?? 1
-            guard alpha > 0.05 else { return nil }
-            return Info(rect: CGRect(x: x, y: mainHeight - y - height, width: width, height: height), owner: w[kCGWindowOwnerName as String] as? String ?? "window")
-        }
-    }
-
-    static func window(at p: CGPoint) -> Info? { windows().first { $0.rect.contains(p) } }
-}

@@ -222,7 +222,11 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     func windowWillClose(_ notification: Notification) {
         if !finished { skip() }
         Annotator.open.removeAll { $0 === self }
-        if let previousApp, !previousApp.isTerminated { previousApp.activate() }
+        if model.capture.takeRestoreNotebook() {
+            WindowPlacement.show()
+        } else if let previousApp, !previousApp.isTerminated {
+            previousApp.activate()
+        }
     }
 }
 

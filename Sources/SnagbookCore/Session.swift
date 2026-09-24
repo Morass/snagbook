@@ -12,6 +12,8 @@ public struct Manifest: Codable, Equatable {
     public var format: Int = 1
     public var id: String
     public var created: Date
+    /// A name the user gave the session ("Inventory pass", "Build 412"); nil until then.
+    public var title: String?
     /// This session's own header, placeholders unfilled. Nil: follow the global header
     /// (`Session.fallbackHeader`), so changing it in the settings reaches every session.
     public var header: String?
@@ -67,7 +69,7 @@ public final class Session {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         let display = (root.hasSuffix("/") ? String(root.dropLast()) : root) + "/" + name
         let s = Session(url: url, displayPath: Paths.abbreviate(Paths.expand(display)),
-                        manifest: Manifest(id: hash, created: now, header: nil, items: [], nextItem: 1))
+                        manifest: Manifest(id: hash, created: now, title: nil, header: nil, items: [], nextItem: 1))
         s.fallbackHeader = config.header
         try s.save()
         return s
@@ -87,6 +89,7 @@ public final class Session {
 
     public struct Summary: Equatable {
         public var path: String
+        public var title: String
         public var created: Date
         public var items: Int
         public var firstTitles: [String]
@@ -101,7 +104,7 @@ public final class Session {
             let u = rootURL.appendingPathComponent(name).appendingPathComponent(manifestName)
             guard let d = try? Data(contentsOf: u), let m = try? decoder.decode(Manifest.self, from: d) else { continue }
             let display = (root.hasSuffix("/") ? String(root.dropLast()) : root) + "/" + name
-            out.append(Summary(path: Paths.abbreviate(Paths.expand(display)), created: m.created, items: m.items.count, firstTitles: m.items.prefix(3).map(\.title)))
+            out.append(Summary(path: Paths.abbreviate(Paths.expand(display)), title: m.title ?? defaultTitle(m.created), created: m.created, items: m.items.count, firstTitles: m.items.prefix(3).map(\.title)))
         }
         return out.sorted { $0.created > $1.created }
     }
@@ -201,6 +204,23 @@ public final class Session {
     }
 
     /// Give this session its own header; nil goes back to the global one.
+    /// The session's name: what the user called it, or when it started.
+    public var title: String { manifest.title ?? Self.defaultTitle(manifest.created) }
+
+    public static func defaultTitle(_ created: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_GB")
+        f.dateFormat = "d MMM, HH:mm"
+        return "Session " + f.string(from: created)
+    }
+
+    /// Name the session; an empty name goes back to the date.
+    public func setTitle(_ title: String) throws {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        manifest.title = t.isEmpty ? nil : t
+        try save()
+    }
+
     public func setHeader(_ header: String?) throws {
         manifest.header = header
         try save()
@@ -278,7 +298,7 @@ public final class Session {
         var out = renderedHeader.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
         out += "\n---\n\n"
         let n = manifest.items.count
-        out += "Session folder: `\(displayPath)` · started \(Self.iso(manifest.created)) · \(n) item\(n == 1 ? "" : "s")\n"
+        out += "Session: **\(title)** · folder `\(displayPath)` · started \(Self.iso(manifest.created)) · \(n) item\(n == 1 ? "" : "s")\n"
         for (i, rec) in manifest.items.enumerated() {
             let body = ((try? readNote(rec.id)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let counts = mediaCount(rec.id)

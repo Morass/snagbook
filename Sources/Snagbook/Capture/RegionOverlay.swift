@@ -28,7 +28,7 @@ final class RegionOverlay {
 
     // MARK: - picking
 
-    func startPicking(intent: CaptureController.Intent, suggestion: CaptureTarget?) {
+    func startPicking(intent: CaptureController.Intent) {
         hideAll()
         for screen in NSScreen.screens {
             let p = PickerPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -43,7 +43,6 @@ final class RegionOverlay {
             let view = PickerView(frame: NSRect(origin: .zero, size: screen.frame.size))
             view.screen = screen
             view.intent = intent
-            view.suggestion = suggestion?.displayID == screen.displayID ? suggestion : nil
             view.onPick = { [weak self] t in self?.controller?.picked(t, intent: intent) }
             view.onCancel = { [weak self] in self?.controller?.cancel() }
             p.contentView = view
@@ -59,7 +58,7 @@ final class RegionOverlay {
 
     // MARK: - placed / recording
 
-    func showPlaced(_ t: CaptureTarget, recording: Bool) {
+    func showRecording(_ t: CaptureTarget, recording: Bool = true) {
         closePickers()
         let border: CGFloat = recording ? 3 : 2
         let outer = t.rect.insetBy(dx: -border - 1, dy: -border - 1)
@@ -159,26 +158,23 @@ final class FrameView: NSView {
     }
 }
 
-/// Full-screen view that lets the user drag out a rectangle, click a window, or take the
-/// whole screen.
+/// Full-screen view in which the user drags out the rectangle to capture. Nothing else:
+/// no window picking, no remembered region. Esc cancels; F takes the whole screen.
 final class PickerView: NSView {
     var screen: NSScreen!
-    var intent: CaptureController.Intent = .place
-    var suggestion: CaptureTarget?
+    var intent: CaptureController.Intent = .record
     var onPick: ((CaptureTarget) -> Void)?
     var onCancel: (() -> Void)?
 
     private var start: NSPoint?
     private var current: NSPoint?
-    private var hover: WindowFinder.Info?
-    private var windows: [WindowFinder.Info] = []
+    private var mouse: NSPoint?
 
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        windows = WindowFinder.windows()
         window?.makeFirstResponder(self)
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect, .cursorUpdate], owner: self))
     }
@@ -186,23 +182,15 @@ final class PickerView: NSView {
     override func cursorUpdate(with event: NSEvent) { NSCursor.crosshair.set() }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
 
-    /// Local view point -> AppKit global point.
-    func global(_ p: NSPoint) -> NSPoint { NSPoint(x: p.x + screen.frame.minX, y: p.y + screen.frame.minY) }
-    func localRect(_ r: CGRect) -> CGRect { r.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY) }
-
     var selection: CGRect? {
         guard let s = start, let c = current else { return nil }
         return CGRect(x: min(s.x, c.x), y: min(s.y, c.y), width: abs(s.x - c.x), height: abs(s.y - c.y))
     }
 
     override func mouseMoved(with event: NSEvent) {
-        let p = global(convert(event.locationInWindow, from: nil))
-        let h = windows.first { $0.rect.contains(p) }
-        if h?.rect != hover?.rect {
-            hover = h
-            needsDisplay = true
-        }
+        mouse = convert(event.locationInWindow, from: nil)
         NSCursor.crosshair.set()
+        needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -219,74 +207,51 @@ final class PickerView: NSView {
     override func mouseUp(with event: NSEvent) {
         current = convert(event.locationInWindow, from: nil)
         defer { start = nil; current = nil; needsDisplay = true }
-        guard let sel = selection else { return }
-        if sel.width < RegionMath.clickSlop && sel.height < RegionMath.clickSlop {
-            // A click: the window under the pointer, or the whole screen if there is none.
-            let p = global(current!)
-            if let w = windows.first(where: { $0.rect.contains(p) }) {
-                let r = w.rect.intersection(screen.frame)
-                guard r.width >= 8, r.height >= 8 else { return }
-                pick(r, kind: "window", app: w.owner)
-            } else {
-                pick(screen.frame, kind: "screen", app: nil)
-            }
-            return
-        }
-        guard sel.width >= 8, sel.height >= 8 else { return }
-        let g = sel.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY)
-        pick(g, kind: "region", app: nil)
+        // A click, or a rectangle too small to be meant, does nothing: drag again.
+        guard let sel = selection, sel.width >= 8, sel.height >= 8 else { return }
+        pick(sel.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY), kind: "region")
     }
 
-    private func pick(_ globalRect: CGRect, kind: String, app: String?) {
+    private func pick(_ globalRect: CGRect, kind: String) {
         let b = RegionMath.snapped(Box(globalRect), scale: screen.backingScaleFactor, bounds: Box(screen.frame))
         let r = CGRect(x: b.x, y: b.y, width: b.w, height: b.h)
-        onPick?(CaptureTarget(rect: r, displayID: screen.displayID, screenFrame: screen.frame, scale: screen.backingScaleFactor, kind: kind, appName: app))
+        onPick?(CaptureTarget(rect: r, displayID: screen.displayID, screenFrame: screen.frame, scale: screen.backingScaleFactor, kind: kind, appName: nil))
     }
 
     override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 53: onCancel?() // Esc
-        case 36, 76: // Return: the last region, or the whole screen
-            if let s = suggestion { onPick?(s) } else { pick(screen.frame, kind: "screen", app: nil) }
-        default:
-            if event.charactersIgnoringModifiers?.lowercased() == "f" { pick(screen.frame, kind: "screen", app: nil) } else { super.keyDown(with: event) }
-        }
+        if event.keyCode == 53 { onCancel?(); return } // Esc
+        if event.charactersIgnoringModifiers?.lowercased() == "f" { pick(screen.frame, kind: "screen"); return }
+        super.keyDown(with: event)
     }
 
     override func rightMouseDown(with event: NSEvent) { onCancel?() }
 
     override func draw(_ dirtyRect: NSRect) {
-        let dim = NSColor.black.withAlphaComponent(0.32)
-        let hole: CGRect? = selection ?? (start == nil ? hover.map { localRect($0.rect) } : nil) ?? suggestion.map { localRect($0.rect) }
         let path = NSBezierPath(rect: bounds)
-        if let hole, hole.width > 0, hole.height > 0 {
+        if let hole = selection, hole.width > 0, hole.height > 0 {
             path.append(NSBezierPath(rect: hole))
             path.windingRule = .evenOdd
         }
-        dim.setFill()
+        NSColor.black.withAlphaComponent(0.32).setFill()
         path.fill()
 
         if let sel = selection, sel.width > 0 {
-            outline(sel, dashed: false)
+            let p = NSBezierPath(rect: sel.insetBy(dx: -0.5, dy: -0.5))
+            p.lineWidth = 1.5
+            (intent == .record ? NSColor.systemRed : NSColor.white).setStroke()
+            p.stroke()
             let px = (Int(sel.width * screen.backingScaleFactor), Int(sel.height * screen.backingScaleFactor))
             label("\(px.0) × \(px.1)", at: NSPoint(x: sel.maxX, y: sel.minY - 22), alignRight: true)
-        } else if let h = hover {
-            outline(localRect(h.rect), dashed: true)
-            label("Click: \(h.owner)", at: NSPoint(x: localRect(h.rect).minX, y: localRect(h.rect).maxY + 6), alignRight: false)
-        } else if let s = suggestion {
-            outline(localRect(s.rect), dashed: true)
+        } else if let m = mouse {
+            // crosshair guides make "start here" obvious
+            NSColor.white.withAlphaComponent(0.35).setStroke()
+            let g = NSBezierPath()
+            g.move(to: NSPoint(x: m.x, y: 0)); g.line(to: NSPoint(x: m.x, y: bounds.maxY))
+            g.move(to: NSPoint(x: 0, y: m.y)); g.line(to: NSPoint(x: bounds.maxX, y: m.y))
+            g.lineWidth = 1
+            g.stroke()
         }
         hint()
-    }
-
-    private func outline(_ r: CGRect, dashed: Bool) {
-        let p = NSBezierPath(rect: r.insetBy(dx: -0.5, dy: -0.5))
-        p.lineWidth = 1.5
-        NSColor.black.withAlphaComponent(0.6).setStroke()
-        p.stroke()
-        if dashed { p.setLineDash([5, 4], count: 2, phase: 0) }
-        NSColor.white.setStroke()
-        p.stroke()
     }
 
     private func label(_ text: String, at p: NSPoint, alignRight: Bool) {
@@ -303,11 +268,9 @@ final class PickerView: NSView {
 
     private func hint() {
         guard start == nil, screen.frame.contains(NSEvent.mouseLocation) else { return }
-        let verb = intent == .shoot ? "screenshot" : "record"
-        var parts = ["Drag to select what to \(verb)", "click a window", "F whole screen"]
-        if suggestion != nil { parts.append("Return last region") }
-        parts.append("Esc cancel")
-        let text = parts.joined(separator: "  ·  ")
+        let text = intent == .record
+            ? "Drag a rectangle — recording starts when you let go  ·  Esc cancel"
+            : "Drag a rectangle to screenshot  ·  Esc cancel"
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white]
         let s = NSAttributedString(string: text, attributes: attrs)
         let size = s.size()

@@ -55,9 +55,9 @@ struct NotebookToolbar: ToolbarContent {
                 Label(capture.recordButtonTitle, systemImage: capture.isRecording ? "stop.circle.fill" : "record.circle")
                     .foregroundStyle(capture.isRecording ? .red : .primary)
             }
-            .help("Select a region, then record it (anywhere: ⌃⌘R)")
+            .help("Drag a rectangle anywhere; recording starts when you let go. Again to stop (anywhere: ⌃⌘R)")
             Button { capture.screenshotAction() } label: { Label("Screenshot", systemImage: "camera.viewfinder") }
-                .help("Screenshot a region (anywhere: ⌃⌘S)")
+                .help("Drag a rectangle to screenshot it (anywhere: ⌃⌘S)")
             Divider()
             Button { model.copyHandoff() } label: { Label("Copy Hand-off", systemImage: "arrowshape.turn.up.right") }
                 .help("Copy the hand-off text for this session (⇧⌘C)")
@@ -89,11 +89,15 @@ struct ItemList: View {
                         }
                 }
                 .onMove { model.move(from: $0, to: $1) }
-            } header: {
-                SessionHeaderRow()
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                SessionMenu()
+                Divider()
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             Button { model.newItemFromMenu() } label: {
                 Label("New Item", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading)
@@ -110,21 +114,56 @@ struct ItemList: View {
     }
 }
 
-struct SessionHeaderRow: View {
+/// The top of the sidebar: which session this is, and every way to change that.
+struct SessionMenu: View {
     @EnvironmentObject var model: AppModel
+    @State private var renaming = false
+    @State private var name = ""
+
     var body: some View {
         if let s = model.session {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(s.url.lastPathComponent).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
-                HStack(spacing: 8) {
-                    Button("Switch…") { model.showingSessions = true }
-                    Button("Header…") { model.editingHeader = true }
+            Menu {
+                let recent = Session.list(root: model.config.sessionsFolder).prefix(12)
+                Section("Recent sessions") {
+                    ForEach(Array(recent), id: \.path) { r in
+                        Button {
+                            model.openSession(r.path)
+                        } label: {
+                            if r.path == s.displayPath { Label(r.title, systemImage: "checkmark") } else { Text(r.title) }
+                            Text("\(r.items) item\(r.items == 1 ? "" : "s") · \(r.created.formatted(date: .abbreviated, time: .shortened))")
+                        }
+                    }
                 }
-                .buttonStyle(.link).font(.caption)
+                Divider()
+                Button("New Session") { model.newSession() }
+                Button("Rename This Session…") { name = s.manifest.title ?? ""; renaming = true }
+                Button("Edit Header…") { model.editingHeader = true }
+                Button("All Sessions…") { model.showingSessions = true }
+                Button("Open Another Folder…") { model.chooseSessionFolder() }
+                Button("Show in Finder") { model.revealSession() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "books.vertical")
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(s.title).font(.headline).lineLimit(1)
+                        Text("\(model.items.count) item\(model.items.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.up.chevron.down").font(.caption).foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
             }
-            .textCase(nil)
-            .padding(.bottom, 2)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help("Switch session, start a new one, or rename this one")
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .alert("Name this session", isPresented: $renaming) {
+                TextField(Session.defaultTitle(s.manifest.created), text: $name)
+                Button("Rename") { model.renameSession(name) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("For you only; the folder keeps its name.")
+            }
         }
     }
 }
@@ -246,14 +285,29 @@ struct StatusBar: View {
 struct WelcomeView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
+        let recent = Array(Session.list(root: model.config.sessionsFolder).prefix(6))
         VStack(spacing: 16) {
             Image(systemName: "note.text.badge.plus").font(.system(size: 44)).foregroundStyle(.secondary)
             Text("Start a session").font(.title2.weight(.semibold))
-            Text("A session is a folder of numbered items. Each item has a note, screenshots and recordings.\nNew sessions go to \(model.config.sessionsFolder).")
+            Text("A session is one sitting of testing: numbered items, each with a note, screenshots and recordings.")
                 .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 420)
-            HStack {
-                Button("New Session") { model.newSession() }.keyboardShortcut(.defaultAction)
-                Button("Open…") { model.showingSessions = true }
+            Button("New Session") { model.newSession() }.keyboardShortcut(.defaultAction).controlSize(.large)
+            if !recent.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Or continue one").font(.caption).foregroundStyle(.secondary)
+                    ForEach(recent, id: \.path) { r in
+                        Button { model.openSession(r.path) } label: {
+                            HStack {
+                                Text(r.title)
+                                Spacer()
+                                Text("\(r.items) items · \(r.created.formatted(date: .abbreviated, time: .shortened))").foregroundStyle(.secondary)
+                            }
+                            .frame(width: 380)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .padding(.top, 8)
             }
         }
         .padding(40)
@@ -275,7 +329,8 @@ struct SessionPicker: View {
             List(sessions, id: \.path) { s in
                 HStack {
                     VStack(alignment: .leading) {
-                        Text((s.path as NSString).lastPathComponent).font(.body.monospaced())
+                        Text(s.title)
+                        Text((s.path as NSString).lastPathComponent).font(.caption.monospaced()).foregroundStyle(.secondary)
                         Text("\(s.created.formatted(date: .abbreviated, time: .shortened)) · \(s.items) item\(s.items == 1 ? "" : "s")"
                              + (s.firstTitles.isEmpty ? "" : " · " + s.firstTitles.joined(separator: ", ")))
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)

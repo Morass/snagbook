@@ -79,7 +79,8 @@ final class AppModel: ObservableObject {
                 let s = try Session.create(root: config.sessionsFolder, config: config)
                 use(s)
                 try addItem(focusTitle: true)
-                flash("New session in \(s.displayPath)")
+                WindowPlacement.show()
+                flash("New session: \(s.displayPath)")
             } catch {
                 show(error)
             }
@@ -429,6 +430,12 @@ final class AppModel: ObservableObject {
     func revealSession() {
         guard let session else { return }
         NSWorkspace.shared.activateFileViewerSelecting([session.url.appendingPathComponent(Session.readmeName)])
+    }
+
+    func renameSession(_ name: String) {
+        guard let session else { return }
+        do { try session.setTitle(name) } catch { show(error) }
+        objectWillChange.send()
     }
 
     func setSessionHeader(_ text: String?) {
