@@ -18,8 +18,14 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     private let previousApp: NSRunningApplication?
 
     @Published var doc: MarkDocument
-    @Published var tool: Tool = .ellipse
-    @Published var color = Annotator.palette[0]
+    /// Every screenshot opens with the highlighter.
+    @Published var tool: Tool = .mark(.highlighter)
+    /// The colour of the current tool. Each tool keeps its own: the highlighter starts
+    /// yellow, everything else red.
+    @Published var color = Annotator.palette[1] {
+        didSet { colors[tool] = color }
+    }
+    private var colors: [Tool: String] = [.mark(.highlighter): Annotator.palette[1]]
     @Published var width: Double
     @Published var selected: Int?
     private var undoStack: [MarkDocument] = []
@@ -49,12 +55,11 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                 }
             }
         }
-        static var all: [Tool] { [.mark(.ellipse), .mark(.arrow), .mark(.rect), .mark(.pen), .mark(.highlighter), .mark(.text), .mark(.counter), .mark(.pixelate), .crop, .select] }
+        static var all: [Tool] { [.mark(.highlighter), .mark(.ellipse), .mark(.arrow), .mark(.rect), .mark(.pen), .mark(.text), .mark(.counter), .mark(.pixelate), .crop, .select] }
         static var ellipse: Tool { .mark(.ellipse) }
     }
 
     static let palette = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff", "#ffffff", "#000000"]
-    static let lastToolKey = "annotatorLastTool"
 
     // MARK: - open
 
@@ -91,7 +96,6 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
         let base = max(3, Double(max(original.width, original.height)) / 320)
         self.width = min(12, base.rounded())
         super.init()
-        if let saved = UserDefaults.standard.string(forKey: Self.lastToolKey), let t = MarkTool(rawValue: saved) { tool = .mark(t) }
     }
 
     private func show() {
@@ -149,7 +153,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     func setTool(_ t: Tool) {
         canvas?.endTextEditing(commit: true)
         tool = t
-        if case .mark(let m) = t { UserDefaults.standard.set(m.rawValue, forKey: Self.lastToolKey) }
+        let c = colors[t] ?? Annotator.palette[0]
+        if color != c { color = c }
         if t != .select { selected = nil }
         canvas?.needsDisplay = true
         canvas?.window?.invalidateCursorRects(for: canvas!)
