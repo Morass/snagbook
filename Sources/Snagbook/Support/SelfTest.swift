@@ -56,9 +56,10 @@ enum SelfTest {
 
     static func run(_ model: AppModel) async {
         // 1. A session and its first item.
+        let before = model.session?.url
         model.newSession()
-        for _ in 0..<50 where model.selectedID == nil { await settle(100) }
-        guard let session = model.session, let first = model.selectedID else {
+        for _ in 0..<50 where model.session?.url == before || model.selectedID == nil { await settle(100) }
+        guard let session = model.session, session.url != before, let first = model.selectedID else {
             return check(false, "new session creates a session with a first item")
         }
         check(session.url.lastPathComponent.range(of: #"^[0-9a-f]{8}_\d\d-\d\d-\d{4}$"#, options: .regularExpression) != nil, "session folder is hash_dd-mm-yyyy: \(session.url.lastPathComponent)")
