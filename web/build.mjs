@@ -7,7 +7,7 @@ mkdirSync(out, { recursive: true });
 await build({
   entryPoints: ["src/main.js"],
   bundle: true,
-  minify: false,
+  minify: true,
   format: "iife",
   target: ["safari17"],
   outfile: out + "editor.js",

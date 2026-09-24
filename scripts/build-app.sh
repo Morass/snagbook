@@ -13,6 +13,12 @@ CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# The note editor is a small web bundle built from web/src. It needs Node.js once.
+if [ ! -f "$ROOT/Resources/editor/editor.js" ] || [ -n "$(find "$ROOT/web/src" "$ROOT/web/build.mjs" -newer "$ROOT/Resources/editor/editor.js" 2>/dev/null)" ]; then
+    command -v node >/dev/null || { echo "Node.js is needed to build the note editor (brew install node)." >&2; exit 1; }
+    (cd "$ROOT/web" && { [ -d node_modules ] || npm ci --silent; } && node build.mjs >/dev/null)
+fi
+
 swift build -c "$CONFIG" --product Snagbook
 BIN="$(swift build -c "$CONFIG" --show-bin-path)/Snagbook"
 
