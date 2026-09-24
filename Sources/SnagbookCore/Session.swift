@@ -241,7 +241,10 @@ public final class Session {
         return (Self.mediaName + "/" + name, media.appendingPathComponent(name))
     }
 
-    public struct MediaCount: Equatable { public var images = 0, videos = 0 }
+    public struct MediaCount: Equatable {
+        public var images = 0, videos = 0
+        public init(images: Int = 0, videos: Int = 0) { self.images = images; self.videos = videos }
+    }
 
     public func mediaCount(_ id: Int) -> MediaCount {
         var c = MediaCount()

@@ -590,6 +590,18 @@ export const api = {
     view.focus();
   },
 
+  /** A change not yet reported, as {id, markdown}, marked as reported; or null. */
+  takePending() {
+    if (!view || currentId == null) return null;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    const entry = cache.get(currentId);
+    const markdown = serializeMarkdown(view.state.doc, entry?.memo);
+    if (entry && markdown === entry.saved) return null;
+    if (entry) entry.saved = markdown;
+    return { id: currentId, markdown };
+  },
+
   markdown() {
     return serializeMarkdown(view.state.doc, cache.get(currentId)?.memo);
   },

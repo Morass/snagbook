@@ -131,3 +131,14 @@ test("pasted file bytes go to the app and come back as a picture", async () => {
   api.mediaSaved(msg.reqId, "media/shot-002.png");
   assert.match(md(), /!\[\]\(media\/shot-002\.png\)/);
 });
+
+test("takePending hands over an unsaved change exactly once", () => {
+  api.open({ id: "20", markdown: "a\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  type("b");
+  assert.deepEqual(api.takePending(), { id: "20", markdown: "ab\n" });
+  assert.equal(api.takePending(), null);
+  const before = changes().length;
+  api.flush();
+  assert.equal(changes().length, before, "nothing left for the timer to post");
+});

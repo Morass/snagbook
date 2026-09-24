@@ -169,3 +169,21 @@ final class CaptureMathTests: XCTestCase {
         XCTAssertEqual(r, Box(x: 10.0, y: 5.0, w: 100.5, h: 50.5))
     }
 }
+
+final class ByteRangeTests: XCTestCase {
+    func testForms() {
+        XCTAssertTrue(ByteRange.parse("bytes=0-9", size: 100)! == (0, 9))
+        XCTAssertTrue(ByteRange.parse("bytes=90-", size: 100)! == (90, 99))
+        XCTAssertTrue(ByteRange.parse("bytes=-10", size: 100)! == (90, 99))
+        XCTAssertTrue(ByteRange.parse("bytes=50-5000", size: 100)! == (50, 99))
+    }
+
+    func testUnservable() {
+        XCTAssertNil(ByteRange.parse("bytes=100-", size: 100))
+        XCTAssertNil(ByteRange.parse("bytes=9-0", size: 100))
+        XCTAssertNil(ByteRange.parse("bytes=0-1,5-6", size: 100))
+        XCTAssertNil(ByteRange.parse("items=0-1", size: 100))
+        XCTAssertNil(ByteRange.parse("bytes=a-b", size: 100))
+        XCTAssertNil(ByteRange.parse("bytes=0-9", size: 0))
+    }
+}
