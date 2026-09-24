@@ -1,0 +1,333 @@
+import Foundation
+
+public struct ItemRecord: Codable, Equatable, Identifiable {
+    /// Permanent number, never reused within a session; it prefixes the folder name.
+    public var id: Int
+    public var folder: String
+    public var title: String
+    public var created: Date
+}
+
+public struct Manifest: Codable, Equatable {
+    public var format: Int = 1
+    public var id: String
+    public var created: Date
+    /// The header text as the user wrote it, placeholders unfilled.
+    public var header: String
+    /// Display order.
+    public var items: [ItemRecord]
+    public var nextItem: Int
+}
+
+/// One test session: a folder holding session.json, README.md and a folder per item.
+///
+///     a1b2c3d4_24-09-2026/
+///       README.md          header + every item's note, for whoever reads it next
+///       session.json       order, titles, ids
+///       01-main-menu/
+///         notes.md         the note, Markdown with a small front matter
+///         media/           shot-001.png, clip-001.mp4, clip-001-frames/, …
+public final class Session {
+    public let url: URL
+    /// How to spell the folder for people and other programs ("~/…").
+    public let displayPath: String
+    public private(set) var manifest: Manifest
+
+    public static let manifestName = "session.json"
+    public static let readmeName = "README.md"
+    public static let noteName = "notes.md"
+    public static let mediaName = "media"
+
+    private let fm = FileManager.default
+
+    init(url: URL, displayPath: String, manifest: Manifest) {
+        self.url = url
+        self.displayPath = displayPath
+        self.manifest = manifest
+    }
+
+    // MARK: - create / open / list
+
+    /// Make a new session folder under `root` (e.g. "~/Snagbook").
+    public static func create(root: String, config: Config, now: Date = Date(), hash: String = Naming.randomHash()) throws -> Session {
+        let rootURL = Paths.url(root)
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        var name = Naming.sessionFolder(format: config.folderFormat, date: now, hash: hash)
+        var n = 2
+        while FileManager.default.fileExists(atPath: rootURL.appendingPathComponent(name).path) {
+            name = Naming.sessionFolder(format: config.folderFormat, date: now, hash: hash) + "-\(n)"
+            n += 1
+        }
+        let url = rootURL.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        let display = (root.hasSuffix("/") ? String(root.dropLast()) : root) + "/" + name
+        let s = Session(url: url, displayPath: Paths.abbreviate(Paths.expand(display)),
+                        manifest: Manifest(id: hash, created: now, header: config.header, items: [], nextItem: 1))
+        try s.save()
+        return s
+    }
+
+    /// Open an existing session folder. `path` may use "~".
+    public static func open(_ path: String) throws -> Session {
+        let url = Paths.url(path)
+        let data: Data
+        do { data = try Data(contentsOf: url.appendingPathComponent(manifestName)) } catch { throw SnagError.notASession(path) }
+        let manifest = try decoder.decode(Manifest.self, from: data)
+        let s = Session(url: url, displayPath: Paths.abbreviate(Paths.expand(path)), manifest: manifest)
+        s.repair()
+        return s
+    }
+
+    public struct Summary: Equatable {
+        public var path: String
+        public var created: Date
+        public var items: Int
+        public var firstTitles: [String]
+    }
+
+    /// Sessions under `root`, newest first. Folders without a session.json are ignored.
+    public static func list(root: String) -> [Summary] {
+        let rootURL = Paths.url(root)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: rootURL.path) else { return [] }
+        var out: [Summary] = []
+        for name in names where !name.hasPrefix(".") {
+            let u = rootURL.appendingPathComponent(name).appendingPathComponent(manifestName)
+            guard let d = try? Data(contentsOf: u), let m = try? decoder.decode(Manifest.self, from: d) else { continue }
+            let display = (root.hasSuffix("/") ? String(root.dropLast()) : root) + "/" + name
+            out.append(Summary(path: Paths.abbreviate(Paths.expand(display)), created: m.created, items: m.items.count, firstTitles: m.items.prefix(3).map(\.title)))
+        }
+        return out.sorted { $0.created > $1.created }
+    }
+
+    /// Folders may have been renamed or removed by hand: drop records whose folder is gone,
+    /// and adopt item folders that exist on disk but are missing from the manifest.
+    func repair() {
+        var changed = false
+        let before = manifest.items.count
+        manifest.items.removeAll { !fm.fileExists(atPath: url.appendingPathComponent($0.folder).path) }
+        changed = changed || manifest.items.count != before
+        let known = Set(manifest.items.map(\.folder))
+        let names = ((try? fm.contentsOfDirectory(atPath: url.path)) ?? []).sorted()
+        for name in names where !known.contains(name) {
+            guard let num = Int(name.prefix(while: { $0.isNumber })), num > 0, name.prefix(while: { $0.isNumber }).count >= 2 else { continue }
+            let note = url.appendingPathComponent(name).appendingPathComponent(Self.noteName)
+            guard fm.fileExists(atPath: note.path) else { continue }
+            let text = (try? String(contentsOf: note, encoding: .utf8)) ?? ""
+            let title = FrontMatter.split(text).fields.first { $0.key == "title" }?.value ?? name
+            if manifest.items.contains(where: { $0.id == num }) { continue }
+            manifest.items.append(ItemRecord(id: num, folder: name, title: title, created: Date()))
+            manifest.nextItem = max(manifest.nextItem, num + 1)
+            changed = true
+        }
+        if changed { try? save() }
+    }
+
+    // MARK: - items
+
+    public func item(_ id: Int) throws -> ItemRecord {
+        guard let it = manifest.items.first(where: { $0.id == id }) else { throw SnagError.noSuchItem(id) }
+        return it
+    }
+
+    public func itemURL(_ id: Int) throws -> URL { url.appendingPathComponent(try item(id).folder, isDirectory: true) }
+    public func noteURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.noteName) }
+    public func mediaURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.mediaName, isDirectory: true) }
+
+    /// Add an item after the others. With no title it is "Item N".
+    @discardableResult
+    public func addItem(title: String? = nil, now: Date = Date()) throws -> ItemRecord {
+        let id = manifest.nextItem
+        let t = (title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "Item \(id)"
+        let folder = Naming.itemFolder(id: id, title: t)
+        let dir = url.appendingPathComponent(folder, isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let record = ItemRecord(id: id, folder: folder, title: t, created: now)
+        let note = FrontMatter.join(raw: "", updates: [("title", t), ("created", Self.iso(now))], body: "")
+        try Data(note.utf8).write(to: dir.appendingPathComponent(Self.noteName), options: .atomic)
+        manifest.items.append(record)
+        manifest.nextItem = id + 1
+        try save()
+        return record
+    }
+
+    /// Rename an item: its title, its note's front matter and its folder name.
+    @discardableResult
+    public func renameItem(_ id: Int, to title: String) throws -> ItemRecord {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { throw SnagError.badName(title) }
+        guard let i = manifest.items.firstIndex(where: { $0.id == id }) else { throw SnagError.noSuchItem(id) }
+        var rec = manifest.items[i]
+        if rec.title == t { return rec }
+        let newFolder = Naming.itemFolder(id: id, title: t)
+        if newFolder != rec.folder {
+            let from = url.appendingPathComponent(rec.folder)
+            let to = url.appendingPathComponent(newFolder)
+            if !fm.fileExists(atPath: to.path) {
+                try fm.moveItem(at: from, to: to)
+                rec.folder = newFolder
+            }
+        }
+        rec.title = t
+        manifest.items[i] = rec
+        let noteURL = url.appendingPathComponent(rec.folder).appendingPathComponent(Self.noteName)
+        let text = (try? String(contentsOf: noteURL, encoding: .utf8)) ?? ""
+        let parts = FrontMatter.split(text)
+        try Data(FrontMatter.join(raw: parts.raw, updates: [("title", t)], body: parts.body).utf8).write(to: noteURL, options: .atomic)
+        try save()
+        return rec
+    }
+
+    /// Remove an item. `discard` decides what happens to the folder (the app moves it to
+    /// the Trash); the default deletes it.
+    public func deleteItem(_ id: Int, discard: ((URL) throws -> Void)? = nil) throws {
+        let dir = try itemURL(id)
+        if let discard { try discard(dir) } else { try fm.removeItem(at: dir) }
+        manifest.items.removeAll { $0.id == id }
+        try save()
+    }
+
+    public func moveItem(_ id: Int, to index: Int) throws {
+        guard let from = manifest.items.firstIndex(where: { $0.id == id }) else { throw SnagError.noSuchItem(id) }
+        let rec = manifest.items.remove(at: from)
+        manifest.items.insert(rec, at: max(0, min(index, manifest.items.count)))
+        try save()
+    }
+
+    public func setHeader(_ header: String) throws {
+        manifest.header = header
+        try save()
+    }
+
+    // MARK: - notes
+
+    /// The note's Markdown without its front matter.
+    public func readNote(_ id: Int) throws -> String {
+        let text = (try? String(contentsOf: try noteURL(id), encoding: .utf8)) ?? ""
+        return FrontMatter.split(text).body
+    }
+
+    /// Store the note's Markdown, keeping its front matter. Returns false when the file
+    /// already held exactly this.
+    @discardableResult
+    public func writeNote(_ id: Int, body: String) throws -> Bool {
+        let u = try noteURL(id)
+        let old = (try? String(contentsOf: u, encoding: .utf8)) ?? ""
+        let parts = FrontMatter.split(old)
+        let rec = try item(id)
+        let new = FrontMatter.join(raw: parts.raw, updates: parts.fields.isEmpty ? [("title", rec.title), ("created", Self.iso(rec.created))] : [], body: body)
+        if new == old { return false }
+        try Data(new.utf8).write(to: u, options: .atomic)
+        try writeReadme()
+        return true
+    }
+
+    // MARK: - media
+
+    /// Save bytes into the item's media folder under the next free "prefix-NNN.ext".
+    /// Returns the path relative to the item folder ("media/shot-001.png").
+    public func saveMedia(_ id: Int, data: Data, prefix: String, ext: String) throws -> String {
+        let media = try mediaURL(id)
+        try fm.createDirectory(at: media, withIntermediateDirectories: true)
+        let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
+        try data.write(to: media.appendingPathComponent(name), options: .atomic)
+        return Self.mediaName + "/" + name
+    }
+
+    /// A free name in the item's media folder, for a file that will be written later.
+    public func reserveMediaName(_ id: Int, prefix: String, ext: String) throws -> (relative: String, url: URL) {
+        let media = try mediaURL(id)
+        try fm.createDirectory(at: media, withIntermediateDirectories: true)
+        let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
+        return (Self.mediaName + "/" + name, media.appendingPathComponent(name))
+    }
+
+    public struct MediaCount: Equatable { public var images = 0, videos = 0 }
+
+    public func mediaCount(_ id: Int) -> MediaCount {
+        var c = MediaCount()
+        guard let media = try? mediaURL(id), let names = try? fm.contentsOfDirectory(atPath: media.path) else { return c }
+        for n in names {
+            let l = n.lowercased()
+            if l.hasSuffix(".orig.png") { continue }
+            if [".png", ".jpg", ".jpeg", ".gif", ".heic", ".tiff", ".webp"].contains(where: l.hasSuffix) { c.images += 1 }
+            if [".mp4", ".mov", ".m4v", ".webm"].contains(where: l.hasSuffix) { c.videos += 1 }
+        }
+        return c
+    }
+
+    // MARK: - README and hand-off
+
+    public var renderedHeader: String {
+        Header.render(manifest.header, session: displayPath, date: manifest.created, items: manifest.items.count)
+    }
+
+    /// README.md: the header, then every item's note with its links pointing into the item's
+    /// folder, so one file is the whole session.
+    public func readmeText() -> String {
+        var out = renderedHeader.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+        out += "\n---\n\n"
+        let n = manifest.items.count
+        out += "Session folder: `\(displayPath)` · started \(Self.iso(manifest.created)) · \(n) item\(n == 1 ? "" : "s")\n"
+        for (i, rec) in manifest.items.enumerated() {
+            let body = ((try? readNote(rec.id)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let counts = mediaCount(rec.id)
+            var media: [String] = []
+            if counts.images > 0 { media.append("\(counts.images) image\(counts.images == 1 ? "" : "s")") }
+            if counts.videos > 0 { media.append("\(counts.videos) video\(counts.videos == 1 ? "" : "s")") }
+            out += "\n## \(i + 1). \(rec.title)\n\n"
+            out += "Folder: [`\(rec.folder)/`](\(rec.folder)/\(Self.noteName))" + (media.isEmpty ? "" : " · " + media.joined(separator: ", ")) + "\n\n"
+            out += body.isEmpty ? "_(no notes)_\n" : Self.rebaseLinks(body, into: rec.folder) + "\n"
+        }
+        return out
+    }
+
+    public func writeReadme() throws {
+        let u = url.appendingPathComponent(Self.readmeName)
+        let text = readmeText()
+        if (try? String(contentsOf: u, encoding: .utf8)) == text { return }
+        try Data(text.utf8).write(to: u, options: .atomic)
+    }
+
+    /// What Copy Hand-off puts on the clipboard.
+    public func handoff(style: HandoffStyle) -> String {
+        let readme = displayPath + "/" + Self.readmeName
+        switch style {
+        case .path: return readme
+        case .header:
+            let h = renderedHeader.trimmingCharacters(in: .whitespacesAndNewlines)
+            return h.contains(displayPath) ? h : h + "\n\n" + readme
+        }
+    }
+
+    /// Point a note's relative links (media/…) at the item folder, for README.md.
+    static func rebaseLinks(_ body: String, into folder: String) -> String {
+        var s = body
+        for (a, b) in [("](media/", "](\(folder)/media/"), ("src=\"media/", "src=\"\(folder)/media/"), ("](./media/", "](\(folder)/media/")] {
+            s = s.replacingOccurrences(of: a, with: b)
+        }
+        return s
+    }
+
+    // MARK: - persistence
+
+    func save() throws {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        enc.dateEncodingStrategy = .iso8601
+        try enc.encode(manifest).write(to: url.appendingPathComponent(Self.manifestName), options: .atomic)
+        try writeReadme()
+    }
+
+    static var decoder: JSONDecoder {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }
+
+    static func iso(_ d: Date) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        f.timeZone = .current
+        return f.string(from: d)
+    }
+}
