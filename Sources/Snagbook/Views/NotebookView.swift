@@ -340,10 +340,15 @@ struct WindowAccessor: NSViewRepresentable {
 
 @MainActor
 enum WindowPlacement {
-    static weak var notebook: NSWindow?
+    /// Kept strongly: the notebook is hidden, not destroyed, when its window is closed.
+    static var notebook: NSWindow?
+    /// SwiftUI's openWindow, captured from the always-present menu bar icon.
+    static var openNotebook: (() -> Void)?
 
     static func configure(_ w: NSWindow, model: AppModel) {
+        guard notebook !== w else { return }
         notebook = w
+        w.isReleasedWhenClosed = false
         w.setFrameAutosaveName("SnagbookNotebook")
         apply(onTop: model.config.alwaysOnTop)
     }
@@ -355,13 +360,20 @@ enum WindowPlacement {
         w.collectionBehavior = onTop ? [.canJoinAllSpaces, .fullScreenAuxiliary] : [.fullScreenPrimary]
     }
 
+    static func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let w = notebook, w.contentView != nil {
+            w.makeKeyAndOrderFront(nil)
+        } else {
+            openNotebook?()
+        }
+    }
+
     static func toggle(_ model: AppModel) {
-        guard let w = notebook else { return }
-        if w.isVisible && NSApp.isActive && w.isKeyWindow {
+        if let w = notebook, w.isVisible, NSApp.isActive, w.isKeyWindow {
             NSApp.hide(nil)
         } else {
-            NSApp.activate(ignoringOtherApps: true)
-            w.makeKeyAndOrderFront(nil)
+            show()
         }
     }
 }

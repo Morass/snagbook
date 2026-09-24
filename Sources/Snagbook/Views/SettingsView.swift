@@ -162,8 +162,5 @@ struct TemplateSettings: View {
 
 extension WindowPlacement {
     /// Template editing happens in a sheet on the notebook; bring it forward.
-    static func toggleFront() {
-        NSApp.activate(ignoringOtherApps: true)
-        notebook?.makeKeyAndOrderFront(nil)
-    }
+    static func toggleFront() { show() }
 }

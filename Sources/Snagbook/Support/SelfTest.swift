@@ -23,7 +23,10 @@ enum SelfTest {
         Task {
             // Give the window and the page a moment.
             for _ in 0..<100 where !(await pageReady(model)) { try? await Task.sleep(nanoseconds: 100_000_000) }
-            if env["SNAGBOOK_SELFTEST"] != nil { await run(model) }
+            if env["SNAGBOOK_SELFTEST"] != nil {
+                await run(model)
+                await interactions(model)
+            }
             if let shot = env["SNAGBOOK_SCREENSHOT"] { await screenshot(model, to: shot) }
             model.pasteboard.releaseGlobally()
             if failures.isEmpty {
@@ -220,6 +223,90 @@ enum SelfTest {
         } else {
             print("skip real screen capture (no Screen Recording permission for this process)")
         }
+    }
+
+    // MARK: - mouse and keys, synthesised
+
+    static func mouse(_ type: NSEvent.EventType, _ view: NSView, _ p: NSPoint, clicks: Int = 1, flags: NSEvent.ModifierFlags = []) -> NSEvent {
+        let inWindow = view.convert(p, to: nil)
+        return NSEvent.mouseEvent(with: type, location: inWindow, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                  windowNumber: view.window?.windowNumber ?? 0, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+    }
+
+    static func key(_ chars: String, code: UInt16, in view: NSView, flags: NSEvent.ModifierFlags = []) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                         windowNumber: view.window?.windowNumber ?? 0, context: nil, characters: chars, charactersIgnoringModifiers: chars,
+                         isARepeat: false, keyCode: code)!
+    }
+
+    static func interactions(_ model: AppModel) async {
+        // The region picker: a drag becomes a region, a click with nothing under it the screen.
+        guard let screen = NSScreen.main else { return check(false, "a screen exists") }
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: screen.frame.width, height: screen.frame.height), styleMask: [.borderless], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        let picker = PickerView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        picker.screen = screen
+        var picked: CaptureTarget?
+        picker.onPick = { picked = $0 }
+        var cancelled = false
+        picker.onCancel = { cancelled = true }
+        win.contentView = picker
+        picker.mouseDown(with: mouse(.leftMouseDown, picker, NSPoint(x: 100, y: 100)))
+        picker.mouseDragged(with: mouse(.leftMouseDragged, picker, NSPoint(x: 300, y: 250)))
+        picker.mouseUp(with: mouse(.leftMouseUp, picker, NSPoint(x: 300.4, y: 250.4)))
+        if let t = picked {
+            check(t.kind == "region" && abs(t.rect.width - 200.5) <= 0.5 && abs(t.rect.minX - (screen.frame.minX + 100)) < 0.01, "dragging in the picker selects that region (\(t.rect))")
+            check(abs(t.local.minY - (screen.frame.height - 250.5)) <= 0.5, "the region's top-left position is what the capture needs (\(t.local))")
+        } else {
+            check(false, "dragging in the picker selects a region")
+        }
+        picked = nil
+        picker.keyDown(with: key("f", code: 3, in: picker))
+        check(picked?.kind == "screen" && picked?.rect == screen.frame, "F in the picker takes the whole screen")
+        picker.keyDown(with: key("\u{1b}", code: 53, in: picker))
+        check(cancelled, "Esc in the picker cancels")
+        win.orderOut(nil)
+
+        // The mark-up canvas: drags draw, keys switch tools, Return saves.
+        guard let session = model.session, let id = model.selectedID else { return check(false, "an item for the canvas test") }
+        let rel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(600, 400, hue: 0.3))!, prefix: "shot", ext: "png")) ?? ""
+        Annotator.open(item: id, relative: rel, isNew: true, model: model)
+        await settle()
+        guard let a = Annotator.open.last, let canvas = a.canvas else { return check(false, "the mark-up window opens for a new screenshot") }
+        canvas.window?.setContentSize(NSSize(width: 900, height: 700))
+        canvas.layoutSubtreeIfNeeded()
+        await settle(200)
+        let start = canvas.toView(Pt(100, 100)), end = canvas.toView(Pt(300, 250))
+        canvas.keyDown(with: key("o", code: 31, in: canvas))
+        canvas.mouseDown(with: mouse(.leftMouseDown, canvas, start))
+        canvas.mouseDragged(with: mouse(.leftMouseDragged, canvas, end))
+        canvas.mouseUp(with: mouse(.leftMouseUp, canvas, end))
+        check(a.doc.marks.last?.tool == .ellipse, "O then a drag draws a circle")
+        if let m = a.doc.marks.last {
+            check(abs(m.points[0].x - 100) < 2 && abs(m.points[1].y - 250) < 2, "the circle sits where it was dragged, in picture pixels (\(m.points))")
+        }
+        canvas.keyDown(with: key("a", code: 0, in: canvas))
+        canvas.mouseDown(with: mouse(.leftMouseDown, canvas, canvas.toView(Pt(400, 300))))
+        canvas.mouseDragged(with: mouse(.leftMouseDragged, canvas, canvas.toView(Pt(320, 200))))
+        canvas.mouseUp(with: mouse(.leftMouseUp, canvas, canvas.toView(Pt(320, 200))))
+        check(a.doc.marks.count == 2 && a.doc.marks[1].tool == .arrow, "A then a drag draws an arrow")
+        canvas.keyDown(with: key("2", code: 19, in: canvas))
+        check(a.color == Annotator.palette[1], "a digit picks a colour")
+        canvas.keyDown(with: key("z", code: 6, in: canvas, flags: .command))
+        check(a.doc.marks.count == 1, "⌘Z undoes the last mark")
+        canvas.keyDown(with: key("\r", code: 36, in: canvas))
+        await settle()
+        let media = (try? session.mediaURL(id)) ?? session.url
+        let name = (rel as NSString).lastPathComponent
+        let stem = (name as NSString).deletingPathExtension
+        check(exists(media.appendingPathComponent(stem + ".marks.json")), "Return saves the marks")
+
+        // Closing the notebook window and showing it again brings it back.
+        WindowPlacement.notebook?.performClose(nil)
+        await settle()
+        WindowPlacement.show()
+        await settle(600)
+        check(WindowPlacement.notebook?.isVisible == true, "the notebook comes back after its window was closed")
     }
 
     /// Run an async function body in the page and return its value.

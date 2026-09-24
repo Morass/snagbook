@@ -37,8 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             KeyboardShortcuts.onKeyUp(for: .record) { model.capture.recordAction() }
             KeyboardShortcuts.onKeyUp(for: .screenshot) { model.capture.screenshotAction() }
             KeyboardShortcuts.onKeyUp(for: .newItem) {
-                NSApp.activate(ignoringOtherApps: true)
-                WindowPlacement.notebook?.makeKeyAndOrderFront(nil)
+                WindowPlacement.show()
                 model.newItemFromMenu()
             }
             KeyboardShortcuts.onKeyUp(for: .showNotebook) { WindowPlacement.toggle(model) }
@@ -82,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if !hasVisibleWindows { WindowPlacement.notebook?.makeKeyAndOrderFront(nil) }
+        if !hasVisibleWindows { MainActor.assumeIsolated { WindowPlacement.show() } }
         return true
     }
 }
@@ -134,8 +133,10 @@ struct SnagbookCommands: Commands {
 
 struct MenuBarLabel: View {
     @ObservedObject var capture: CaptureController
+    @Environment(\.openWindow) private var openWindow
     var body: some View {
         Image(systemName: capture.isRecording ? "record.circle.fill" : "note.text")
+            .onAppear { WindowPlacement.openNotebook = { openWindow(id: "notebook") } }
     }
 }
 
@@ -147,15 +148,11 @@ struct MenuBarContent: View {
         Button(capture.recordButtonTitle) { capture.recordAction() }
         Button("Screenshot") { capture.screenshotAction() }
         Button("New Item") {
-            NSApp.activate(ignoringOtherApps: true)
-            WindowPlacement.notebook?.makeKeyAndOrderFront(nil)
+            WindowPlacement.show()
             model.newItemFromMenu()
         }
         Divider()
-        Button("Show Notebook") {
-            NSApp.activate(ignoringOtherApps: true)
-            WindowPlacement.notebook?.makeKeyAndOrderFront(nil)
-        }
+        Button("Show Notebook") { WindowPlacement.show() }
         Button("Copy Hand-off") { model.copyHandoff() }.disabled(model.session == nil)
         Divider()
         SettingsLink { Text("Settings…") }
