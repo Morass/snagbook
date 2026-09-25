@@ -379,6 +379,9 @@ fn toggle_recording_now(app: &AppHandle) -> Res<()> {
         stop_recording_now(app);
         return Ok(());
     }
+    if let Some(why) = record::unsupported_here(std::env::var("XDG_SESSION_TYPE").ok().as_deref(), std::env::var("WAYLAND_DISPLAY").ok().as_deref()) {
+        return Err(why.into());
+    }
     capture::start(app, capture::Mode::Record)
 }
 

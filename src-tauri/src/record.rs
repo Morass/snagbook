@@ -95,6 +95,13 @@ impl Encoder {
     }
 }
 
+/// Why recording cannot work in this desktop session, if it cannot. On Wayland every
+/// screen read goes through the desktop's permission prompt, which a video cannot do.
+pub fn unsupported_here(session_type: Option<&str>, wayland_display: Option<&str>) -> Option<&'static str> {
+    let wayland = session_type.is_some_and(|t| t.eq_ignore_ascii_case("wayland")) || wayland_display.is_some_and(|d| !d.is_empty());
+    wayland.then_some("Recording is not available on Wayland yet. Log in with an X11 (Xorg) session to record; screenshots work either way.")
+}
+
 // ---------------------------------------------------------------- pictures
 
 pub fn jpeg(img: &RgbaImage, quality: u8) -> Result<Vec<u8>, String> {
@@ -386,6 +393,14 @@ mod tests {
         assert_eq!(pick_codec(" V....D libvpx-vp9  VP9\n", 1).unwrap().0, "webm");
         assert!(pick_codec(" V....D mpeg4  MPEG-4 part 2\n", 1).is_none(), "a codec browsers cannot play is not used");
         assert!(pick_codec(" V....D libx264rgb  RGB\n", 1).is_none(), "a longer name is not the encoder");
+    }
+
+    #[test]
+    fn recording_says_no_on_wayland() {
+        assert!(unsupported_here(Some("wayland"), None).is_some());
+        assert!(unsupported_here(Some("x11"), Some("wayland-0")).is_some(), "an X11 app inside a Wayland desktop still cannot read the screen freely");
+        assert!(unsupported_here(Some("x11"), None).is_none());
+        assert!(unsupported_here(None, None).is_none(), "Windows has neither");
     }
 
     #[test]

@@ -224,7 +224,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function record() {
     await flush();
-    await call("toggle_recording").catch(() => {});
+    await call("toggle_recording").catch(() => {}); // a refusal is shown by call()
   }
 
   function setRecording(on) {
