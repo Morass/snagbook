@@ -6,3 +6,11 @@ export function rectFraction(a, b, w, h) {
   if (rw < 4 || rh < 4 || !w || !h) return null;
   return { x: x / w, y: y / h, w: rw / w, h: rh / h };
 }
+
+/// "0:07", "1:05", "1:00:03": the recording timer.
+export function formatElapsed(s) {
+  const t = Math.max(0, Math.floor(s));
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  const two = (n) => String(n).padStart(2, "0");
+  return h ? `${h}:${two(m)}:${two(sec)}` : `${m}:${two(sec)}`;
+}

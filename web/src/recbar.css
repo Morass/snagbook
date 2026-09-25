@@ -1,0 +1,11 @@
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body {
+  display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; box-sizing: border-box;
+  background: #1f1f22; color: #fff; font: 13px/1 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+  user-select: none; -webkit-app-region: drag; app-region: drag;
+}
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #ff3b30; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+#time { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 36px; }
+.what { color: #b9b9c0; flex: 1; }
+#stop { -webkit-app-region: no-drag; app-region: no-drag; border: 0; border-radius: 6px; background: #ff3b30; color: #fff; font: inherit; font-weight: 600; padding: 6px 12px; cursor: pointer; }

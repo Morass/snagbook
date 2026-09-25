@@ -217,20 +217,41 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     snag()?.focus();
   }
 
+  async function record() {
+    await flush();
+    await call("toggle_recording").catch(() => {});
+  }
+
+  function setRecording(on) {
+    if (view) view.recording = on ? view.recording || Date.now() : null;
+    renderRecord();
+  }
+
+  function renderRecord() {
+    const b = $("rec");
+    const on = !!view?.recording;
+    b.textContent = on ? "Stop" : "Record";
+    b.classList.toggle("recording", on);
+    const sc = view?.config?.shortcuts || {};
+    b.title = on ? tip("Stop recording", sc.record || "") : tip("Record", sc.record || "", "drag the area; recording starts when you let go");
+  }
+
   async function screenshot() {
     await flush();
     await call("start_screenshot").catch(() => {});
   }
 
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
-  async function onCaptured({ id, rel }) {
+  async function onCaptured({ id, rel, kind = "image", label = "", problem = null }) {
     await apply(await call("state"), { select: id });
     if (selected !== id) await show(id, { focus: false });
-    snag()?.insertMedia({ kind: "image", src: rel });
+    snag()?.insertMedia({ kind, src: rel, label });
     await flush();
     await refresh();
     const it = items().find((i) => i.id === id);
-    flash(`Screenshot saved to ${it?.title ?? "item " + id}`);
+    const where = it?.title ?? "item " + id;
+    if (problem) flash(`${kind === "video" ? "Recording" : "Stills"} saved to ${where}, but ${problem}.`, true);
+    else flash(`${kind === "video" ? "Recording" : "Screenshot"} saved to ${where}`);
   }
 
   async function copyHandoff() {
@@ -253,6 +274,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     renderTemplates();
     renderTitle();
     if (!has) renderEmpty();
+    renderRecord();
     $("new-item-key").textContent = key("Mod+N");
     $("new-item").title = tip("New item", key("Mod+N"));
     $("handoff").title = tip("Copy hand-off", key("Mod+Shift+C"), "the text that hands this session to an agent");
@@ -537,6 +559,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     };
     const sc = c.shortcuts || {};
     const kShot = keyField(sc.screenshot);
+    const kRec = keyField(sc.record);
     const kNew = keyField(sc.newItem);
     const kShow = keyField(sc.showNotebook);
     const errs = view.shortcutErrors?.length ? el("p", { class: "hint error", text: view.shortcutErrors.join(" · ") }) : null;
@@ -565,7 +588,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       el("label", { class: "field" }, el("span", { text: "Copy Hand-off copies" }), handoff),
       el("label", {}, onTop, " Keep the notebook above other windows"),
       el("div", { class: "field" }, el("span", { text: "Shortcuts that work in any app" }),
-        el("div", { class: "keys-grid" }, el("span", { text: "Screenshot" }), kShot, el("span", { text: "New item" }), kNew, el("span", { text: "Show notebook" }), kShow)),
+        el("div", { class: "keys-grid" }, el("span", { text: "Screenshot" }), kShot, el("span", { text: "Record" }), kRec, el("span", { text: "New item" }), kNew, el("span", { text: "Show notebook" }), kShow)),
       errs,
       el("div", { class: "field" }, el("span", { text: "Header for every session (placeholders: {session} {readme} {date} {items})" }), header),
       el("div", { class: "field" }, el("span", { text: "Templates" }), tpl, el("button", { type: "button", class: "small", onclick: () => addRow({ icon: "", label: "", body: "" }) }, "Add template"))
@@ -584,7 +607,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
           handoff: handoff.value,
           alwaysOnTop: onTop.checked,
           templates,
-          shortcuts: { screenshot: kShot.value, newItem: kNew.value, showNotebook: kShow.value },
+          shortcuts: { screenshot: kShot.value, record: kRec.value, newItem: kNew.value, showNotebook: kShow.value },
         },
       })
     );
@@ -629,6 +652,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const sc = view?.config?.shortcuts || {};
     const combo = comboFromEvent(e);
     if (combo && sameCombo(combo, sc.screenshot)) return stop(e, screenshot);
+    if (combo && sameCombo(combo, sc.record)) return stop(e, record);
     if (combo && sameCombo(combo, sc.newItem)) return stop(e, newItem);
     const mod = platform() === "macos" ? e.metaKey : e.ctrlKey;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
@@ -669,6 +693,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     });
     $("handoff").addEventListener("click", copyHandoff);
     $("shot").addEventListener("click", screenshot);
+    $("rec").addEventListener("click", record);
     const t = $("item-title");
     t.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -707,6 +732,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     insertTemplate,
     copyHandoff,
     screenshot,
+    record,
+    setRecording,
     onCaptured,
     sessionMenu,
     settings,

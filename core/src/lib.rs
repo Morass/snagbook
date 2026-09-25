@@ -11,6 +11,7 @@
 //!     media/           shot-001.png, clip-001.mp4, …
 //! ```
 
+pub mod capture_math;
 mod config;
 mod error;
 mod frontmatter;

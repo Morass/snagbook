@@ -3,6 +3,7 @@
 
 mod capture;
 mod media;
+mod record;
 
 use base64::Engine;
 use chrono::Utc;
@@ -10,7 +11,7 @@ use serde::Serialize;
 use snagbook_core::{Config, ConfigStore, HandoffStyle, Paths, Session, Shortcuts, SnagError, Summary, Template};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
@@ -62,6 +63,8 @@ pub struct View {
     closed: Option<String>,
     platform: &'static str,
     shortcut_errors: Vec<String>,
+    /// When the running recording started (milliseconds since 1970), if one is running.
+    recording: Option<u64>,
 }
 
 fn platform() -> &'static str {
@@ -120,6 +123,7 @@ impl App {
             closed,
             platform: platform(),
             shortcut_errors: self.shortcut_errors.clone(),
+            recording: None,
         }
     }
 
@@ -135,8 +139,10 @@ impl App {
 }
 
 #[tauri::command]
-fn state(st: St) -> View {
-    st.lock().unwrap().view()
+fn state(app: AppHandle, st: St) -> View {
+    let mut v = st.lock().unwrap().view();
+    v.recording = app.state::<Recorder>().0.lock().unwrap().as_ref().map(|r| r.started_ms);
+    v
 }
 
 #[tauri::command]
@@ -357,7 +363,159 @@ fn set_selected(st: St, id: Option<i64>) {
 
 #[tauri::command]
 fn start_screenshot(app: AppHandle) -> Res<()> {
-    capture::start(&app)
+    capture::start(&app, capture::Mode::Screenshot)
+}
+
+/// Record: drag the area first. When a recording is running, stop it instead.
+#[tauri::command]
+fn toggle_recording(app: AppHandle) -> Res<()> {
+    if app.state::<Recorder>().0.lock().unwrap().is_some() {
+        stop_recording_now(&app);
+        return Ok(());
+    }
+    capture::start(&app, capture::Mode::Record)
+}
+
+#[tauri::command]
+fn stop_recording(app: AppHandle) {
+    stop_recording_now(&app);
+}
+
+/// The running recording's start, for the timer window.
+#[tauri::command]
+fn recording_started(app: AppHandle) -> Option<u64> {
+    app.state::<Recorder>().0.lock().unwrap().as_ref().map(|r| r.started_ms)
+}
+
+struct Active {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: std::thread::JoinHandle<Result<record::Finished, String>>,
+    id: i64,
+    stem: String,
+    started_ms: u64,
+}
+
+#[derive(Default)]
+struct Recorder(Mutex<Option<Active>>);
+
+/// The item a capture goes into: the shown one, or a new one (and a new session when none
+/// is open).
+fn target_item(a: &mut App) -> Res<i64> {
+    if a.session.is_none() {
+        let cfg = a.store.config.clone();
+        let s = Session::create_now(&cfg.sessions_folder, &cfg).map_err(err)?;
+        a.use_session(s);
+    }
+    let selected = a.selected;
+    let s = a.session()?;
+    match selected.filter(|id| s.item(*id).is_ok()) {
+        Some(id) => Ok(id),
+        None => Ok(s.add_item(None, Utc::now()).map_err(err)?.id),
+    }
+}
+
+fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u32), monitor: (i32, i32, u32, u32)) -> Res<()> {
+    let st = app.state::<Mutex<App>>();
+    let mut a = st.lock().unwrap();
+    let id = target_item(&mut a)?;
+    let cap = a.store.config.capture.clone();
+    let (_, path) = a.session()?.reserve_media_name(id, "clip", "mp4").map_err(err)?;
+    drop(a);
+    let dir = path.parent().ok_or("no media folder")?.to_path_buf();
+    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).ok_or("no name")?;
+    let (x, y, w, h) = rect;
+    let plan = record::Plan {
+        dir,
+        stem: stem.clone(),
+        fps: cap.fps,
+        max_long_edge: cap.max_long_edge,
+        max_stills: cap.max_stills,
+        ffmpeg: record::find_ffmpeg(),
+        source: format!("region {w}×{h} at {x},{y}"),
+    };
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let handle = std::thread::spawn(move || {
+        let screen = xcap::Monitor::from_point(center.0, center.1).map_err(|e| format!("The screen could not be read: {e}"))?;
+        let grab = move || {
+            let full = screen.capture_image().map_err(|e| format!("The screen could not be photographed: {e}"))?;
+            let (fw, fh) = (full.width(), full.height());
+            let img = image::RgbaImage::from_raw(fw, fh, full.into_raw()).ok_or("malformed frame")?;
+            let (cw, ch) = (w.min(fw.saturating_sub(x)), h.min(fh.saturating_sub(y)));
+            Ok(image::imageops::crop_imm(&img, x, y, cw.max(1), ch.max(1)).to_image())
+        };
+        record::run(grab, plan, stop2)
+    });
+    let started_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, stem, started_ms });
+    open_recbar(app, rect, monitor);
+    let _ = app.emit_to("main", "recording", true);
+    Ok(())
+}
+
+/// The small window with the timer and Stop, in a top corner of the recorded monitor that
+/// the recorded area does not cover.
+fn open_recbar(app: &AppHandle, rect: (u32, u32, u32, u32), monitor: (i32, i32, u32, u32)) {
+    let (mx, my, mw, mh) = monitor;
+    let scale = app
+        .available_monitors()
+        .ok()
+        .and_then(|ms| ms.into_iter().find(|m| m.position().x == mx && m.position().y == my).map(|m| m.scale_factor()))
+        .unwrap_or(1.0);
+    let (bw, bh) = ((250.0 * scale) as u32, (46.0 * scale) as u32);
+    let margin = (16.0 * scale) as u32;
+    let overlaps = |bx: u32, by: u32| bx < rect.0 + rect.2 && rect.0 < bx + bw && by < rect.1 + rect.3 && rect.1 < by + bh;
+    let spots = [(mw.saturating_sub(bw + margin), margin), (margin, margin), (mw.saturating_sub(bw + margin), mh.saturating_sub(bh + margin)), (margin, mh.saturating_sub(bh + margin))];
+    let (bx, by) = spots.iter().copied().find(|(x, y)| !overlaps(*x, *y)).unwrap_or(spots[0]);
+    if let Ok(w) = WebviewWindowBuilder::new(app, "recbar", tauri::WebviewUrl::App("recbar.html".into()))
+        .title("Snagbook recording")
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .inner_size(250.0, 46.0)
+        .min_inner_size(250.0, 46.0)
+        .max_inner_size(250.0, 46.0)
+        .visible(false)
+        .build()
+    {
+        let _ = w.set_size(tauri::PhysicalSize::new(bw, bh));
+        let _ = w.set_position(tauri::PhysicalPosition::new(mx + bx as i32, my + by as i32));
+        let _ = w.show();
+        // Some window systems apply a size only to a window that is already on screen.
+        let _ = w.set_size(tauri::PhysicalSize::new(bw, bh));
+    }
+}
+
+/// Stop the running recording; the files are finished on a worker thread and announced.
+fn stop_recording_now(app: &AppHandle) {
+    let Some(active) = app.state::<Recorder>().0.lock().unwrap().take() else { return };
+    if let Some(w) = app.get_webview_window("recbar") {
+        let _ = w.destroy();
+    }
+    active.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let result = active.handle.join().unwrap_or_else(|_| Err("the recording stopped unexpectedly".into()));
+        let _ = app.emit_to("main", "recording", false);
+        match result {
+            Ok(f) => {
+                let (rel, kind) = match (&f.video, &f.sheet) {
+                    (Some(v), _) => (format!("media/{v}"), "video"),
+                    (None, Some(s)) => (format!("media/{s}"), "image"),
+                    (None, None) => {
+                        let _ = app.emit_to("main", "problem", f.problem.unwrap_or_else(|| "Nothing was recorded.".into()));
+                        return;
+                    }
+                };
+                let label = format!("Recording {}", snagbook_core::capture_math::duration(f.duration));
+                capture::announce(&app, capture::Captured { id: active.id, rel, kind: kind.into(), label, problem: f.problem });
+            }
+            Err(e) => {
+                let _ = app.emit_to("main", "problem", format!("The recording {} failed: {e}", active.stem));
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -368,26 +526,19 @@ fn cancel_screenshot(app: AppHandle) {
     }
 }
 
-/// Crop the frozen screen to `rect` and save it into the shown item (a new one when
-/// nothing is shown, a new session when none is open).
+/// The rectangle is chosen: a screenshot is cropped and saved into the shown item (a new
+/// one when nothing is shown, a new session when none is open); a recording starts.
 #[tauri::command]
 fn finish_screenshot(app: AppHandle, st: St, rect: capture::Rect) -> Res<()> {
-    let png = capture::finish(&app, rect)?;
-    let mut a = st.lock().unwrap();
-    if a.session.is_none() {
-        let cfg = a.store.config.clone();
-        let s = Session::create_now(&cfg.sessions_folder, &cfg).map_err(err)?;
-        a.use_session(s);
-    }
-    let selected = a.selected;
-    let s = a.session()?;
-    let id = match selected.filter(|id| s.item(*id).is_ok()) {
-        Some(id) => id,
-        None => s.add_item(None, Utc::now()).map_err(err)?.id,
+    let png = match capture::finish(&app, rect)? {
+        capture::Chosen::Picture(png) => png,
+        capture::Chosen::Region { center, rect, monitor } => return begin_recording(&app, center, rect, monitor),
     };
-    let rel = s.save_media(id, &png, "shot", "png").map_err(err)?;
+    let mut a = st.lock().unwrap();
+    let id = target_item(&mut a)?;
+    let rel = a.session()?.save_media(id, &png, "shot", "png").map_err(err)?;
     drop(a);
-    capture::announce(&app, capture::Captured { id, rel });
+    capture::announce(&app, capture::Captured { id, rel, kind: "image".into(), label: String::new(), problem: None });
     Ok(())
 }
 
@@ -401,6 +552,7 @@ fn capture_open(app: AppHandle) -> bool {
 #[derive(Clone, Copy)]
 enum Action {
     Screenshot,
+    Record,
     NewItem,
     ShowNotebook,
 }
@@ -414,7 +566,12 @@ fn register_shortcuts(app: &AppHandle, keys: &Shortcuts) -> Vec<String> {
     let _ = gs.unregister_all();
     let mut bound = vec![];
     let mut errors = vec![];
-    for (name, text, action) in [("Screenshot", &keys.screenshot, Action::Screenshot), ("New item", &keys.new_item, Action::NewItem), ("Show notebook", &keys.show_notebook, Action::ShowNotebook)] {
+    for (name, text, action) in [
+        ("Screenshot", &keys.screenshot, Action::Screenshot),
+        ("Record", &keys.record, Action::Record),
+        ("New item", &keys.new_item, Action::NewItem),
+        ("Show notebook", &keys.show_notebook, Action::ShowNotebook),
+    ] {
         let text = text.trim();
         if text.is_empty() {
             continue;
@@ -436,7 +593,12 @@ fn on_shortcut(app: &AppHandle, sc: &Shortcut) {
     let main = app.get_webview_window("main");
     match action {
         Some(Action::Screenshot) => {
-            if let Err(e) = capture::start(app) {
+            if let Err(e) = capture::start(app, capture::Mode::Screenshot) {
+                let _ = app.emit_to("main", "problem", e);
+            }
+        }
+        Some(Action::Record) => {
+            if let Err(e) = toggle_recording(app.clone()) {
                 let _ = app.emit_to("main", "problem", e);
             }
         }
@@ -469,6 +631,11 @@ fn selftest_requested() -> bool {
     std::env::var("SNAGBOOK_SELFTEST").is_ok_and(|v| !v.is_empty())
 }
 
+#[tauri::command]
+fn selftest_mode() -> String {
+    std::env::var("SNAGBOOK_SELFTEST").unwrap_or_default()
+}
+
 /// Deletes the open session's folder from outside the app, for the self-test only.
 #[tauri::command]
 fn selftest_delete_session(st: St) -> Res<()> {
@@ -484,8 +651,16 @@ fn selftest_done(app: tauri::AppHandle, ok: bool, lines: Vec<String>) {
     for l in &lines {
         println!("{l}");
     }
-    println!("{}", if ok { "SELFTEST PASS" } else { "SELFTEST FAIL" });
-    app.exit(if ok { 0 } else { 1 });
+    let verdict = if ok { "SELFTEST PASS" } else { "SELFTEST FAIL" };
+    println!("{verdict}");
+    // A Windows GUI program has no console: SNAGBOOK_SELFTEST_OUT names a file for the verdict.
+    if let Ok(out) = std::env::var("SNAGBOOK_SELFTEST_OUT") {
+        let _ = std::fs::write(out, format!("{}\n{verdict}\n", lines.join("\n")));
+    }
+    // AppHandle::exit does not carry the code to the process on every platform; the verdict
+    // is the exit status, so leave directly.
+    let _ = app;
+    std::process::exit(if ok { 0 } else { 1 });
 }
 
 /// Files an item may serve: the resolved path must stay inside the item folder.
@@ -512,6 +687,7 @@ pub fn run() {
         )
         .manage(Mutex::new(App::load()))
         .manage(capture::Frozen::default())
+        .manage(Recorder::default())
         .manage(Bindings::default())
         .register_uri_scheme_protocol("snagbook", |ctx, request| media::serve(ctx.app_handle(), &request))
         .setup(|app| {
@@ -548,10 +724,14 @@ pub fn run() {
             open_link,
             set_selected,
             start_screenshot,
+            toggle_recording,
+            stop_recording,
+            recording_started,
             cancel_screenshot,
             finish_screenshot,
             capture_open,
             selftest_requested,
+            selftest_mode,
             selftest_delete_session,
             selftest_done,
         ])

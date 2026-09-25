@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { createShell, keyLabel, neighbour, mediaBase, tip, comboFromEvent, sameCombo } from "../src/shell.js";
-import { rectFraction } from "../src/rect.js";
+import { rectFraction, formatElapsed } from "../src/rect.js";
 
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
@@ -328,4 +328,21 @@ test("the configured screenshot shortcut also works inside the window", async ()
   t.key(t.doc.body, { key: "s", code: "KeyS", ctrlKey: true, altKey: true });
   await t.settle();
   assert.ok(t.app.calls.some(([c]) => c === "start_screenshot"));
+});
+
+test("the recording timer reads like a clock", () => {
+  assert.equal(formatElapsed(0), "0:00");
+  assert.equal(formatElapsed(65.9), "1:05");
+  assert.equal(formatElapsed(3723), "1:02:03");
+  assert.equal(formatElapsed(-3), "0:00");
+});
+
+test("Record turns into Stop while a recording runs", async () => {
+  const t = await setup({ session: true });
+  assert.equal(t.$("rec").textContent, "Record");
+  t.shell.setRecording(true);
+  assert.equal(t.$("rec").textContent, "Stop");
+  assert.match(t.$("rec").title, /^Stop recording/);
+  t.shell.setRecording(false);
+  assert.equal(t.$("rec").textContent, "Record");
 });

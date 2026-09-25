@@ -223,3 +223,4 @@ button.primary.danger { background: var(--danger); border-color: var(--danger); 
 .keys-grid { display: grid; grid-template-columns: 110px 1fr; gap: 4px 8px; align-items: center; }
 .card input.keys { cursor: pointer; }
 .hint.error { color: var(--danger); }
+#rec.recording { background: #ff3b30; border-color: #ff3b30; color: #fff; }

@@ -77,13 +77,14 @@ fn lenient_handoff<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Hando
 #[serde(default, rename_all = "camelCase")]
 pub struct Shortcuts {
     pub new_item: String,
+    pub record: String,
     pub screenshot: String,
     pub show_notebook: String,
 }
 
 impl Default for Shortcuts {
     fn default() -> Self {
-        Shortcuts { new_item: "Ctrl+Alt+N".into(), screenshot: "Ctrl+Alt+S".into(), show_notebook: "Ctrl+Alt+B".into() }
+        Shortcuts { new_item: "Ctrl+Alt+N".into(), record: "Ctrl+Alt+R".into(), screenshot: "Ctrl+Alt+S".into(), show_notebook: "Ctrl+Alt+B".into() }
     }
 }
 

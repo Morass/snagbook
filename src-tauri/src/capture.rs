@@ -16,6 +16,18 @@ pub struct Frozen(pub Mutex<Option<Frame>>);
 pub struct Frame {
     pub image: RgbaImage,
     pub png: Vec<u8>,
+    pub mode: Mode,
+    /// A point inside the photographed monitor, to find it again for a recording.
+    pub center: (i32, i32),
+    /// The monitor's position and size in physical pixels.
+    pub monitor: (i32, i32, u32, u32),
+}
+
+/// What the rectangle is for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    Screenshot,
+    Record,
 }
 
 /// A rectangle as fractions of the frozen frame (0..1), so window scaling does not matter.
@@ -31,6 +43,11 @@ pub struct Rect {
 pub struct Captured {
     pub id: i64,
     pub rel: String,
+    /// "image" or "video".
+    pub kind: String,
+    pub label: String,
+    /// Said to the person after a recording that could not be saved in full.
+    pub problem: Option<String>,
 }
 
 /// The pixel rectangle `r` covers in a `width`×`height` frame, clamped inside it; None when
@@ -56,7 +73,7 @@ pub fn encode_png(img: &RgbaImage, fast: bool) -> Result<Vec<u8>, String> {
 }
 
 /// Photograph the monitor under the mouse and open the window that crops it.
-pub fn start(app: &AppHandle) -> Result<(), String> {
+pub fn start(app: &AppHandle, mode: Mode) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(WINDOW) {
         let _ = w.set_focus();
         return Ok(());
@@ -70,7 +87,8 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let target = monitors.iter().find(|m| inside(m)).or(monitors.first()).cloned().ok_or("No screen was found.")?;
     let (pos, size) = (*target.position(), *target.size());
 
-    let monitor = match xcap::Monitor::from_point(pos.x + size.width as i32 / 2, pos.y + size.height as i32 / 2) {
+    let center = (pos.x + size.width as i32 / 2, pos.y + size.height as i32 / 2);
+    let monitor = match xcap::Monitor::from_point(center.0, center.1) {
         Ok(m) => m,
         Err(_) => xcap::Monitor::all().map_err(|e| format!("The screen could not be read: {e}"))?.into_iter().next().ok_or("No screen was found.")?,
     };
@@ -78,9 +96,10 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let (w, h) = (shot.width(), shot.height());
     let image = RgbaImage::from_raw(w, h, shot.into_raw()).ok_or("The screen picture was malformed.")?;
     let png = encode_png(&image, true)?;
-    *app.state::<Frozen>().0.lock().unwrap() = Some(Frame { image, png });
+    *app.state::<Frozen>().0.lock().unwrap() = Some(Frame { image, png, mode, center, monitor: (pos.x, pos.y, size.width, size.height) });
 
-    let win = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("capture.html".into()))
+    let page = if mode == Mode::Record { "capture.html?mode=record" } else { "capture.html" };
+    let win = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(page.into()))
         .title("Snagbook screenshot")
         .decorations(false)
         .always_on_top(true)
@@ -104,13 +123,28 @@ pub fn close(app: &AppHandle) {
     *app.state::<Frozen>().0.lock().unwrap() = None;
 }
 
-/// Crop the frozen frame to `r` and hand back the PNG, closing the capture window.
-pub fn finish(app: &AppHandle, r: Rect) -> Result<Vec<u8>, String> {
+/// What the rectangle chose.
+pub enum Chosen {
+    /// A screenshot's PNG.
+    Picture(Vec<u8>),
+    /// A region to record: a point on its monitor, and the rectangle in that monitor's
+    /// captured pixels.
+    Region { center: (i32, i32), rect: (u32, u32, u32, u32), monitor: (i32, i32, u32, u32) },
+}
+
+/// Take the frozen frame and close the capture window.
+pub fn finish(app: &AppHandle, r: Rect) -> Result<Chosen, String> {
     let frame = app.state::<Frozen>().0.lock().unwrap().take().ok_or("No screenshot is in progress.")?;
     close(app);
-    let (x, y, w, h) = pixels(r, frame.image.width(), frame.image.height()).ok_or("The rectangle was too small.")?;
-    let crop = image::imageops::crop_imm(&frame.image, x, y, w, h).to_image();
-    encode_png(&crop, false)
+    let rect = pixels(r, frame.image.width(), frame.image.height()).ok_or("The rectangle was too small.")?;
+    match frame.mode {
+        Mode::Record => Ok(Chosen::Region { center: frame.center, rect, monitor: frame.monitor }),
+        Mode::Screenshot => {
+            let (x, y, w, h) = rect;
+            let crop = image::imageops::crop_imm(&frame.image, x, y, w, h).to_image();
+            Ok(Chosen::Picture(encode_png(&crop, false)?))
+        }
+    }
 }
 
 pub fn announce(app: &AppHandle, c: Captured) {

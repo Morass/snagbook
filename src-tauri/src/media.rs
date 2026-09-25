@@ -106,7 +106,12 @@ pub fn serve(app: &tauri::AppHandle, request: &Request<Vec<u8>>) -> Response<Vec
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let kind = content_type(&file);
     let range = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).map(|v| parse_range(v, len));
-    let builder = Response::builder().header(header::CONTENT_TYPE, kind).header(header::ACCEPT_RANGES, "bytes").header(header::CACHE_CONTROL, "no-cache");
+    // The page's own origin differs from this scheme's; the files are the page's to read.
+    let builder = Response::builder()
+        .header(header::CONTENT_TYPE, kind)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
     match range {
         Some(None) => Response::builder().status(StatusCode::RANGE_NOT_SATISFIABLE).header(header::CONTENT_RANGE, format!("bytes */{len}")).body(Vec::new()).unwrap(),
         Some(Some((start, end))) => {

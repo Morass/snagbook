@@ -40,6 +40,8 @@ export async function runSelfTest(shell, invoke) {
   const items = () => shell.view()?.session?.items || [];
 
   try {
+    // SNAGBOOK_SELFTEST=fail: one check that must fail, to prove a failure reaches the exit status.
+    if ((await invoke("selftest_mode")) === "fail") check(false, "negative control: this check fails on purpose");
     await until(() => shell.editorIsReady());
     check(shell.editorIsReady(), "the editor page is ready");
 
@@ -144,7 +146,38 @@ export async function runSelfTest(shell, invoke) {
     await shell.refresh();
     check(items().find((i) => i.id === 1)?.images === media?.images, "a cancelled screenshot saves nothing");
 
-    // 11. a session deleted from outside is closed, not written back
+    // 11. a recording: drag the area, a few seconds, Stop; the video and its companions
+    await shell.show(1);
+    const recorded = new Promise((resolve) => {
+      const orig = shell.onCaptured;
+      shell.onCaptured = async (p) => {
+        await orig(p);
+        if (p.kind === "video" || p.rel.includes("clip-")) resolve(p);
+      };
+    });
+    await invoke("toggle_recording");
+    check(await until(() => invoke("capture_open")), "Record opens the full-screen window to choose the area");
+    await invoke("finish_screenshot", { rect: { x: 0.2, y: 0.2, w: 0.4, h: 0.3 } });
+    check(await until(async () => (await invoke("recording_started")) != null), "recording starts when the area is chosen");
+    check(await until(() => $("rec").textContent === "Stop"), "the Record button turns into Stop");
+    await sleep(2600);
+    await invoke("stop_recording");
+    const rec = await Promise.race([recorded, sleep(20000).then(() => null)]);
+    check(rec?.kind === "video" && rec?.rel === "media/clip-001.mp4", "the recording is saved as media/clip-001.mp4: " + JSON.stringify(rec));
+    check((await invoke("read_note", { id: 1 })).includes("media/clip-001.mp4"), "the recording is in the note");
+    check(await until(() => $("rec").textContent === "Record"), "the button says Record again");
+    const base = document.querySelector("#editor .img-wrap img")?.src.replace(/media\/.*$/, "") || "";
+    const info = await fetch(base + "media/clip-001.json").then((r) => r.json()).catch(() => null);
+    check(info && info.duration >= 2.3 && info.duration <= 3.6, "clip-001.json gives the length: " + info?.duration);
+    check(info?.stills?.length === 3 && info.stills[0].file === "clip-001-frames/0001.jpg", "one still a second beside it: " + info?.stills?.length);
+    check(info?.width === Math.round(screen.width * devicePixelRatio * 0.4) - (Math.round(screen.width * devicePixelRatio * 0.4) % 2), "the video is the area's size: " + info?.width);
+    const poster = [...document.querySelectorAll("#editor .video-card img")].find((i) => i.src.includes("clip-001-frames"));
+    check(await imageLoaded(poster), "the video card shows its first still");
+    const sheet = new Image();
+    sheet.src = base + "media/clip-001-contact.jpg";
+    check(await imageLoaded(sheet), "the contact sheet is there");
+
+    // 12. a session deleted from outside is closed, not written back
     await invoke("selftest_delete_session");
     await shell.refresh();
     check(shell.view().session === null, "a session deleted from outside is closed");

@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { rectFraction } from "./rect.js";
 
 const windows = navigator.userAgent.includes("Windows");
+const recording = new URLSearchParams(location.search).get("mode") === "record";
+if (recording) document.getElementById("hint").textContent = "Drag the area to record · Enter for the whole screen · Esc to cancel";
 const frame = document.getElementById("frame");
 const sel = document.getElementById("sel");
 const size = document.getElementById("size");

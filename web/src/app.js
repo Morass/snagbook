@@ -10,6 +10,7 @@ const shell = createShell({ invoke, snag: () => window.snag });
 attach((msg) => shell.onEditorMessage(msg));
 listen("captured", (e) => shell.onCaptured(e.payload));
 listen("new-item", () => shell.newItem());
+listen("recording", (e) => shell.setRecording(!!e.payload));
 listen("problem", (e) => shell.flash(String(e.payload), true));
 shell.start().then(async () => {
   if (await invoke("selftest_requested")) runSelfTest(shell, invoke);
