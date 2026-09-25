@@ -39,7 +39,7 @@ tokens=$(git grep -nIE 'gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|A
 [ -n "$tokens" ] && { echo "$tokens"; hit "token-shaped literals above (build test fixtures at run time)"; }
 
 mails=$(git grep -nIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}' -- "$self" ':!go.sum' |
-	grep -vE 'example\.(com|org)|users\.noreply\.github\.com|git@github\.com')
+	grep -vE 'example\.(com|org)|users\.noreply\.github\.com|git@github\.com|@[0-9]+x\.(png|jpe?g|gif|webp|svg)')
 [ -n "$mails" ] && { echo "$mails"; hit "e-mail addresses above"; }
 
 # A secret committed and deleted again is still published with the repository, and
@@ -55,7 +55,7 @@ fi
 pasttokens=$(printf '%s\n' "$added" | grep -nIE 'gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|AKIA[0-9A-Z]{16}|sk-ant-[A-Za-z0-9_-]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY-----')
 [ -n "$pasttokens" ] && { echo "$pasttokens"; hit "token-shaped literals in past diffs"; }
 pastmails=$(printf '%s\n' "$added" | grep -nIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}' |
-	grep -vE 'example\.(com|org)|users\.noreply\.github\.com|git@github\.com')
+	grep -vE 'example\.(com|org)|users\.noreply\.github\.com|git@github\.com|@[0-9]+x\.(png|jpe?g|gif|webp|svg)')
 [ -n "$pastmails" ] && { echo "$pastmails"; hit "e-mail addresses in past diffs"; }
 
 if [ -s .git/info/private-patterns ]; then
