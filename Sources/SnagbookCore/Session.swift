@@ -196,6 +196,21 @@ public final class Session {
         try save()
     }
 
+    /// A `discard` for deleteItem: move the folder to the Trash, and when its volume has none
+    /// (a network share) delete it outright only if `deletePermanently` agrees. Declining throws
+    /// CocoaError(.userCancelled), so the item stays.
+    public static func trashOrDelete(trash: @escaping (URL) throws -> Void,
+                                     deletePermanently: @escaping (URL) -> Bool) -> (URL) throws -> Void {
+        { url in
+            do {
+                try trash(url)
+            } catch let e as CocoaError where e.code == .featureUnsupported {
+                guard deletePermanently(url) else { throw CocoaError(.userCancelled) }
+                try FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
     public func moveItem(_ id: Int, to index: Int) throws {
         guard let from = manifest.items.firstIndex(where: { $0.id == id }) else { throw SnagError.noSuchItem(id) }
         let rec = manifest.items.remove(at: from)

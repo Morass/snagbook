@@ -211,3 +211,41 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: u, encoding: .utf8), "{ not json")
     }
 }
+
+extension SessionTests {
+    // A session on a network share: the volume has no Trash, so trashItem fails with
+    // featureUnsupported and delete used to fail with it, leaving the item in place.
+    func testDeleteOnVolumeWithoutTrashDeletesPermanentlyWhenConfirmed() throws {
+        let s = try Session.create(root: root, config: Config())
+        let rec = try s.addItem(title: "New")
+        let dir = try s.itemURL(rec.id)
+        var asked = 0
+        try s.deleteItem(rec.id, discard: Session.trashOrDelete(
+            trash: { _ in throw CocoaError(.featureUnsupported) },
+            deletePermanently: { _ in asked += 1; return true }))
+        XCTAssertEqual(asked, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+        XCTAssertTrue(try Session.open(s.url.path).manifest.items.isEmpty)
+    }
+
+    func testDeleteOnVolumeWithoutTrashKeepsItemWhenDeclined() throws {
+        let s = try Session.create(root: root, config: Config())
+        let rec = try s.addItem(title: "New")
+        let dir = try s.itemURL(rec.id)
+        XCTAssertThrowsError(try s.deleteItem(rec.id, discard: Session.trashOrDelete(
+            trash: { _ in throw CocoaError(.featureUnsupported) },
+            deletePermanently: { _ in false }))) { XCTAssertEqual(($0 as? CocoaError)?.code, .userCancelled) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.path))
+        XCTAssertEqual(try Session.open(s.url.path).manifest.items.map(\.id), [rec.id])
+    }
+
+    func testDeleteThatTrashesNeverAsksToDeletePermanently() throws {
+        let s = try Session.create(root: root, config: Config())
+        let rec = try s.addItem(title: "New")
+        var trashed: URL?
+        try s.deleteItem(rec.id, discard: Session.trashOrDelete(
+            trash: { trashed = $0 },
+            deletePermanently: { _ in XCTFail("asked although the Trash worked"); return false }))
+        XCTAssertEqual(trashed?.lastPathComponent, "01-new")
+    }
+}

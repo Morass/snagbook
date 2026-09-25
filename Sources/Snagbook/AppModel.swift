@@ -240,7 +240,18 @@ final class AppModel: ObservableObject {
         Task {
             await editor.flush()
             do {
-                try session.deleteItem(id) { url in try FileManager.default.trashItem(at: url, resultingItemURL: nil) }
+                try session.deleteItem(id, discard: Session.trashOrDelete(
+                    trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
+                    deletePermanently: { _ in
+                        guard confirm else { return true }
+                        let a = NSAlert()
+                        a.messageText = "Delete “\(rec.title)” permanently?"
+                        a.informativeText = "This session is on a drive without a Trash, so the item’s folder, with the note and all its pictures and videos, would be deleted for good."
+                        a.addButton(withTitle: "Delete Permanently")
+                        a.addButton(withTitle: "Cancel")
+                        a.buttons.first?.hasDestructiveAction = true
+                        return a.runModal() == .alertFirstButtonReturn
+                    }))
                 editor.forget(item: id)
                 items = session.manifest.items
                 if selectedID == id {
@@ -248,6 +259,7 @@ final class AppModel: ObservableObject {
                     if let prev = back.last(where: { b in items.contains { $0.id == b } }) ?? items.last?.id { show(prev, record: false) } else { titleDraft = "" }
                 }
                 updateNav()
+            } catch let e as CocoaError where e.code == .userCancelled {
             } catch {
                 show(error)
             }
