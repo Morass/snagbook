@@ -248,6 +248,9 @@ function buildKeymap() {
 
 let mediaBase = "";
 const bust = new Map(); // src -> version, bumped when an image file is rewritten
+// Live picture and video views. ProseMirror keeps a view whose node is unchanged, and two
+// items often hold the same "media/shot-001.png", so a new mediaBase must repoint them.
+const mediaViews = new Set();
 
 export function resolveSrc(src) {
   if (!src) return "";
@@ -282,6 +285,10 @@ class ImageView {
       post({ type: "annotate", src: this.node.attrs.src });
     });
     this.render();
+    mediaViews.add(this);
+  }
+  destroy() {
+    mediaViews.delete(this);
   }
   render() {
     this.img.src = resolveSrc(this.node.attrs.src);
@@ -339,6 +346,10 @@ class VideoView {
     this.dom.className = "video-card";
     this.dom.contentEditable = "false";
     this.render();
+    mediaViews.add(this);
+  }
+  destroy() {
+    mediaViews.delete(this);
   }
   render() {
     const { src, label } = this.node.attrs;
@@ -558,6 +569,7 @@ export const api = {
   /** Show item `id`. Keeps undo history when coming back to an item whose file did not change. */
   open({ id, markdown, base, focus = true }) {
     persistNow();
+    const baseChanged = base != null && base !== mediaBase;
     if (base != null) mediaBase = base;
     const entry = cache.get(id);
     if (entry && entry.saved === markdown) {
@@ -568,6 +580,7 @@ export const api = {
       cache.set(id, { state, memo, saved: serializeMarkdown(doc, memo) });
       view.updateState(state);
     }
+    if (baseChanged) for (const v of mediaViews) v.render();
     currentId = id;
     onToolbar(view.state);
     if (focus) api.focus();

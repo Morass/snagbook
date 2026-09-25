@@ -142,3 +142,16 @@ test("takePending hands over an unsaved change exactly once", () => {
   api.flush();
   assert.equal(changes().length, before, "nothing left for the timer to post");
 });
+
+test("moving to another item with the same picture name shows that item's picture", () => {
+  const md = "Shot\n\n![](media/shot-001.png)\n\n[clip](media/clip-001.mp4)\n";
+  api.open({ id: "21", markdown: md, base: "snagbook://item/21/", focus: false });
+  const img = () => document.querySelector(".img-wrap img");
+  assert.match(img().src, /item\/21\/media\/shot-001\.png/);
+  api.open({ id: "22", markdown: md, base: "snagbook://item/22/", focus: false });
+  assert.match(img().src, /item\/22\/media\/shot-001\.png/, "the picture still points at the previous item");
+  const poster = document.querySelector(".video-card img");
+  if (poster) assert.match(poster.src, /item\/22\//, "the video poster still points at the previous item");
+  api.open({ id: "21", markdown: md, base: "snagbook://item/21/", focus: false });
+  assert.match(img().src, /item\/21\/media\/shot-001\.png/, "coming back shows the first item's picture again");
+});
