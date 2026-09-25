@@ -543,7 +543,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const tpl = el("div", { class: "templates-edit" });
     const rows = [];
     const addRow = (t) => {
-      const icon = el("input", { type: "text", class: "t-icon", placeholder: "🙂" });
+      const icon = el("input", { type: "text", class: "t-icon", placeholder: "icon" });
       const label = el("input", { type: "text", class: "t-label", placeholder: "Label" });
       const body = el("input", { type: "text", class: "t-body", placeholder: "Inserted text (\\n for a new line)" });
       icon.value = t.icon || "";
