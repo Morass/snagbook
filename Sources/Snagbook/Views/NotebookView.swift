@@ -1,4 +1,5 @@
 import AppKit
+import KeyboardShortcuts
 import SnagbookCore
 import SwiftUI
 
@@ -43,24 +44,25 @@ struct NotebookToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             Button { model.goBack() } label: { Image(systemName: "chevron.left") }
-                .help("Back (⌘[)").disabled(!model.canGoBack)
+                .help(tip("Back", "⌘[")).disabled(!model.canGoBack)
             Button { model.goForward() } label: { Image(systemName: "chevron.right") }
-                .help("Forward (⌘])").disabled(!model.canGoForward)
+                .help(tip("Forward", "⌘]")).disabled(!model.canGoForward)
         }
         ToolbarItemGroup(placement: .primaryAction) {
             Button { model.newItemFromMenu() } label: { Label("New Item", systemImage: "plus.square") }
-                .help("New item (⌘N, anywhere: ⌃⌘N)")
+                .help(tip("New item", "⌘N", "anywhere " + KeyboardShortcuts.Name.newItem.hint))
             Divider()
             Button { capture.recordAction() } label: {
                 Label(capture.recordButtonTitle, systemImage: capture.isRecording ? "stop.circle.fill" : "record.circle")
                     .foregroundStyle(capture.isRecording ? .red : .primary)
             }
-            .help("Drag a rectangle anywhere; recording starts when you let go. Again to stop (anywhere: ⌃⌘R)")
+            .help(capture.isRecording ? tip("Stop recording", KeyboardShortcuts.Name.record.hint)
+                  : tip("Record", KeyboardShortcuts.Name.record.hint, then: "drag a rectangle; recording starts when you let go"))
             Button { capture.screenshotAction() } label: { Label("Screenshot", systemImage: "camera.viewfinder") }
-                .help("Drag a rectangle to screenshot it (anywhere: ⌃⌘S)")
+                .help(tip("Screenshot", KeyboardShortcuts.Name.screenshot.hint, then: "drag a rectangle"))
             Divider()
             Button { model.copyHandoff() } label: { Label("Copy Hand-off", systemImage: "arrowshape.turn.up.right") }
-                .help("Copy the hand-off text for this session (⇧⌘C)")
+                .help(tip("Copy hand-off", "⇧⌘C", then: "the text that hands this session to an agent"))
                 .disabled(model.session == nil)
         }
     }
@@ -70,6 +72,7 @@ struct NotebookToolbar: ToolbarContent {
 
 struct ItemList: View {
     @EnvironmentObject var model: AppModel
+    @State private var newItemHover = false
     @State private var renaming: Int?
     @State private var renameText = ""
 
@@ -100,9 +103,17 @@ struct ItemList: View {
         }
         .safeAreaInset(edge: .bottom) {
             Button { model.newItemFromMenu() } label: {
-                Label("New Item", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    Label("New Item", systemImage: "plus")
+                    Spacer()
+                    // Shown only under the mouse, faintly: a reminder, not a label.
+                    Text("⌘N").font(.caption.monospaced()).foregroundStyle(.tertiary).opacity(newItemHover ? 1 : 0)
+                }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
+            .onHover { h in withAnimation(.easeOut(duration: 0.12)) { newItemHover = h } }
+            .help(tip("New item", "⌘N", "anywhere " + KeyboardShortcuts.Name.newItem.hint))
             .padding(.horizontal, 12).padding(.vertical, 8)
         }
         .onDeleteCommand { if let id = model.selectedID { model.delete(id) } }

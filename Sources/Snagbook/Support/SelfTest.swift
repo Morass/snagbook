@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import KeyboardShortcuts
 import SnagbookCore
 import SnagbookRender
 import WebKit
@@ -55,6 +56,12 @@ enum SelfTest {
     static func js(_ model: AppModel, _ code: String) async -> Any? { await model.editor.evaluate(code) }
 
     static func run(_ model: AppModel) async {
+        // 0. Shortcut hints: tooltips come quickly and name the shortcut as it is set now.
+        check(UserDefaults.standard.integer(forKey: SnagbookApp.toolTipDelayKey) <= SnagbookApp.toolTipDelay, "tooltips appear within \(SnagbookApp.toolTipDelay) ms")
+        let rec = KeyboardShortcuts.getShortcut(for: .record)?.description ?? ""
+        check(tip("Record", KeyboardShortcuts.Name.record.hint, then: "drag").hasPrefix("Record  \(rec) — ") && !rec.isEmpty, "the Record tooltip leads with its shortcut: \(rec)")
+        check(tip("Stop", "") == "Stop", "a cleared shortcut leaves no stray separator")
+
         // 1. A session and its first item.
         let before = model.session?.url
         model.newSession()

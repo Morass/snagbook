@@ -8,6 +8,14 @@ struct SnagbookApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @ObservedObject private var model = AppModel.shared
 
+    init() {
+        // Tooltips carry the shortcuts; the system's ~1.5 s wait hides them from anyone
+        // who only glances. Registered, so a value the user set with `defaults` still wins.
+        UserDefaults.standard.register(defaults: [Self.toolTipDelayKey: Self.toolTipDelay])
+    }
+    static let toolTipDelayKey = "NSInitialToolTipDelay"
+    static let toolTipDelay = 400
+
     var body: some Scene {
         Window("Snagbook", id: "notebook") {
             NotebookView()
@@ -107,7 +115,7 @@ struct SnagbookCommands: Commands {
                 Button("Cancel Capture") { capture.cancel() }
             }
             Divider()
-            Text("Anywhere: ⌃⌘R record · ⌃⌘S screenshot")
+            Text("Anywhere: \(KeyboardShortcuts.Name.record.hint) record · \(KeyboardShortcuts.Name.screenshot.hint) screenshot")
         }
         CommandMenu("Go") {
             Button("Back") { model.goBack() }.keyboardShortcut("[").disabled(!model.canGoBack)

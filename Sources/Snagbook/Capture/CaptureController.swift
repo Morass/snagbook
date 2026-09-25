@@ -1,4 +1,5 @@
 import AppKit
+import KeyboardShortcuts
 import SnagbookCore
 import SnagbookRender
 import SwiftUI
@@ -230,8 +231,8 @@ struct CapturePill: View {
                     }
                 }
                 .buttonStyle(PillButton(tint: .red))
-                .help("Stop (⌃⌘R)")
-                Button { capture.screenshotAction() } label: { Image(systemName: "camera") }.buttonStyle(PillButton()).help("Screenshot (⌃⌘S)")
+                .help(tip("Stop", KeyboardShortcuts.Name.record.hint))
+                Button { capture.screenshotAction() } label: { Image(systemName: "camera") }.buttonStyle(PillButton()).help(tip("Screenshot", KeyboardShortcuts.Name.screenshot.hint))
             case .saving:
                 ProgressView().controlSize(.small)
                 Text("Saving…").foregroundStyle(.white)

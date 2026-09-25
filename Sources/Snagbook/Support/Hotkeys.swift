@@ -12,3 +12,14 @@ extension KeyboardShortcuts.Name {
     /// Bring the notebook to the front (or hide it when it is in front).
     static let showNotebook = Self("showNotebook", default: .init(.b, modifiers: [.control, .command]))
 }
+
+extension KeyboardShortcuts.Name {
+    /// The shortcut as it is set now ("⌃⌘R"), for hints; empty when it has been cleared.
+    var hint: String { KeyboardShortcuts.getShortcut(for: self)?.description ?? "" }
+}
+
+/// Tooltip text that leads with the shortcut: "Screenshot  ⌃⌘S — drag a rectangle".
+func tip(_ what: String, _ keys: String..., then detail: String = "") -> String {
+    let k = keys.filter { !$0.isEmpty }.joined(separator: " · ")
+    return what + (k.isEmpty ? "" : "  " + k) + (detail.isEmpty ? "" : " — " + detail)
+}
