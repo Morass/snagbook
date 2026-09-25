@@ -1,0 +1,635 @@
+// The notebook around the editor: sessions, the item list, titles, templates, hand-off.
+// Everything on disk goes through `invoke` (the app's commands), so tests pass a fake one.
+
+export function keyLabel(platform, combo) {
+  // combo like "Mod+Shift+N"
+  const mac = platform === "macos";
+  return combo
+    .split("+")
+    .map((k) => (k === "Mod" ? (mac ? "⌘" : "Ctrl") : k === "Shift" ? (mac ? "⇧" : "Shift") : k === "Alt" ? (mac ? "⌥" : "Alt") : k))
+    .join(mac ? "" : "+");
+}
+
+/// Tooltip text that leads with the shortcut: "Screenshot  Ctrl+Shift+S — drag a rectangle".
+export function tip(what, keys, detail = "") {
+  return what + (keys ? "  " + keys : "") + (detail ? " — " + detail : "");
+}
+
+export function mediaBase(platform, id) {
+  return platform === "windows" ? `http://snagbook.localhost/item/${id}/` : `snagbook://localhost/item/${id}/`;
+}
+
+/// The item to show after the one at `index` went away: the one now in its place, or the
+/// last one.
+export function neighbour(items, index) {
+  if (!items.length) return null;
+  return items[Math.min(index, items.length - 1)].id;
+}
+
+export function createShell({ invoke, snag, doc = globalThis.document, win = globalThis.window }) {
+  const $ = (id) => doc.getElementById(id);
+  const el = (tag, props = {}, ...kids) => {
+    const e = doc.createElement(tag);
+    for (const [k, v] of Object.entries(props)) {
+      if (k === "class") e.className = v;
+      else if (k === "text") e.textContent = v;
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+      else if (v !== undefined && v !== null) e.setAttribute(k, v);
+    }
+    for (const kid of kids) if (kid !== null && kid !== undefined) e.append(kid);
+    return e;
+  };
+
+  let view = null;
+  let selected = null;
+  let shownPath = null;
+  let editorReady = false;
+  let statusTimer = null;
+  const s = { view: () => view, selected: () => selected };
+
+  const platform = () => view?.platform || "linux";
+  const key = (combo) => keyLabel(platform(), combo);
+  const items = () => view?.session?.items || [];
+
+  // ------------------------------------------------------------ talking to the app
+
+  async function call(cmd, args = {}) {
+    try {
+      return await invoke(cmd, args);
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (!msg.startsWith("NOTRASH:")) flash(msg, true);
+      throw e;
+    }
+  }
+
+  function flash(text, error = false) {
+    const t = $("status-text");
+    t.textContent = text;
+    t.classList.toggle("error", error);
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => (t.textContent = ""), error ? 8000 : 4000);
+  }
+
+  /// Save what the editor has not reported yet (before switching items or sessions).
+  async function flush() {
+    const ed = snag();
+    if (!ed || !editorReady) return;
+    const p = ed.takePending?.();
+    if (p && p.id != null) await call("write_note", { id: p.id, markdown: p.markdown }).catch(() => {});
+  }
+
+  async function apply(v, { select } = {}) {
+    const newSession = v.session?.path !== shownPath;
+    view = v;
+    if (v.closed) flash(`The session folder ${v.closed} was deleted, so it was closed.`, true);
+    if (newSession) {
+      shownPath = v.session?.path ?? null;
+      selected = null;
+      for (const it of items()) snag()?.forget?.(it.id);
+    }
+    const ids = items().map((i) => i.id);
+    let want = select ?? selected;
+    if (want == null || !ids.includes(want)) want = newSession ? ids[ids.length - 1] ?? null : neighbour(items(), Math.max(0, ids.indexOf(selected)));
+    render();
+    if (want !== selected || newSession) await show(want, { focus: false });
+    else renderTitle();
+  }
+
+  async function refresh() {
+    await apply(await call("state"));
+  }
+
+  // ------------------------------------------------------------ items
+
+  async function show(id, { focus = true } = {}) {
+    await flush();
+    selected = id;
+    renderList();
+    renderTitle();
+    const ed = snag();
+    if (id == null || !ed || !editorReady) return;
+    let md = "";
+    try {
+      md = await call("read_note", { id });
+    } catch {
+      return refresh();
+    }
+    ed.open({ id, markdown: md, base: mediaBase(platform(), id), focus });
+  }
+
+  async function newItem() {
+    await flush();
+    const before = new Set(items().map((i) => i.id));
+    const v = await call("add_item", { title: null });
+    const added = v.session.items.find((i) => !before.has(i.id));
+    await apply(v, { select: added?.id });
+    const t = $("item-title");
+    t.focus();
+    t.select();
+  }
+
+  async function newSession() {
+    await flush();
+    await apply(await call("new_session"));
+    flash(`New session: ${view.session.path}`);
+    $("item-title").focus();
+    $("item-title").select();
+  }
+
+  async function openSession(path) {
+    await flush();
+    await apply(await call("open_session", { path }));
+  }
+
+  async function renameSelected() {
+    const t = $("item-title");
+    const it = items().find((i) => i.id === selected);
+    if (!it) return;
+    const title = t.value.trim();
+    if (!title) {
+      t.value = it.title;
+      return;
+    }
+    if (title === it.title) return;
+    await apply(await call("rename_item", { id: selected, title }));
+  }
+
+  async function deleteItem(id) {
+    const it = items().find((i) => i.id === id);
+    if (!it) return;
+    const ok = await confirm(`Delete “${it.title}”?`, "Its folder, with the note and all its pictures and videos, goes to the Trash.", "Move to Trash");
+    if (!ok) return;
+    await flush();
+    const index = items().findIndex((i) => i.id === id);
+    let v;
+    try {
+      v = await call("delete_item", { id, permanently: false });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (!msg.startsWith("NOTRASH:")) return;
+      const again = await confirm(
+        `Delete “${it.title}” permanently?`,
+        `It could not go to the Trash (${msg.slice(8) || "this drive has none"}), so its folder, with the note and all its pictures and videos, would be deleted for good.`,
+        "Delete Permanently"
+      );
+      if (!again) return;
+      v = await call("delete_item", { id, permanently: true });
+    }
+    snag()?.forget?.(id);
+    const rest = v.session?.items || [];
+    await apply(v, { select: selected === id ? neighbour(rest, Math.max(0, index - 1)) : selected });
+  }
+
+  async function moveItem(id, index) {
+    await apply(await call("move_item", { id, index }));
+  }
+
+  async function insertTemplate(t) {
+    if (selected == null) await newItem();
+    snag()?.insertMarkdown(t.body);
+    snag()?.focus();
+  }
+
+  async function copyHandoff() {
+    await flush();
+    const text = await call("copy_handoff");
+    flash("Hand-off copied: " + text.split("\n")[0].slice(0, 80));
+    return text;
+  }
+
+  // ------------------------------------------------------------ drawing
+
+  function render() {
+    const has = !!view?.session;
+    $("note").hidden = !has;
+    $("topbar").hidden = !has;
+    $("templates").hidden = !has;
+    $("empty").hidden = has;
+    renderSessionButton();
+    renderList();
+    renderTemplates();
+    renderTitle();
+    if (!has) renderEmpty();
+    $("new-item-key").textContent = key("Mod+N");
+    $("new-item").title = tip("New item", key("Mod+N"));
+    $("handoff").title = tip("Copy hand-off", key("Mod+Shift+C"), "the text that hands this session to an agent");
+    $("items").setAttribute("aria-activedescendant", selected == null ? "" : "item-" + selected);
+    if (view?.loadError) flash("Settings could not be read, so they are not saved: " + view.loadError, true);
+  }
+
+  function renderSessionButton() {
+    const b = $("session-button");
+    b.textContent = "";
+    if (!view?.session) {
+      b.append(el("span", { class: "session-title", text: "No session" }));
+    } else {
+      const n = items().length;
+      b.append(el("span", { class: "session-title", text: view.session.title }), el("span", { class: "session-sub", text: `${n} item${n === 1 ? "" : "s"}` }));
+    }
+    b.title = "Switch session, start a new one, or rename this one";
+  }
+
+  function renderList() {
+    const ol = $("items");
+    ol.textContent = "";
+    items().forEach((it, i) => {
+      const counts = [it.images ? `🖼 ${it.images}` : "", it.videos ? `🎬 ${it.videos}` : ""].filter(Boolean).join(" ");
+      const li = el(
+        "li",
+        {
+          id: "item-" + it.id,
+          class: "item" + (it.id === selected ? " selected" : ""),
+          draggable: "true",
+          "data-id": it.id,
+          onclick: () => show(it.id),
+          oncontextmenu: (e) => {
+            e.preventDefault();
+            itemMenu(it, e.clientX, e.clientY);
+          },
+          ondragstart: (e) => e.dataTransfer?.setData("text/snag-item", String(it.id)),
+          ondragover: (e) => e.preventDefault(),
+          ondrop: (e) => {
+            e.preventDefault();
+            const from = Number(e.dataTransfer?.getData("text/snag-item"));
+            if (from && from !== it.id) moveItem(from, i);
+          },
+        },
+        el("span", { class: "num", text: String(i + 1) }),
+        el("span", { class: "title", text: it.title }),
+        counts ? el("span", { class: "counts", text: counts }) : null
+      );
+      ol.append(li);
+    });
+  }
+
+  function renderTitle() {
+    const it = items().find((i) => i.id === selected);
+    const t = $("item-title");
+    if (doc.activeElement !== t) t.value = it?.title ?? "";
+    t.disabled = !it;
+  }
+
+  function renderTemplates() {
+    const bar = $("templates");
+    bar.textContent = "";
+    (view?.config?.templates || []).forEach((t, i) => {
+      const preview = t.body.replace(/\s+/g, " ").trim().slice(0, 40);
+      bar.append(
+        el(
+          "button",
+          { type: "button", class: "template", title: tip(t.label, i < 9 ? key(`Mod+${i + 1}`) : "", "inserts: " + preview), onclick: () => insertTemplate(t) },
+          t.icon ? el("span", { class: "icon", text: t.icon }) : null,
+          t.label
+        )
+      );
+    });
+  }
+
+  async function renderEmpty() {
+    const box = $("empty");
+    box.textContent = "";
+    box.append(
+      el("div", { class: "empty-icon", text: "📓" }),
+      el("h2", { text: "Start a session" }),
+      el("p", { text: "A session is one sitting of testing: numbered items, each with a note, screenshots and recordings." }),
+      el("button", { type: "button", class: "primary", onclick: newSession, title: tip("New session", key("Mod+Shift+N")) }, "New Session")
+    );
+    const recent = (await call("list_sessions").catch(() => [])).slice(0, 6);
+    if (view?.session || !recent.length) return;
+    const list = el("div", { class: "recent" }, el("div", { class: "caption", text: "Or continue one" }));
+    for (const r of recent) {
+      list.append(
+        el("button", { type: "button", class: "recent-row", onclick: () => openSession(r.path) }, el("span", { text: r.title }), el("span", { class: "sub", text: `${r.items} item${r.items === 1 ? "" : "s"} · ${fmtDate(r.created)}` }))
+      );
+    }
+    box.append(list);
+  }
+
+  function fmtDate(iso) {
+    const d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  }
+
+  // ------------------------------------------------------------ menus and dialogs
+
+  function popup(x, y, entries) {
+    const m = $("menu");
+    m.textContent = "";
+    for (const e of entries) {
+      if (e === "-") m.append(el("div", { class: "sep" }));
+      else if (e.caption) m.append(el("div", { class: "caption", text: e.caption }));
+      else
+        m.append(
+          el(
+            "button",
+            {
+              type: "button",
+              class: "menu-row" + (e.danger ? " danger" : "") + (e.checked ? " checked" : ""),
+              onclick: () => {
+                closeMenu();
+                e.run();
+              },
+            },
+            el("span", { text: e.label }),
+            e.sub ? el("span", { class: "sub", text: e.sub }) : null
+          )
+        );
+    }
+    m.hidden = false;
+    m.style.left = x + "px";
+    m.style.top = y + "px";
+  }
+
+  function closeMenu() {
+    $("menu").hidden = true;
+  }
+
+  async function sessionMenu() {
+    const b = $("session-button").getBoundingClientRect();
+    // Read the folder each time: sessions deleted from outside are gone from the list.
+    const recent = (await call("list_sessions").catch(() => [])).slice(0, 12);
+    const cur = view?.session?.path;
+    const entries = [];
+    if (recent.length) {
+      entries.push({ caption: "Recent sessions" });
+      for (const r of recent) entries.push({ label: r.title, sub: `${r.items} item${r.items === 1 ? "" : "s"} · ${fmtDate(r.created)}`, checked: r.path === cur, run: () => openSession(r.path) });
+      entries.push("-");
+    }
+    entries.push({ label: "New Session", sub: key("Mod+Shift+N"), run: newSession });
+    if (view?.session) {
+      entries.push({ label: "Rename This Session…", run: renameSession });
+      entries.push({ label: "Edit Header…", run: editHeader });
+    }
+    entries.push({ label: "Open Another Folder…", run: pickFolder });
+    if (view?.session) entries.push({ label: "Show in Files", run: () => call("reveal", { id: null }) });
+    entries.push("-", { label: "Settings…", sub: key("Mod+,"), run: settings });
+    popup(b.left + 4, b.bottom + 2, entries);
+  }
+
+  function itemMenu(it, x, y) {
+    popup(x, y, [
+      { label: "Rename…", run: () => renameItemDialog(it) },
+      { label: "Show in Files", run: () => call("reveal", { id: it.id }) },
+      "-",
+      { label: "Delete…", danger: true, run: () => deleteItem(it.id) },
+    ]);
+  }
+
+  async function pickFolder() {
+    await flush();
+    const v = await call("pick_session_folder");
+    if (v) await apply(v);
+  }
+
+  /// A modal with `body` and buttons; resolves to the value of the button pressed (Escape: null).
+  function modal(title, body, buttons) {
+    return new Promise((resolve) => {
+      const box = $("modal");
+      box.textContent = "";
+      const done = (v) => {
+        box.hidden = true;
+        box.textContent = "";
+        doc.removeEventListener("keydown", onKey, true);
+        resolve(v);
+      };
+      const row = el("div", { class: "buttons" });
+      for (const b of buttons) row.append(el("button", { type: "button", class: (b.primary ? "primary" : "") + (b.danger ? " danger" : ""), onclick: () => done(b.value), "data-value": String(b.value) }, b.label));
+      const card = el("div", { class: "card", role: "dialog", "aria-label": title }, el("h3", { text: title }), body, row);
+      box.append(card);
+      box.hidden = false;
+      const onKey = (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          done(null);
+        } else if (e.key === "Enter" && !(e.target instanceof win.HTMLTextAreaElement)) {
+          const p = buttons.find((b) => b.primary);
+          if (p) {
+            e.preventDefault();
+            done(p.value);
+          }
+        }
+      };
+      doc.addEventListener("keydown", onKey, true);
+      (card.querySelector("input, textarea") || card.querySelector("button.primary"))?.focus();
+    });
+  }
+
+  async function confirm(title, text, okLabel) {
+    return (await modal(title, el("p", { text }), [{ label: "Cancel", value: false }, { label: okLabel, value: true, primary: true, danger: true }])) === true;
+  }
+
+  async function ask(title, value, okLabel = "Rename") {
+    const input = el("input", { type: "text", value, spellcheck: "false" });
+    input.value = value;
+    const r = await modal(title, input, [{ label: "Cancel", value: false }, { label: okLabel, value: true, primary: true }]);
+    return r ? input.value : null;
+  }
+
+  async function renameItemDialog(it) {
+    const t = await ask("Rename item", it.title);
+    if (t != null && t.trim() && t.trim() !== it.title) await apply(await call("rename_item", { id: it.id, title: t }));
+  }
+
+  async function renameSession() {
+    const t = await ask("Rename session", view.session.title);
+    if (t != null) await apply(await call("set_session_title", { title: t }));
+  }
+
+  async function editHeader() {
+    const own = view.session.header != null;
+    const text = el("textarea", { rows: "10", spellcheck: "false" });
+    text.value = view.session.header ?? view.config.header;
+    const global = el("input", { type: "radio", name: "hdr", id: "hdr-global" });
+    const mine = el("input", { type: "radio", name: "hdr", id: "hdr-own" });
+    global.checked = !own;
+    mine.checked = own;
+    const sync = () => {
+      text.disabled = global.checked;
+      if (global.checked) text.value = view.config.header;
+    };
+    global.addEventListener("change", sync);
+    mine.addEventListener("change", sync);
+    sync();
+    const body = el(
+      "div",
+      { class: "form" },
+      el("p", { class: "hint", text: "Written at the top of README.md and used by Copy Hand-off. Placeholders: {session} {readme} {date} {items}." }),
+      el("label", {}, global, " Use the global header (Settings)"),
+      el("label", {}, mine, " This session has its own header"),
+      text
+    );
+    const r = await modal("Session header", body, [{ label: "Cancel", value: false }, { label: "Save", value: true, primary: true }]);
+    if (r) await apply(await call("set_session_header", { header: mine.checked ? text.value : null }));
+  }
+
+  async function settings() {
+    const c = view.config;
+    const folder = el("input", { type: "text", spellcheck: "false" });
+    folder.value = c.sessionsFolder;
+    const format = el("input", { type: "text", spellcheck: "false" });
+    format.value = c.folderFormat;
+    const header = el("textarea", { rows: "7", spellcheck: "false" });
+    header.value = c.header;
+    const onTop = el("input", { type: "checkbox" });
+    onTop.checked = !!c.alwaysOnTop;
+    const handoff = el("select", {}, el("option", { value: "header", text: "The header, with the session filled in" }), el("option", { value: "path", text: "Only the path of README.md" }));
+    handoff.value = c.handoff;
+    const tpl = el("div", { class: "templates-edit" });
+    const rows = [];
+    const addRow = (t) => {
+      const icon = el("input", { type: "text", class: "t-icon", placeholder: "🙂" });
+      const label = el("input", { type: "text", class: "t-label", placeholder: "Label" });
+      const body = el("input", { type: "text", class: "t-body", placeholder: "Inserted text (\\n for a new line)" });
+      icon.value = t.icon || "";
+      label.value = t.label || "";
+      body.value = (t.body || "").replace(/\n/g, "\\n");
+      const row = el("div", { class: "t-row" }, icon, label, body);
+      const entry = { id: t.id, icon, label, body, row };
+      row.append(el("button", { type: "button", class: "small", title: "Remove", onclick: () => { row.remove(); rows.splice(rows.indexOf(entry), 1); } }, "−"));
+      rows.push(entry);
+      tpl.append(row);
+    };
+    (c.templates || []).forEach(addRow);
+    const body = el(
+      "div",
+      { class: "form" },
+      el("label", { class: "field" }, el("span", { text: "Sessions folder" }), folder),
+      el("label", { class: "field" }, el("span", { text: "New session folder name" }), format),
+      el("p", { class: "hint", text: "Tokens: {hash} {yyyy} {MM} {dd} {HH} {mm}. A leading ~ is your home folder." }),
+      el("label", { class: "field" }, el("span", { text: "Copy Hand-off copies" }), handoff),
+      el("label", {}, onTop, " Keep the notebook above other windows"),
+      el("div", { class: "field" }, el("span", { text: "Header for every session (placeholders: {session} {readme} {date} {items})" }), header),
+      el("div", { class: "field" }, el("span", { text: "Templates" }), tpl, el("button", { type: "button", class: "small", onclick: () => addRow({ icon: "", label: "", body: "" }) }, "Add template"))
+    );
+    const r = await modal("Settings", body, [{ label: "Cancel", value: false }, { label: "Save", value: true, primary: true }]);
+    if (!r) return;
+    const templates = rows
+      .filter((x) => x.label.value.trim())
+      .map((x) => ({ id: x.id || undefined, icon: x.icon.value.trim(), label: x.label.value.trim(), body: x.body.value.replace(/\\n/g, "\n") }));
+    await apply(
+      await call("update_config", {
+        patch: { sessionsFolder: folder.value, folderFormat: format.value, header: header.value, handoff: handoff.value, alwaysOnTop: onTop.checked, templates },
+      })
+    );
+  }
+
+  // ------------------------------------------------------------ editor messages
+
+  async function onEditorMessage(msg) {
+    switch (msg?.type) {
+      case "ready":
+        editorReady = true;
+        if (selected != null) await show(selected, { focus: false });
+        break;
+      case "changed":
+        if (msg.id != null) await call("write_note", { id: msg.id, markdown: msg.markdown }).catch(() => refresh());
+        break;
+      case "media": {
+        const id = selected;
+        try {
+          if (id == null) throw new Error("no item");
+          const rel = await call("save_media", { id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
+          snag()?.mediaSaved(msg.reqId, rel);
+          await refresh();
+        } catch {
+          snag()?.mediaFailed(msg.reqId);
+        }
+        break;
+      }
+      case "open":
+        await call("open_link", { id: selected, href: msg.href }).catch(() => {});
+        break;
+      case "annotate":
+        flash("Marking up pictures is not in this version yet.");
+        break;
+    }
+  }
+
+  // ------------------------------------------------------------ keys and wiring
+
+  function onKey(e) {
+    if (!$("modal").hidden) return;
+    const mod = platform() === "macos" ? e.metaKey : e.ctrlKey;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (mod && !e.altKey) {
+      if (k === "n" && e.shiftKey) return stop(e, newSession);
+      if (k === "n") return stop(e, newItem);
+      if (k === "o") return stop(e, sessionMenu);
+      if (k === "c" && e.shiftKey) return stop(e, copyHandoff);
+      if (k === ",") return stop(e, settings);
+      if (/^[1-9]$/.test(k) && !e.shiftKey) {
+        const t = view?.config?.templates?.[Number(k) - 1];
+        if (t) return stop(e, () => insertTemplate(t));
+      }
+    }
+    if (e.key === "Escape") closeMenu();
+    if (doc.activeElement === $("items")) {
+      const ids = items().map((i) => i.id);
+      const at = ids.indexOf(selected);
+      if (e.key === "ArrowDown" && at < ids.length - 1) return stop(e, () => show(ids[at + 1], { focus: false }));
+      if (e.key === "ArrowUp" && at > 0) return stop(e, () => show(ids[at - 1], { focus: false }));
+      if ((e.key === "Delete" || e.key === "Backspace") && selected != null) return stop(e, () => deleteItem(selected));
+      if (e.key === "Enter" && selected != null) return stop(e, () => $("item-title").focus());
+    }
+  }
+
+  function stop(e, fn) {
+    e.preventDefault();
+    e.stopPropagation();
+    fn();
+  }
+
+  function wire() {
+    $("new-item").addEventListener("click", newItem);
+    $("session-button").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if ($("menu").hidden) sessionMenu();
+      else closeMenu();
+    });
+    $("handoff").addEventListener("click", copyHandoff);
+    const t = $("item-title");
+    t.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        renameSelected().then(() => snag()?.focus());
+      } else if (e.key === "Escape") {
+        t.value = items().find((i) => i.id === selected)?.title ?? "";
+        snag()?.focus();
+      }
+    });
+    t.addEventListener("blur", () => renameSelected());
+    doc.addEventListener("keydown", onKey, true);
+    doc.addEventListener("mousedown", (e) => {
+      if (!$("menu").hidden && !e.target.closest?.("#menu") && e.target !== $("session-button")) closeMenu();
+    });
+    // Coming back to the window: the folders may have changed underneath.
+    win.addEventListener("focus", () => refresh().catch(() => {}));
+  }
+
+  async function start() {
+    wire();
+    await apply(await call("state"));
+  }
+
+  return Object.assign(s, {
+    start,
+    refresh,
+    apply,
+    show,
+    newItem,
+    newSession,
+    openSession,
+    deleteItem,
+    moveItem,
+    renameSelected,
+    insertTemplate,
+    copyHandoff,
+    sessionMenu,
+    settings,
+    onEditorMessage,
+    flush,
+    flash,
+    editorIsReady: () => editorReady,
+  });
+}
