@@ -106,7 +106,7 @@ body { display: flex; flex-direction: column; }
   outline: none;
   padding: 18px 28px 40vh;
   max-width: 860px;
-  margin: 0 auto;
+  margin: 0;
   word-wrap: break-word;
   white-space: pre-wrap;
   white-space: break-spaces;
