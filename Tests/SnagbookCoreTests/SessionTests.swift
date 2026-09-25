@@ -50,14 +50,43 @@ final class SessionTests: XCTestCase {
         XCTAssertThrowsError(try s.renameItem(1, to: "   "))
     }
 
-    func testIdsAreNeverReusedAfterDelete() throws {
+    func testDeletingFromTheEndGivesTheNumbersBack() throws {
+        let s = try Session.create(root: root, config: Config())
+        for _ in 1...4 { try s.addItem() }
+        try s.deleteItem(2)
+        XCTAssertEqual(try s.addItem().id, 5, "1 3 4 → 5: a gap in the middle is not refilled")
+        try s.deleteItem(5)
+        try s.deleteItem(4)
+        XCTAssertEqual(try s.addItem().id, 4, "1 3 after deleting 4 and 5 → 4")
+        XCTAssertEqual(s.manifest.items.map(\.id), [1, 3, 4])
+        XCTAssertEqual(try Session.open(s.url.path).manifest.nextItem, 5)
+    }
+
+    func testDeletingEverythingStartsAgainAtOne() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem()
         try s.addItem()
         try s.deleteItem(2)
-        let three = try s.addItem()
-        XCTAssertEqual(three.id, 3)
-        XCTAssertEqual(s.manifest.items.map(\.id), [1, 3])
+        try s.deleteItem(1)
+        XCTAssertEqual(try s.addItem().id, 1)
+    }
+
+    func testFolderRemovedFromOutsideAtTheEndGivesItsNumberBack() throws {
+        let s = try Session.create(root: root, config: Config())
+        for _ in 1...3 { try s.addItem() }
+        try FileManager.default.removeItem(at: try s.itemURL(3))
+        let reopened = try Session.open(s.url.path)
+        XCTAssertEqual(try reopened.addItem().id, 3)
+    }
+
+    func testANumberedFolderLeftOnDiskKeepsItsNumber() throws {
+        let s = try Session.create(root: root, config: Config())
+        for _ in 1...2 { try s.addItem() }
+        try s.deleteItem(2) { url in
+            try FileManager.default.removeItem(at: url)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent().appendingPathComponent("02-left-behind"), withIntermediateDirectories: false)
+        }
+        XCTAssertEqual(try s.addItem().id, 3, "02-left-behind is still there, so 2 is not reused")
     }
 
     func testWriteNoteKeepsFrontMatterAndUpdatesReadme() throws {

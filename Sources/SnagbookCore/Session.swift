@@ -129,7 +129,20 @@ public final class Session {
             manifest.nextItem = max(manifest.nextItem, num + 1)
             changed = true
         }
+        let next = manifest.nextItem
+        settleNextItem()
+        changed = changed || manifest.nextItem != next
         if changed { try? save() }
+    }
+
+    /// The next item takes the number after the highest remaining one, so deleting from the
+    /// end gives the numbers back (1 3 4 → 5; delete 4 → 4). A numbered folder still on disk
+    /// keeps its number.
+    func settleNextItem() {
+        let taken = Set(((try? fm.contentsOfDirectory(atPath: url.path)) ?? []).compactMap { Int($0.prefix(while: { $0.isNumber })) })
+        var n = (manifest.items.map(\.id).max() ?? 0) + 1
+        while taken.contains(n) { n += 1 }
+        manifest.nextItem = n
     }
 
     // MARK: - items
@@ -193,6 +206,7 @@ public final class Session {
         let dir = try itemURL(id)
         if let discard { try discard(dir) } else { try fm.removeItem(at: dir) }
         manifest.items.removeAll { $0.id == id }
+        settleNextItem()
         try save()
     }
 
