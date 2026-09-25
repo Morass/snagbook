@@ -346,3 +346,24 @@ test("Record turns into Stop while a recording runs", async () => {
   t.shell.setRecording(false);
   assert.equal(t.$("rec").textContent, "Record");
 });
+
+test("switching items while the title field has focus never renames the item switched to", async () => {
+  const t = await setup({ session: true });
+  await t.shell.newItem(); // item 2, its title field focused and showing "Item 2"
+  assert.equal(t.doc.activeElement, t.$("item-title"));
+  await t.shell.show(1);
+  t.$("item-title").blur();
+  await t.settle();
+  assert.deepEqual(t.shell.view().session.items.map((i) => i.title), ["Item 1", "Item 2"]);
+  assert.equal(t.$("item-title").value, "Item 1", "the field shows the item switched to");
+});
+
+test("a title typed and not yet saved goes to its own item when you switch", async () => {
+  const t = await setup({ session: true });
+  await t.shell.newItem();
+  t.$("item-title").value = "Inventory";
+  await t.shell.show(1);
+  t.$("item-title").blur();
+  await t.settle();
+  assert.deepEqual(t.shell.view().session.items.map((i) => i.title), ["Item 1", "Inventory"]);
+});

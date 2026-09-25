@@ -1,16 +1,16 @@
 # Snagbook
 
-**A notebook for testing sessions: numbered findings, each with a note and screenshots, kept as plain folders anyone can read.**
+**A notebook for testing sessions: numbered findings, each with a note, screenshots and recordings, kept as plain folders anyone can read.**
 
 <p align="center"><img src="docs/images/notebook.png" alt="The Snagbook window: a list of findings on the left, the selected finding's note with a screenshot on the right" width="820"></p>
 
-When you play-test a game or click through an app, the findings pile up faster than you can write them down. Snagbook keeps one window open beside what you are testing. Every finding is an item with a title, a note and its pictures; a screenshot is one key press and a drag away, and it lands in the note you are writing.
+When you play-test a game or click through an app, the findings pile up faster than you can write them down. Snagbook keeps one window open beside what you are testing. Every finding is an item with a title, a note and its pictures and videos; a screenshot or a recording is one key press and a drag away, and it lands in the note you are writing.
 
 - **Start a session** for one sitting of testing.
-- **Add an item** per finding, type what happened, press a key to grab a screenshot.
+- **Add an item** per finding, type what happened, press a key to grab a screenshot or record what happens.
 - **Hand it off**: one click copies a short text that points whoever fixes things at the session.
 
-Everything is saved as ordinary files as you type: a folder per session, a folder per item, Markdown notes and PNG pictures. There is nothing to export.
+Everything is saved as ordinary files as you type: a folder per session, a folder per item, Markdown notes, PNG pictures and MP4 videos. Every video gets still frames and a contact sheet beside it, so someone (or something) that cannot play it can still see what happened. There is nothing to export.
 
 It runs on Linux and Windows.
 
@@ -34,6 +34,8 @@ Download the package for your system from the [Releases](../../releases) page:
 - **Any other Linux:** the `.AppImage`. Make it executable (`chmod +x Snagbook_0.1.0_amd64.AppImage`) and run it.
 - **Windows:** the `Snagbook_0.1.0_x64-setup.exe` installer.
 
+To save recordings as video, Snagbook uses **ffmpeg**. On Linux install it with your package manager (`sudo apt install ffmpeg`); on Windows, `winget install ffmpeg`, or put `ffmpeg.exe` next to `snagbook.exe`. Without it, recordings keep their still frames and contact sheet, and Snagbook tells you the video is missing.
+
 Or build it yourself; see [Building from source](#building-from-source).
 
 ## Quick start
@@ -41,8 +43,9 @@ Or build it yourself; see [Building from source](#building-from-source).
 1. Open Snagbook and press **New Session**. The first item, *Item 1*, is ready and its title is selected: type what the finding is about and press Enter.
 2. Type the note. Paste or drop pictures into it.
 3. Press **Ctrl+Alt+S** anywhere, drag a rectangle around what matters, and let go. The picture goes into the note.
-4. **Ctrl+N** starts the next item.
-5. When you are done, press **Copy Hand-off** and paste the text wherever the fixing happens.
+4. To show something happening, press **Ctrl+Alt+R**, drag the area, do it, and press **Ctrl+Alt+R** (or Stop) again.
+5. **Ctrl+N** starts the next item.
+6. When you are done, press **Copy Hand-off** and paste the text wherever the fixing happens.
 
 ## A tour
 
@@ -64,6 +67,12 @@ Press **Ctrl+Alt+S** in any app, or the **Screenshot** button. The screen under 
 
 Pictures you paste or drop into a note are saved into the item as well.
 
+### Recordings
+
+Press **Ctrl+Alt+R** in any app, or the **Record** button, and drag the area to record (Enter records the whole screen). A small bar with a timer and **Stop** appears in a corner the recording does not cover; press Stop, or Ctrl+Alt+R again, to finish. The video goes into the item and into its note, where it plays in place.
+
+Beside every video Snagbook writes what a reader who cannot play it needs: a still frame for every second in `clip-001-frames/`, a contact sheet with timestamps (`clip-001-contact.jpg`), and `clip-001.json` with the length, the size and the list of stills.
+
 ### Hand-off
 
 **Copy Hand-off** copies a short text for whoever reads the session next, a colleague or a coding assistant: a header you can write yourself (Settings), with the session's folder filled in. Every session also keeps a `README.md` with the header and every item's note in order, so the whole session is one file to read.
@@ -73,6 +82,7 @@ Pictures you paste or drop into a note are saved into the item as well.
 | Key | What it does |
 |---|---|
 | Ctrl+Alt+S | Screenshot, from any app |
+| Ctrl+Alt+R | Start or stop a recording, from any app |
 | Ctrl+Alt+N | New item, from any app (brings the notebook forward) |
 | Ctrl+Alt+B | Show or hide the notebook, from any app |
 | Ctrl+N | New item |
@@ -84,7 +94,7 @@ Pictures you paste or drop into a note are saved into the item as well.
 | ↑ ↓ in the list | Previous / next item |
 | Delete in the list | Delete the item |
 
-The three "from any app" keys can be changed or switched off in Settings. Hover over a button to see its key.
+The four "from any app" keys can be changed or switched off in Settings. Hover over a button to see its key.
 
 ## Settings
 
@@ -110,22 +120,25 @@ The settings are a JSON file you can also edit by hand: `~/.config/Snagbook/conf
     session.json         the order, titles and numbers of the items
     01-main-menu/
       notes.md           the note, in Markdown
-      media/             shot-001.png, image-001.png, …
+      media/             shot-001.png, image-001.png, clip-001.mp4,
+                         clip-001-frames/, clip-001-contact.jpg, clip-001.json
   ```
 
   Folders renamed or removed by hand are noticed the next time the session opens; a session whose folder is deleted while it is open is closed, never written back.
 - **Its settings file** (above).
 - **The Trash**, when you delete an item.
 - **The clipboard**, only when you press Copy Hand-off.
-- **The screen**, only when you take a screenshot, and only the monitor under the mouse. The picture stays in memory until you choose the rectangle; only the part you chose is saved.
+- **The screen**, only when you take a screenshot or record, and only the monitor under the mouse. For a screenshot the picture stays in memory until you choose the rectangle, and only the part you chose is saved; a recording reads only while its timer runs, and keeps only the area you chose. No sound is recorded.
+
+- **ffmpeg**, when it is installed, to encode recordings.
 
 Snagbook makes no network connections. Links in notes open in your browser when you click them.
 
 ## Limits
 
-- **Wayland** (the default on recent Ubuntu and Fedora): shortcuts cannot work from other apps, because Wayland does not let programs listen for keys globally. Use the keys inside the window, or bind a key in your desktop's settings to run Snagbook. Screenshots go through your desktop's screen-sharing permission, which may ask each time.
-- **Windows** builds are made and tested less than the Linux ones.
-- There is no mark-up of pictures and no screen recording yet.
+- **Wayland** (the default on recent Ubuntu and Fedora): shortcuts cannot work from other apps, because Wayland does not let programs listen for keys globally. Use the keys inside the window, or bind a key in your desktop's settings to run Snagbook. Screenshots go through your desktop's screen-sharing permission, which may ask each time, and recording is not supported there.
+- Recordings have no sound.
+- There is no mark-up of pictures yet.
 
 ## Building from source
 

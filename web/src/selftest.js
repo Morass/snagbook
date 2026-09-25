@@ -32,7 +32,9 @@ export async function runSelfTest(shell, invoke) {
   const lines = [];
   let ok = true;
   const check = (pass, what) => {
-    lines.push((pass ? "ok   " : "FAIL ") + what);
+    const line = (pass ? "ok   " : "FAIL ") + what;
+    lines.push(line);
+    invoke("selftest_log", { line }).catch(() => {});
     if (!pass) ok = false;
   };
   const $ = (id) => document.getElementById(id);
@@ -131,7 +133,7 @@ export async function runSelfTest(shell, invoke) {
     await invoke("finish_screenshot", { rect: { x: 0.1, y: 0.1, w: 0.25, h: 0.2 } });
     const got = await Promise.race([captured, sleep(5000).then(() => null)]);
     check(got?.id === 1 && got?.rel === "media/shot-001.png", "the screenshot is saved into item 1 as media/shot-001.png");
-    check(!(await invoke("capture_open")), "the screenshot window closes");
+    check(await until(async () => !(await invoke("capture_open"))), "the screenshot window closes");
     await shell.flush();
     check((await invoke("read_note", { id: 1 })).includes("media/shot-001.png"), "the screenshot is in the note");
     const shot = [...document.querySelectorAll("#editor .img-wrap img")].find((i) => i.src.includes("shot-001"));
@@ -141,7 +143,7 @@ export async function runSelfTest(shell, invoke) {
     await invoke("start_screenshot");
     await until(() => invoke("capture_open"));
     await invoke("cancel_screenshot");
-    check(!(await invoke("capture_open")), "Esc closes the screenshot window");
+    check(await until(async () => !(await invoke("capture_open"))), "Esc closes the screenshot window");
     const media = items().find((i) => i.id === 1);
     await shell.refresh();
     check(items().find((i) => i.id === 1)?.images === media?.images, "a cancelled screenshot saves nothing");
@@ -160,19 +162,27 @@ export async function runSelfTest(shell, invoke) {
     await invoke("finish_screenshot", { rect: { x: 0.2, y: 0.2, w: 0.4, h: 0.3 } });
     check(await until(async () => (await invoke("recording_started")) != null), "recording starts when the area is chosen");
     check(await until(() => $("rec").textContent === "Stop"), "the Record button turns into Stop");
+    let bar = null;
+    await until(async () => (bar = await invoke("recbar_size")) != null && bar[1] < 80, 3000);
+    check(bar && bar[1] < 80 && bar[0] > 150, "the timer window is a small bar: " + JSON.stringify(bar));
     await sleep(2600);
     await invoke("stop_recording");
     const rec = await Promise.race([recorded, sleep(20000).then(() => null)]);
-    check(rec?.kind === "video" && rec?.rel === "media/clip-001.mp4", "the recording is saved as media/clip-001.mp4: " + JSON.stringify(rec));
-    check((await invoke("read_note", { id: 1 })).includes("media/clip-001.mp4"), "the recording is in the note");
+    const video = await invoke("ffmpeg_found");
+    const wantRel = video ? "media/clip-001.mp4" : "media/clip-001-contact.jpg";
+    if (video) check(rec?.kind === "video" && rec?.rel === wantRel, "the recording is saved as " + wantRel + ": " + JSON.stringify(rec));
+    else check(rec?.kind === "image" && rec?.rel === wantRel && /ffmpeg/.test(rec?.problem || ""), "without ffmpeg the contact sheet is saved, and the reason is given: " + JSON.stringify(rec));
+    check((await invoke("read_note", { id: 1 })).includes(wantRel), "the recording is in the note");
     check(await until(() => $("rec").textContent === "Record"), "the button says Record again");
     const base = document.querySelector("#editor .img-wrap img")?.src.replace(/media\/.*$/, "") || "";
     const info = await fetch(base + "media/clip-001.json").then((r) => r.json()).catch(() => null);
     check(info && info.duration >= 2.3 && info.duration <= 3.6, "clip-001.json gives the length: " + info?.duration);
     check(info?.stills?.length === 3 && info.stills[0].file === "clip-001-frames/0001.jpg", "one still a second beside it: " + info?.stills?.length);
     check(info?.width === Math.round(screen.width * devicePixelRatio * 0.4) - (Math.round(screen.width * devicePixelRatio * 0.4) % 2), "the video is the area's size: " + info?.width);
-    const poster = [...document.querySelectorAll("#editor .video-card img")].find((i) => i.src.includes("clip-001-frames"));
-    check(await imageLoaded(poster), "the video card shows its first still");
+    if (video) {
+      const poster = [...document.querySelectorAll("#editor .video-card img")].find((i) => i.src.includes("clip-001-frames"));
+      check(await imageLoaded(poster), "the video card shows its first still");
+    }
     const sheet = new Image();
     sheet.src = base + "media/clip-001-contact.jpg";
     check(await imageLoaded(sheet), "the contact sheet is there");

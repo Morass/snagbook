@@ -69,6 +69,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let selected = null;
   let shownPath = null;
   let editorReady = false;
+  let titleFor = null;
   let statusTimer = null;
   const s = { view: () => view, selected: () => selected };
 
@@ -129,6 +130,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function show(id, { focus = true } = {}) {
     await flush();
+    if (titleFor != null && titleFor !== id) await renameSelected().catch(() => {});
     selected = id;
     invoke("set_selected", { id }).catch(() => {});
     renderList();
@@ -168,17 +170,20 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     await apply(await call("open_session", { path }));
   }
 
+  /// Save the title field into the item it shows. That is `titleFor`, not `selected`: the
+  /// field loses focus (and saves) after the selection has already moved on.
   async function renameSelected() {
     const t = $("item-title");
-    const it = items().find((i) => i.id === selected);
+    const id = titleFor;
+    const it = items().find((i) => i.id === id);
     if (!it) return;
     const title = t.value.trim();
     if (!title) {
-      t.value = it.title;
+      if (id === selected) t.value = it.title;
       return;
     }
     if (title === it.title) return;
-    await apply(await call("rename_item", { id: selected, title }));
+    await apply(await call("rename_item", { id, title }));
   }
 
   async function deleteItem(id) {
@@ -333,7 +338,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   function renderTitle() {
     const it = items().find((i) => i.id === selected);
     const t = $("item-title");
-    if (doc.activeElement !== t) t.value = it?.title ?? "";
+    // Keep what is being typed, but only for the item it belongs to.
+    if (doc.activeElement !== t || titleFor !== selected) t.value = it?.title ?? "";
+    titleFor = selected;
     t.disabled = !it;
   }
 
@@ -700,7 +707,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         e.preventDefault();
         renameSelected().then(() => snag()?.focus());
       } else if (e.key === "Escape") {
-        t.value = items().find((i) => i.id === selected)?.title ?? "";
+        t.value = items().find((i) => i.id === titleFor)?.title ?? "";
         snag()?.focus();
       }
     });

@@ -75,8 +75,18 @@ pub fn encode_png(img: &RgbaImage, fast: bool) -> Result<Vec<u8>, String> {
 /// Photograph the monitor under the mouse and open the window that crops it.
 pub fn start(app: &AppHandle, mode: Mode) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(WINDOW) {
-        let _ = w.set_focus();
-        return Ok(());
+        if app.state::<Frozen>().0.lock().unwrap().is_some() {
+            let _ = w.set_focus();
+            return Ok(());
+        }
+        // A window from the last capture is still closing (Windows closes it a moment later).
+        let _ = w.destroy();
+        for _ in 0..60 {
+            if app.get_webview_window(WINDOW).is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
     let cursor = app.cursor_position().unwrap_or_default();
     let monitors = app.available_monitors().map_err(|e| e.to_string())?;

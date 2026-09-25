@@ -361,24 +361,39 @@ fn set_selected(st: St, id: Option<i64>) {
     st.lock().unwrap().selected = id;
 }
 
+// Commands that open a window are async: on Windows, building a window inside a synchronous
+// command (which runs on the event loop's thread) deadlocks.
 #[tauri::command]
-fn start_screenshot(app: AppHandle) -> Res<()> {
+async fn start_screenshot(app: AppHandle) -> Res<()> {
     capture::start(&app, capture::Mode::Screenshot)
 }
 
 /// Record: drag the area first. When a recording is running, stop it instead.
 #[tauri::command]
-fn toggle_recording(app: AppHandle) -> Res<()> {
+async fn toggle_recording(app: AppHandle) -> Res<()> {
+    toggle_recording_now(&app)
+}
+
+fn toggle_recording_now(app: &AppHandle) -> Res<()> {
     if app.state::<Recorder>().0.lock().unwrap().is_some() {
-        stop_recording_now(&app);
+        stop_recording_now(app);
         return Ok(());
     }
-    capture::start(&app, capture::Mode::Record)
+    capture::start(app, capture::Mode::Record)
 }
 
 #[tauri::command]
-fn stop_recording(app: AppHandle) {
+async fn stop_recording(app: AppHandle) {
     stop_recording_now(&app);
+}
+
+/// The timer window's size in logical pixels, if it is open (for the self-test).
+#[tauri::command]
+fn recbar_size(app: AppHandle) -> Option<(f64, f64)> {
+    let w = app.get_webview_window("recbar")?;
+    let k = w.scale_factor().ok()?;
+    let s = w.inner_size().ok()?;
+    Some((s.width as f64 / k, s.height as f64 / k))
 }
 
 /// The running recording's start, for the timer window.
@@ -472,7 +487,9 @@ fn open_recbar(app: &AppHandle, rect: (u32, u32, u32, u32), monitor: (i32, i32, 
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
-        .resizable(false)
+        // GTK gives a window that cannot be resized its content's natural height (about 200
+        // pixels for a web view); the min and max below hold it at the bar's size instead.
+        .resizable(true)
         .inner_size(250.0, 46.0)
         .min_inner_size(250.0, 46.0)
         .max_inner_size(250.0, 46.0)
@@ -519,7 +536,7 @@ fn stop_recording_now(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn cancel_screenshot(app: AppHandle) {
+async fn cancel_screenshot(app: AppHandle) {
     capture::close(&app);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -529,11 +546,12 @@ fn cancel_screenshot(app: AppHandle) {
 /// The rectangle is chosen: a screenshot is cropped and saved into the shown item (a new
 /// one when nothing is shown, a new session when none is open); a recording starts.
 #[tauri::command]
-fn finish_screenshot(app: AppHandle, st: St, rect: capture::Rect) -> Res<()> {
+async fn finish_screenshot(app: AppHandle, rect: capture::Rect) -> Res<()> {
     let png = match capture::finish(&app, rect)? {
         capture::Chosen::Picture(png) => png,
         capture::Chosen::Region { center, rect, monitor } => return begin_recording(&app, center, rect, monitor),
     };
+    let st = app.state::<Mutex<App>>();
     let mut a = st.lock().unwrap();
     let id = target_item(&mut a)?;
     let rel = a.session()?.save_media(id, &png, "shot", "png").map_err(err)?;
@@ -592,15 +610,22 @@ fn on_shortcut(app: &AppHandle, sc: &Shortcut) {
     let action = app.state::<Bindings>().0.lock().unwrap().iter().find(|(s, _)| s == sc).map(|(_, a)| *a);
     let main = app.get_webview_window("main");
     match action {
+        // Off the event loop's thread, for the same reason the commands are async.
         Some(Action::Screenshot) => {
-            if let Err(e) = capture::start(app, capture::Mode::Screenshot) {
-                let _ = app.emit_to("main", "problem", e);
-            }
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = capture::start(&app, capture::Mode::Screenshot) {
+                    let _ = app.emit_to("main", "problem", e);
+                }
+            });
         }
         Some(Action::Record) => {
-            if let Err(e) = toggle_recording(app.clone()) {
-                let _ = app.emit_to("main", "problem", e);
-            }
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = toggle_recording_now(&app) {
+                    let _ = app.emit_to("main", "problem", e);
+                }
+            });
         }
         Some(Action::NewItem) => {
             if let Some(w) = main {
@@ -631,6 +656,24 @@ fn selftest_requested() -> bool {
     std::env::var("SNAGBOOK_SELFTEST").is_ok_and(|v| !v.is_empty())
 }
 
+/// One self-test line, as soon as it is known: a run that hangs still shows how far it got.
+#[tauri::command]
+fn selftest_log(line: String) {
+    println!("{line}");
+    if let Ok(out) = std::env::var("SNAGBOOK_SELFTEST_OUT") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}.progress")) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
+/// Whether recordings can be saved as video here.
+#[tauri::command]
+fn ffmpeg_found() -> bool {
+    record::find_ffmpeg().is_some()
+}
+
 #[tauri::command]
 fn selftest_mode() -> String {
     std::env::var("SNAGBOOK_SELFTEST").unwrap_or_default()
@@ -648,9 +691,6 @@ fn selftest_delete_session(st: St) -> Res<()> {
 
 #[tauri::command]
 fn selftest_done(app: tauri::AppHandle, ok: bool, lines: Vec<String>) {
-    for l in &lines {
-        println!("{l}");
-    }
     let verdict = if ok { "SELFTEST PASS" } else { "SELFTEST FAIL" };
     println!("{verdict}");
     // A Windows GUI program has no console: SNAGBOOK_SELFTEST_OUT names a file for the verdict.
@@ -727,11 +767,14 @@ pub fn run() {
             toggle_recording,
             stop_recording,
             recording_started,
+            recbar_size,
             cancel_screenshot,
             finish_screenshot,
             capture_open,
             selftest_requested,
             selftest_mode,
+            selftest_log,
+            ffmpeg_found,
             selftest_delete_session,
             selftest_done,
         ])
