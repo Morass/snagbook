@@ -106,8 +106,11 @@ struct ItemList: View {
                 HStack {
                     Label("New Item", systemImage: "plus")
                     Spacer()
-                    // Shown only under the mouse, faintly: a reminder, not a label.
-                    Text("⌘N").font(.caption.monospaced()).foregroundStyle(.tertiary).opacity(newItemHover ? 1 : 0)
+                    // Shown only under the mouse, as a small keycap: easy to read, gone otherwise.
+                    Text("⌘N").font(.callout.weight(.medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(.quaternary))
+                        .opacity(newItemHover ? 1 : 0)
                 }
                 .contentShape(Rectangle())
             }
