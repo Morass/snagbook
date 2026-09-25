@@ -1,22 +1,28 @@
 //! The notebook window: commands the page calls, and the snagbook: scheme that serves an
 //! item's pictures and videos to the editor.
 
+mod capture;
 mod media;
 
 use base64::Engine;
 use chrono::Utc;
 use serde::Serialize;
-use snagbook_core::{Config, ConfigStore, HandoffStyle, Paths, Session, SnagError, Summary, Template};
+use snagbook_core::{Config, ConfigStore, HandoffStyle, Paths, Session, Shortcuts, SnagError, Summary, Template};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 
 pub struct App {
     pub store: ConfigStore,
     pub session: Option<Session>,
+    /// The item the page shows: where a screenshot goes.
+    pub selected: Option<i64>,
+    /// Global shortcuts that could not be registered, in words.
+    pub shortcut_errors: Vec<String>,
 }
 
 type St<'a> = State<'a, Mutex<App>>;
@@ -55,6 +61,7 @@ pub struct View {
     /// Set when the open session's folder disappeared and it was closed.
     closed: Option<String>,
     platform: &'static str,
+    shortcut_errors: Vec<String>,
 }
 
 fn platform() -> &'static str {
@@ -81,7 +88,7 @@ impl App {
     fn load() -> App {
         let store = ConfigStore::new(&config_path());
         let session = store.config.last_session.as_deref().and_then(|p| Session::open(p, &store.config.header).ok());
-        App { store, session }
+        App { store, session, selected: None, shortcut_errors: vec![] }
     }
 
     /// The whole state the page draws from. A session whose folder was deleted from outside
@@ -106,7 +113,14 @@ impl App {
                 })
                 .collect(),
         });
-        View { config: self.store.config.clone(), session, load_error: self.store.load_error.clone(), closed, platform: platform() }
+        View {
+            config: self.store.config.clone(),
+            session,
+            load_error: self.store.load_error.clone(),
+            closed,
+            platform: platform(),
+            shortcut_errors: self.shortcut_errors.clone(),
+        }
     }
 
     fn session(&mut self) -> Res<&mut Session> {
@@ -255,6 +269,7 @@ struct ConfigPatch {
     handoff: Option<HandoffStyle>,
     always_on_top: Option<bool>,
     templates: Option<Vec<Template>>,
+    shortcuts: Option<Shortcuts>,
 }
 
 #[tauri::command]
@@ -280,8 +295,13 @@ fn update_config(app: tauri::AppHandle, st: St, patch: ConfigPatch) -> Res<View>
             if let Some(v) = patch.templates {
                 c.templates = v;
             }
+            if let Some(v) = patch.shortcuts {
+                c.shortcuts = v;
+            }
         })
         .map_err(err)?;
+    let keys = a.store.config.shortcuts.clone();
+    a.shortcut_errors = register_shortcuts(&app, &keys);
     let header = a.store.config.header.clone();
     if let Some(s) = a.session.as_mut() {
         s.set_fallback_header(&header);
@@ -330,6 +350,119 @@ fn open_link(app: tauri::AppHandle, st: St, id: Option<i64>, href: String) -> Re
     app.opener().open_path(file.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn set_selected(st: St, id: Option<i64>) {
+    st.lock().unwrap().selected = id;
+}
+
+#[tauri::command]
+fn start_screenshot(app: AppHandle) -> Res<()> {
+    capture::start(&app)
+}
+
+#[tauri::command]
+fn cancel_screenshot(app: AppHandle) {
+    capture::close(&app);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+    }
+}
+
+/// Crop the frozen screen to `rect` and save it into the shown item (a new one when
+/// nothing is shown, a new session when none is open).
+#[tauri::command]
+fn finish_screenshot(app: AppHandle, st: St, rect: capture::Rect) -> Res<()> {
+    let png = capture::finish(&app, rect)?;
+    let mut a = st.lock().unwrap();
+    if a.session.is_none() {
+        let cfg = a.store.config.clone();
+        let s = Session::create_now(&cfg.sessions_folder, &cfg).map_err(err)?;
+        a.use_session(s);
+    }
+    let selected = a.selected;
+    let s = a.session()?;
+    let id = match selected.filter(|id| s.item(*id).is_ok()) {
+        Some(id) => id,
+        None => s.add_item(None, Utc::now()).map_err(err)?.id,
+    };
+    let rel = s.save_media(id, &png, "shot", "png").map_err(err)?;
+    drop(a);
+    capture::announce(&app, capture::Captured { id, rel });
+    Ok(())
+}
+
+/// Whether the screenshot window is open (for the self-test).
+#[tauri::command]
+fn capture_open(app: AppHandle) -> bool {
+    app.get_webview_window(capture::WINDOW).is_some()
+}
+
+/// What a global shortcut does.
+#[derive(Clone, Copy)]
+enum Action {
+    Screenshot,
+    NewItem,
+    ShowNotebook,
+}
+
+#[derive(Default)]
+struct Bindings(Mutex<Vec<(Shortcut, Action)>>);
+
+/// (Re)register the global shortcuts; returns what could not be registered, in words.
+fn register_shortcuts(app: &AppHandle, keys: &Shortcuts) -> Vec<String> {
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let mut bound = vec![];
+    let mut errors = vec![];
+    for (name, text, action) in [("Screenshot", &keys.screenshot, Action::Screenshot), ("New item", &keys.new_item, Action::NewItem), ("Show notebook", &keys.show_notebook, Action::ShowNotebook)] {
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        match text.parse::<Shortcut>() {
+            Err(e) => errors.push(format!("{name}: “{text}” is not a shortcut ({e})")),
+            Ok(sc) => match gs.register(sc) {
+                Ok(()) => bound.push((sc, action)),
+                Err(e) => errors.push(format!("{name}: {text} could not be registered ({e})")),
+            },
+        }
+    }
+    *app.state::<Bindings>().0.lock().unwrap() = bound;
+    errors
+}
+
+fn on_shortcut(app: &AppHandle, sc: &Shortcut) {
+    let action = app.state::<Bindings>().0.lock().unwrap().iter().find(|(s, _)| s == sc).map(|(_, a)| *a);
+    let main = app.get_webview_window("main");
+    match action {
+        Some(Action::Screenshot) => {
+            if let Err(e) = capture::start(app) {
+                let _ = app.emit_to("main", "problem", e);
+            }
+        }
+        Some(Action::NewItem) => {
+            if let Some(w) = main {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+            let _ = app.emit_to("main", "new-item", ());
+        }
+        Some(Action::ShowNotebook) => {
+            if let Some(w) = main {
+                if w.is_focused().unwrap_or(false) && w.is_visible().unwrap_or(false) {
+                    let _ = w.minimize();
+                } else {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+            }
+        }
+        None => {}
+    }
+}
+
 /// SNAGBOOK_SELFTEST=1 runs the page's self-test and exits with its verdict.
 #[tauri::command]
 fn selftest_requested() -> bool {
@@ -368,10 +501,27 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, sc, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        on_shortcut(app, sc);
+                    }
+                })
+                .build(),
+        )
         .manage(Mutex::new(App::load()))
+        .manage(capture::Frozen::default())
+        .manage(Bindings::default())
         .register_uri_scheme_protocol("snagbook", |ctx, request| media::serve(ctx.app_handle(), &request))
         .setup(|app| {
-            let on_top = app.state::<Mutex<App>>().lock().unwrap().store.config.always_on_top;
+            let (on_top, keys) = {
+                let st = app.state::<Mutex<App>>();
+                let a = st.lock().unwrap();
+                (a.store.config.always_on_top, a.store.config.shortcuts.clone())
+            };
+            let errors = register_shortcuts(app.handle(), &keys);
+            app.state::<Mutex<App>>().lock().unwrap().shortcut_errors = errors;
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_always_on_top(on_top);
             }
@@ -396,6 +546,11 @@ pub fn run() {
             copy_handoff,
             reveal,
             open_link,
+            set_selected,
+            start_screenshot,
+            cancel_screenshot,
+            finish_screenshot,
+            capture_open,
             selftest_requested,
             selftest_delete_session,
             selftest_done,

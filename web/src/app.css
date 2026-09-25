@@ -220,3 +220,6 @@ button.primary.danger { background: var(--danger); border-color: var(--danger); 
 .t-row .t-icon { width: 44px !important; flex: none; text-align: center; }
 .t-row .t-label { width: 120px !important; flex: none; }
 .t-row .t-body { flex: 1; }
+.keys-grid { display: grid; grid-template-columns: 110px 1fr; gap: 4px 8px; align-items: center; }
+.card input.keys { cursor: pointer; }
+.hint.error { color: var(--danger); }

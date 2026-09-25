@@ -19,6 +19,31 @@ export function mediaBase(platform, id) {
   return platform === "windows" ? `http://snagbook.localhost/item/${id}/` : `snagbook://localhost/item/${id}/`;
 }
 
+/// A key press as "Ctrl+Alt+S" (the spelling of the shortcut settings); null for a lone
+/// modifier.
+export function comboFromEvent(e) {
+  const k = e.key;
+  if (["Control", "Shift", "Alt", "Meta", "AltGraph", "OS"].includes(k)) return null;
+  const code = e.code || "";
+  let name = code.startsWith("Key") ? code.slice(3) : code.startsWith("Digit") ? code.slice(5) : k.length === 1 ? k.toUpperCase() : k;
+  if (name === " ") name = "Space";
+  const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean);
+  return [...mods, name].join("+");
+}
+
+/// Two spellings of the same shortcut compare equal ("ctrl+alt+s", "Alt+Control+S").
+export function sameCombo(a, b) {
+  const norm = (s) =>
+    String(s || "")
+      .split("+")
+      .map((p) => p.trim().toLowerCase())
+      .map((p) => ({ control: "ctrl", option: "alt", cmd: "super", command: "super", meta: "super" })[p] || p)
+      .filter(Boolean)
+      .sort()
+      .join("+");
+  return !!a && !!b && norm(a) === norm(b);
+}
+
 /// The item to show after the one at `index` went away: the one now in its place, or the
 /// last one.
 export function neighbour(items, index) {
@@ -105,6 +130,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function show(id, { focus = true } = {}) {
     await flush();
     selected = id;
+    invoke("set_selected", { id }).catch(() => {});
     renderList();
     renderTitle();
     const ed = snag();
@@ -191,6 +217,22 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     snag()?.focus();
   }
 
+  async function screenshot() {
+    await flush();
+    await call("start_screenshot").catch(() => {});
+  }
+
+  /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
+  async function onCaptured({ id, rel }) {
+    await apply(await call("state"), { select: id });
+    if (selected !== id) await show(id, { focus: false });
+    snag()?.insertMedia({ kind: "image", src: rel });
+    await flush();
+    await refresh();
+    const it = items().find((i) => i.id === id);
+    flash(`Screenshot saved to ${it?.title ?? "item " + id}`);
+  }
+
   async function copyHandoff() {
     await flush();
     const text = await call("copy_handoff");
@@ -214,6 +256,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     $("new-item-key").textContent = key("Mod+N");
     $("new-item").title = tip("New item", key("Mod+N"));
     $("handoff").title = tip("Copy hand-off", key("Mod+Shift+C"), "the text that hands this session to an agent");
+    const sc = view?.config?.shortcuts || {};
+    $("shot").title = tip("Screenshot", sc.screenshot || "", "drag a rectangle; it goes into this item");
+    $("new-item").title = tip("New item", key("Mod+N"), sc.newItem ? "anywhere " + sc.newItem : "");
     $("items").setAttribute("aria-activedescendant", selected == null ? "" : "item-" + selected);
     if (view?.loadError) flash("Settings could not be read, so they are not saved: " + view.loadError, true);
   }
@@ -475,6 +520,26 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     onTop.checked = !!c.alwaysOnTop;
     const handoff = el("select", {}, el("option", { value: "header", text: "The header, with the session filled in" }), el("option", { value: "path", text: "Only the path of README.md" }));
     handoff.value = c.handoff;
+    const keyField = (value) => {
+      const f = el("input", { type: "text", class: "keys", readonly: "readonly", placeholder: "Press keys (Backspace: off)" });
+      f.value = value || "";
+      f.addEventListener("keydown", (e) => {
+        if (e.key === "Tab" || e.key === "Escape" || e.key === "Enter") return;
+        e.preventDefault();
+        e.stopPropagation();
+        if ((e.key === "Backspace" || e.key === "Delete") && !e.ctrlKey && !e.altKey && !e.metaKey) f.value = "";
+        else {
+          const c = comboFromEvent(e);
+          if (c && c.includes("+")) f.value = c;
+        }
+      });
+      return f;
+    };
+    const sc = c.shortcuts || {};
+    const kShot = keyField(sc.screenshot);
+    const kNew = keyField(sc.newItem);
+    const kShow = keyField(sc.showNotebook);
+    const errs = view.shortcutErrors?.length ? el("p", { class: "hint error", text: view.shortcutErrors.join(" · ") }) : null;
     const tpl = el("div", { class: "templates-edit" });
     const rows = [];
     const addRow = (t) => {
@@ -499,6 +564,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       el("p", { class: "hint", text: "Tokens: {hash} {yyyy} {MM} {dd} {HH} {mm}. A leading ~ is your home folder." }),
       el("label", { class: "field" }, el("span", { text: "Copy Hand-off copies" }), handoff),
       el("label", {}, onTop, " Keep the notebook above other windows"),
+      el("div", { class: "field" }, el("span", { text: "Shortcuts that work in any app" }),
+        el("div", { class: "keys-grid" }, el("span", { text: "Screenshot" }), kShot, el("span", { text: "New item" }), kNew, el("span", { text: "Show notebook" }), kShow)),
+      errs,
       el("div", { class: "field" }, el("span", { text: "Header for every session (placeholders: {session} {readme} {date} {items})" }), header),
       el("div", { class: "field" }, el("span", { text: "Templates" }), tpl, el("button", { type: "button", class: "small", onclick: () => addRow({ icon: "", label: "", body: "" }) }, "Add template"))
     );
@@ -509,7 +577,15 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       .map((x) => ({ id: x.id || undefined, icon: x.icon.value.trim(), label: x.label.value.trim(), body: x.body.value.replace(/\\n/g, "\n") }));
     await apply(
       await call("update_config", {
-        patch: { sessionsFolder: folder.value, folderFormat: format.value, header: header.value, handoff: handoff.value, alwaysOnTop: onTop.checked, templates },
+        patch: {
+          sessionsFolder: folder.value,
+          folderFormat: format.value,
+          header: header.value,
+          handoff: handoff.value,
+          alwaysOnTop: onTop.checked,
+          templates,
+          shortcuts: { screenshot: kShot.value, newItem: kNew.value, showNotebook: kShow.value },
+        },
       })
     );
   }
@@ -550,6 +626,10 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   function onKey(e) {
     if (!$("modal").hidden) return;
+    const sc = view?.config?.shortcuts || {};
+    const combo = comboFromEvent(e);
+    if (combo && sameCombo(combo, sc.screenshot)) return stop(e, screenshot);
+    if (combo && sameCombo(combo, sc.newItem)) return stop(e, newItem);
     const mod = platform() === "macos" ? e.metaKey : e.ctrlKey;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (mod && !e.altKey) {
@@ -588,6 +668,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       else closeMenu();
     });
     $("handoff").addEventListener("click", copyHandoff);
+    $("shot").addEventListener("click", screenshot);
     const t = $("item-title");
     t.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -625,6 +706,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     renameSelected,
     insertTemplate,
     copyHandoff,
+    screenshot,
+    onCaptured,
     sessionMenu,
     settings,
     onEditorMessage,

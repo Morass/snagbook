@@ -147,4 +147,15 @@ fn reads_a_settings_file_written_by_the_macos_app() {
     assert_eq!(c.handoff, HandoffStyle::Path);
     assert_eq!(c.last_session.as_deref(), Some("~/shared/abc_25-09-2026"));
     assert_eq!(c.templates[0].id, "0B7F5A58-9A0C-4C44-8C1E-0F1F2C8B9A11");
+    assert_eq!(c.shortcuts.screenshot, "Ctrl+Alt+S", "a file without shortcuts gets the defaults");
+}
+
+#[test]
+fn a_cleared_shortcut_stays_cleared() {
+    let (_d, p) = cfg_path();
+    let mut store = ConfigStore::new(&p);
+    store.update(|c| c.shortcuts.new_item = String::new()).unwrap();
+    let c = ConfigStore::new(&p).config;
+    assert_eq!(c.shortcuts.new_item, "");
+    assert_eq!(c.shortcuts.screenshot, "Ctrl+Alt+S");
 }

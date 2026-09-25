@@ -71,6 +71,22 @@ fn lenient_handoff<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Hando
     Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
+/// Keys that work while another app has focus. Empty means off. The macOS app keeps its
+/// own; these are for Linux and Windows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Shortcuts {
+    pub new_item: String,
+    pub screenshot: String,
+    pub show_notebook: String,
+}
+
+impl Default for Shortcuts {
+    fn default() -> Self {
+        Shortcuts { new_item: "Ctrl+Alt+N".into(), screenshot: "Ctrl+Alt+S".into(), show_notebook: "Ctrl+Alt+B".into() }
+    }
+}
+
 /// Everything the user can set. The same keys as the macOS app, so one file format.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -89,6 +105,7 @@ pub struct Config {
     pub last_session: Option<String>,
     /// Where new sessions are created. `~` is the home folder.
     pub sessions_folder: String,
+    pub shortcuts: Shortcuts,
     pub templates: Vec<Template>,
 }
 
@@ -127,6 +144,7 @@ impl Default for Config {
             header: DEFAULT_HEADER.into(),
             last_session: None,
             sessions_folder: "~/Snagbook".into(),
+            shortcuts: Shortcuts::default(),
             templates: Config::default_templates(),
         }
     }

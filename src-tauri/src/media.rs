@@ -91,6 +91,15 @@ fn status(code: StatusCode) -> Response<Vec<u8>> {
 }
 
 pub fn serve(app: &tauri::AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    if request.uri().path() == "/capture/frame.png" {
+        use tauri::Manager;
+        let frozen = app.state::<crate::capture::Frozen>();
+        let guard = frozen.0.lock().unwrap();
+        return match guard.as_ref() {
+            Some(f) => Response::builder().header(header::CONTENT_TYPE, "image/png").header(header::CACHE_CONTROL, "no-store").body(f.png.clone()).unwrap(),
+            None => status(StatusCode::NOT_FOUND),
+        };
+    }
     let Some((id, rel)) = parse_path(request.uri().path()) else { return status(StatusCode::NOT_FOUND) };
     let Some(file) = crate::item_file(app, id, &rel) else { return status(StatusCode::NOT_FOUND) };
     let Ok(mut f) = File::open(&file) else { return status(StatusCode::NOT_FOUND) };

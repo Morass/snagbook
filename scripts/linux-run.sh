@@ -5,6 +5,8 @@
 #   scripts/linux-run.sh selftest                 the in-app self-test; exits with its verdict
 #   scripts/linux-run.sh shot OUT.png [SETUP]     a picture of the window; SETUP is a script
 #                                                 run first with $HOME set, to lay out sessions
+#   scripts/linux-run.sh capture                  the global screenshot key and a real mouse
+#                                                 drag; checks the saved picture's size
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BIN="${SNAGBOOK_BIN:-target/release/snagbook}"
@@ -46,5 +48,23 @@ case "$mode" in
       kill \$app" >/dev/null 2>&1 || true
     [ -s "$out" ] && echo "$out"
     ;;
-  *) echo "selftest or shot" >&2; exit 2 ;;
+  capture)
+    CONFIG="$T/config.json" HOME="$H" bash scripts/demo-session.sh
+    n=$((90 + RANDOM % 100))
+    "${run_env[@]}" xvfb-run -n "$n" -s "-screen 0 1280x800x24" sh -c "
+      dbus-run-session -- '$BIN' & app=\$!
+      sleep 5
+      DISPLAY=:$n xdotool mousemove 640 400 key --clearmodifiers ctrl+alt+s
+      sleep 2
+      DISPLAY=:$n xdotool mousemove 200 150 mousedown 1 mousemove 360 250 mousemove 520 390 mouseup 1
+      sleep 2
+      kill \$app" >/dev/null 2>&1 || true
+    shot="$H/Snagbook/1a2b3c4d_25-09-2026/03-save-slot-names/media/shot-001.png"
+    [ -f "$shot" ] || { echo "FAIL no screenshot was saved"; exit 1; }
+    size=$(python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(24); print(*struct.unpack('>II', d[16:24]))" "$shot")
+    grep -q 'shot-001.png' "$H/Snagbook/1a2b3c4d_25-09-2026/03-save-slot-names/notes.md" || { echo "FAIL the note does not show it"; exit 1; }
+    [ "$size" = "320 240" ] || { echo "FAIL the picture is $size, not 320 240"; exit 1; }
+    echo "ok   Ctrl+Alt+S and a mouse drag saved a 320×240 screenshot into the shown item"
+    ;;
+  *) echo "selftest, shot or capture" >&2; exit 2 ;;
 esac

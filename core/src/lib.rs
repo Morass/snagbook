@@ -19,7 +19,7 @@ mod naming;
 mod paths;
 mod session;
 
-pub use config::{CaptureSettings, Config, ConfigStore, HandoffStyle, Template};
+pub use config::{CaptureSettings, Config, ConfigStore, HandoffStyle, Shortcuts, Template};
 pub use error::SnagError;
 pub use frontmatter::FrontMatter;
 pub use header::render_header;

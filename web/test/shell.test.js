@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
-import { createShell, keyLabel, neighbour, mediaBase, tip } from "../src/shell.js";
+import { createShell, keyLabel, neighbour, mediaBase, tip, comboFromEvent, sameCombo } from "../src/shell.js";
+import { rectFraction } from "../src/rect.js";
 
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
@@ -61,6 +62,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
     write_note: ({ id, markdown }) => (notes.set(id, markdown), true),
     copy_handoff: () => `Read ${session.path}/README.md`,
     set_session_title: ({ title }) => ((session.title = title || "Session 25 Sep, 18:00"), view()),
+    set_selected: () => null,
+    start_screenshot: () => null,
   };
   const invoke = async (cmd, args = {}) => {
     calls.push([cmd, args]);
@@ -301,4 +304,28 @@ test("switching sessions forgets the old items in the editor", async () => {
   assert.ok(t.editor.log.some((l) => l[0] === "forget" && l[1] === 1), "item 1 of the new session is not the old item 1");
   const opened = t.editor.log.filter((l) => l[0] === "open").pop()[1];
   assert.equal(opened.id, 1);
+});
+
+test("key presses spell shortcuts the way the settings do", () => {
+  assert.equal(comboFromEvent({ key: "s", code: "KeyS", ctrlKey: true, altKey: true }), "Ctrl+Alt+S");
+  assert.equal(comboFromEvent({ key: "§", code: "Digit5", ctrlKey: true, shiftKey: true }), "Ctrl+Shift+5", "the key, not what the layout types");
+  assert.equal(comboFromEvent({ key: "F5", code: "F5" }), "F5");
+  assert.equal(comboFromEvent({ key: "Control", code: "ControlLeft", ctrlKey: true }), null);
+  assert.ok(sameCombo("Ctrl+Alt+S", "alt+control+s"));
+  assert.ok(!sameCombo("Ctrl+Alt+S", "Ctrl+S"));
+  assert.ok(!sameCombo("", ""), "an empty shortcut matches nothing");
+});
+
+test("a drag becomes a rectangle in fractions; a click does not", () => {
+  assert.deepEqual(rectFraction({ x: 100, y: 50 }, { x: 300, y: 250 }, 1000, 500), { x: 0.1, y: 0.1, w: 0.2, h: 0.4 });
+  assert.deepEqual(rectFraction({ x: 300, y: 250 }, { x: 100, y: 50 }, 1000, 500), { x: 0.1, y: 0.1, w: 0.2, h: 0.4 }, "dragged up and left");
+  assert.equal(rectFraction({ x: 10, y: 10 }, { x: 12, y: 40 }, 1000, 500), null);
+});
+
+test("the configured screenshot shortcut also works inside the window", async () => {
+  const t = await setup({ session: true });
+  t.shell.view().config.shortcuts = { screenshot: "Ctrl+Alt+S", newItem: "", showNotebook: "" };
+  t.key(t.doc.body, { key: "s", code: "KeyS", ctrlKey: true, altKey: true });
+  await t.settle();
+  assert.ok(t.app.calls.some(([c]) => c === "start_screenshot"));
 });

@@ -115,7 +115,36 @@ export async function runSelfTest(shell, invoke) {
     const text = await shell.copyHandoff();
     check(text.includes(path), "Copy Hand-off names the session folder");
 
-    // 10. a session deleted from outside is closed, not written back
+    // 10. a screenshot: the frozen screen, cropped to a rectangle, lands in the shown item
+    await shell.show(1);
+    const captured = new Promise((resolve) => {
+      const orig = shell.onCaptured;
+      shell.onCaptured = async (p) => {
+        await orig(p);
+        resolve(p);
+      };
+    });
+    await invoke("start_screenshot");
+    check(await until(() => invoke("capture_open")), "Screenshot opens the full-screen window");
+    await invoke("finish_screenshot", { rect: { x: 0.1, y: 0.1, w: 0.25, h: 0.2 } });
+    const got = await Promise.race([captured, sleep(5000).then(() => null)]);
+    check(got?.id === 1 && got?.rel === "media/shot-001.png", "the screenshot is saved into item 1 as media/shot-001.png");
+    check(!(await invoke("capture_open")), "the screenshot window closes");
+    await shell.flush();
+    check((await invoke("read_note", { id: 1 })).includes("media/shot-001.png"), "the screenshot is in the note");
+    const shot = [...document.querySelectorAll("#editor .img-wrap img")].find((i) => i.src.includes("shot-001"));
+    const loaded = await imageLoaded(shot);
+    const want = Math.round(screen.width * devicePixelRatio * 0.25);
+    check(loaded && Math.abs(shot.naturalWidth - want) <= 1, `the screenshot is a quarter of the screen wide: ${shot?.naturalWidth} of ${want}`);
+    await invoke("start_screenshot");
+    await until(() => invoke("capture_open"));
+    await invoke("cancel_screenshot");
+    check(!(await invoke("capture_open")), "Esc closes the screenshot window");
+    const media = items().find((i) => i.id === 1);
+    await shell.refresh();
+    check(items().find((i) => i.id === 1)?.images === media?.images, "a cancelled screenshot saves nothing");
+
+    // 11. a session deleted from outside is closed, not written back
     await invoke("selftest_delete_session");
     await shell.refresh();
     check(shell.view().session === null, "a session deleted from outside is closed");
