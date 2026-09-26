@@ -269,18 +269,35 @@ struct AnnotatorView: View {
                 Divider().frame(height: 20).padding(.horizontal, 4)
                 Image(systemName: "circle.lefthalf.filled").foregroundStyle(.secondary).help("Opacity")
                 Slider(value: Binding(get: { a.opacity }, set: { a.setOpacity($0) }), in: 0.1...1)
-                    .frame(width: 90)
+                    .frame(minWidth: 40, idealWidth: 90, maxWidth: 90)
                     .help("How solid marks are: drag left to see the picture through them (, and . step it)")
                 Text("\(Int((a.opacity * 100).rounded()))%").font(.caption.monospacedDigit()).frame(width: 34, alignment: .leading)
                 Spacer(minLength: 12)
-                Button { a.undo() } label: { Image(systemName: "arrow.uturn.backward") }.buttonStyle(.borderless).help("Undo (⌘Z)")
-                if a.isNew {
-                    Button("Discard", role: .destructive) { a.discard() }.help("Throw this screenshot away (⌘⌫)")
-                    Button("No Marks") { a.skip() }.help("Keep the screenshot as it is (Esc)")
-                } else {
-                    Button("Cancel") { a.skip() }.help("Keep the picture as it was (Esc)")
+                // Icons that never shrink: on a narrow window the words were squeezed to slivers.
+                HStack(spacing: 10) {
+                    Button { a.undo() } label: { Image(systemName: "arrow.uturn.backward") }.buttonStyle(.borderless).help("Undo (⌘Z)")
+                    if a.isNew {
+                        Button { a.discard() } label: { Image(systemName: "trash").foregroundStyle(.red) }
+                            .buttonStyle(.borderless).help("Discard: throw this screenshot away (⌘⌫)")
+                        Button { a.skip() } label: { Image(systemName: "xmark.circle") }
+                            .buttonStyle(.borderless).help("No marks: keep the screenshot as it is (Esc)")
+                    } else {
+                        Button { a.skip() } label: { Image(systemName: "xmark.circle") }
+                            .buttonStyle(.borderless).help("Cancel: keep the picture as it was (Esc)")
+                    }
+                    Button { a.done() } label: {
+                        Image(systemName: "checkmark.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .green)
+                            .font(.system(size: 24))
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.defaultAction)
+                    .help("Done: save the marks (Return)")
                 }
-                Button("Done") { a.done() }.keyboardShortcut(.defaultAction).help("Save (Return)")
+                .font(.system(size: 16))
+                .fixedSize()
+                .layoutPriority(1)
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
             .background(.bar)

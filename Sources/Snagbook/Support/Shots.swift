@@ -44,6 +44,11 @@ enum Shots {
                 aw.setFrame(NSRect(x: 120, y: 60, width: 1000, height: 700), display: true)
                 await SelfTest.settle(800)
                 await write(aw, webViews: [], to: dir + "/markup.png")
+                if ProcessInfo.processInfo.environment["SNAGBOOK_SHOTS_NARROW"] != nil {
+                    aw.setFrame(NSRect(x: 120, y: 60, width: 620, height: 560), display: true)
+                    await SelfTest.settle(800)
+                    await write(aw, webViews: [], to: dir + "/markup-narrow.png")
+                }
                 a.skip()
             } else {
                 fail("the mark-up window did not open")

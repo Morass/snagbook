@@ -4,7 +4,7 @@
 # and ffmpeg (for the demo recording).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-OUT="$PWD/docs/images"
+OUT="${SHOTS_OUT:-$PWD/docs/images}"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 H="$T/home"

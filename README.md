@@ -63,7 +63,7 @@ The note is a small word processor — headings, bold and italic, colours and si
 
 Press **⌃⌘S** anywhere (or the camera button in the toolbar) and drag a rectangle; **F** takes the whole screen, **Esc** cancels. The picture opens in the mark-up window, then goes into the item you are looking at, at the cursor. Double-click any picture in a note to mark it up again later.
 
-Pick a tool and drag on the picture: **highlighter**, **circle**, **arrow**, **box**, **pen**, **text**, a **numbered marker** (1, 2, 3 … in order), **blur** to hide something, **crop**, or **select** to move, recolour or delete a mark. The **opacity** slider makes marks see-through, so the picture shows under them. **Return** (Done) saves; **Esc** keeps the picture as it was; **⌘⌫** throws a new screenshot away.
+Pick a tool and drag on the picture: **highlighter**, **circle**, **arrow**, **box**, **pen**, **text**, a **numbered marker** (1, 2, 3 … in order), **blur** to hide something, **crop**, or **select** to move, recolour or delete a mark. The **opacity** slider makes marks see-through, so the picture shows under them. **Return** or the green ✓ saves; **Esc** or ✕ keeps the picture as it was; **⌘⌫** or the red bin throws a new screenshot away.
 
 The untouched picture is kept beside the marked-up one (`shot-001.orig.png`, with the marks in `shot-001.marks.json`), so marks can be moved, changed or removed later — remove every mark and the original comes back.
 
@@ -130,7 +130,7 @@ The menu bar icon starts a recording or a screenshot, adds an item, starts or co
 | hold ⇧ while dragging | Square, circle, or an arrow at 45° |
 | ⌘Z ⇧⌘Z | Undo / redo |
 | ⌫ | Delete the selected mark |
-| Return / Esc / ⌘⌫ | Done / keep as it was / throw a new screenshot away |
+| Return / Esc / ⌘⌫ | Done (✓) / keep as it was (✕) / throw a new screenshot away (bin) |
 
 Hover over any button to see its shortcut.
 
