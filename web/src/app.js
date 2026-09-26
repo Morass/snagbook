@@ -9,6 +9,7 @@ import { runSelfTest } from "./selftest.js";
 const shell = createShell({ invoke, snag: () => window.snag });
 attach((msg) => shell.onEditorMessage(msg));
 listen("captured", (e) => shell.onCaptured(e.payload));
+listen("marked", (e) => shell.onMarked(e.payload));
 listen("new-item", () => shell.newItem());
 listen("recording", (e) => shell.setRecording(!!e.payload));
 listen("problem", (e) => shell.flash(String(e.payload), true));

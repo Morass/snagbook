@@ -1,0 +1,19 @@
+:root { --bg: #ececef; --bar: #f7f7f8; --line: #d4d4d8; --text: #1d1d1f; --sel: #0a64d8; }
+@media (prefers-color-scheme: dark) { :root { --bg: #161618; --bar: #262629; --line: #3a3a3e; --text: #ececef; --sel: #3b82f6; } }
+html, body { margin: 0; height: 100%; }
+body { display: flex; flex-direction: column; user-select: none; -webkit-user-select: none; background: var(--bg); color: var(--text); font: 13px/1.3 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif; overflow: hidden; }
+#bar { display: flex; align-items: center; gap: 4px; padding: 6px 10px; background: var(--bar); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#bar button { border: 1px solid transparent; background: transparent; color: inherit; font: inherit; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+#bar button:hover { background: rgba(127, 127, 127, 0.15); }
+#bar button.on { background: rgba(10, 100, 216, 0.18); border-color: rgba(10, 100, 216, 0.45); }
+#bar button.primary { background: var(--sel); color: #fff; }
+#bar button.danger { color: #d92c20; }
+#tools button { min-width: 30px; font-size: 15px; padding: 3px 6px; }
+.sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
+.grow { flex: 1; }
+.swatch { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(127, 127, 127, 0.6) !important; padding: 0 !important; margin: 0 2px; }
+.swatch.on { outline: 2.5px solid var(--sel); outline-offset: 1px; }
+#width { min-width: 20px; text-align: center; font-variant-numeric: tabular-nums; }
+#stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+#canvas { max-width: calc(100% - 32px); max-height: calc(100% - 32px); box-shadow: 0 2px 14px rgba(0, 0, 0, 0.25); background: #fff; cursor: crosshair; }
+#text { user-select: text; -webkit-user-select: text; position: absolute; background: rgba(255, 255, 255, 0.85); border: 1px dashed var(--sel); outline: none; resize: none; font-weight: bold; padding: 0; min-width: 60px; overflow: hidden; white-space: pre; }

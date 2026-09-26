@@ -7,7 +7,7 @@
 When you play-test a game or click through an app, the findings pile up faster than you can write them down. Snagbook keeps one window open beside what you are testing. Every finding is an item with a title, a note and its pictures and videos; a screenshot or a recording is one key press and a drag away, and it lands in the note you are writing.
 
 - **Start a session** for one sitting of testing.
-- **Add an item** per finding, type what happened, press a key to grab a screenshot or record what happens.
+- **Add an item** per finding, type what happened, press a key to grab a screenshot (and circle what matters on it) or record what happens.
 - **Hand it off**: one click copies a short text that points whoever fixes things at the session.
 
 Everything is saved as ordinary files as you type: a folder per session, a folder per item, Markdown notes, PNG pictures and MP4 videos. Every video gets still frames and a contact sheet beside it, so someone (or something) that cannot play it can still see what happened. There is nothing to export.
@@ -42,7 +42,7 @@ Or build it yourself; see [Building from source](#building-from-source).
 
 1. Open Snagbook and press **New Session**. The first item, *Item 1*, is ready and its title is selected: type what the finding is about and press Enter.
 2. Type the note. Paste or drop pictures into it.
-3. Press **Ctrl+Alt+S** anywhere, drag a rectangle around what matters, and let go. The picture goes into the note.
+3. Press **Ctrl+Alt+S** anywhere, drag a rectangle around what matters, and let go. Circle or highlight the problem in the mark-up window and press Enter; the picture goes into the note.
 4. To show something happening, press **Ctrl+Alt+R**, drag the area, do it, and press **Ctrl+Alt+R** (or Stop) again.
 5. **Ctrl+N** starts the next item.
 6. When you are done, press **Copy Hand-off** and paste the text wherever the fixing happens.
@@ -63,9 +63,30 @@ The buttons above the note (**Bug**, **Expected**, **Steps**, **Idea**) type a r
 
 ### Screenshots
 
-Press **Ctrl+Alt+S** in any app, or the **Screenshot** button. The screen under the mouse freezes, you drag a rectangle over it, and the picture is saved into the item you are looking at and put in its note at the cursor. Enter takes the whole screen; Esc cancels. Because the screen is frozen first, nothing that moves while you drag ends up in the picture.
+Press **Ctrl+Alt+S** in any app, or the **Screenshot** button. The screen under the mouse freezes, you drag a rectangle over it, and the picture opens in the mark-up window (below). When you are done it is saved into the item you are looking at and put in its note at the cursor. Enter takes the whole screen; Esc cancels. Because the screen is frozen first, nothing that moves while you drag ends up in the picture.
 
 Pictures you paste or drop into a note are saved into the item as well.
+
+### Marking up pictures
+
+A new screenshot opens in the mark-up window; double-click any picture in a note to open it there later. Pick a tool and drag on the picture:
+
+| Key | Tool |
+|---|---|
+| H | Highlighter (the one it starts with) |
+| O | Circle |
+| A | Arrow |
+| R | Box |
+| P | Pen |
+| T | Text (click where it goes, type, Enter) |
+| N | Numbered marker (1, 2, 3 … in order) |
+| B | Blur: hides what is under it |
+| C | Crop (a click removes the crop) |
+| V | Select: click a mark to move it, recolour it, or delete it with Delete |
+
+1 to 6 choose a colour, [ and ] make lines thinner or thicker, Shift while dragging makes squares and circles, and snaps arrows to 45°. Ctrl+Z undoes, Ctrl+Shift+Z redoes. **Enter** (Done) saves; **Esc** keeps the picture as it was (No Marks); **Ctrl+Backspace** throws a new screenshot away (Discard). To have screenshots go straight into the note instead, turn mark-up off in Settings.
+
+The untouched picture is kept beside the marked-up one (`shot-001.orig.png`, with the marks in `shot-001.marks.json`), so marks can be changed or removed later: remove every mark and the original comes back.
 
 ### Recordings
 
@@ -104,6 +125,7 @@ Open them from the session menu or with Ctrl+,:
 - **New session folder name**: built from `{hash}` (eight random letters and digits) and the date and time, `{yyyy} {MM} {dd} {HH} {mm}`.
 - **Copy Hand-off copies** the header, or only the path of the session's `README.md`.
 - **Keep the notebook above other windows.**
+- **Open new screenshots in the mark-up window.**
 - **Shortcuts that work in any app.**
 - **Header for every session**, with the placeholders `{session}`, `{readme}`, `{date}` and `{items}`. One session can have its own header instead (session menu, *Edit Header…*).
 - **Templates**: the buttons above the note.
@@ -121,6 +143,7 @@ The settings are a JSON file you can also edit by hand: `~/.config/Snagbook/conf
     01-main-menu/
       notes.md           the note, in Markdown
       media/             shot-001.png, image-001.png, clip-001.mp4,
+                         shot-001.orig.png, shot-001.marks.json (after mark-up),
                          clip-001-frames/, clip-001-contact.jpg, clip-001.json
   ```
 
@@ -138,7 +161,6 @@ Snagbook makes no network connections. Links in notes open in your browser when 
 
 - **Wayland** (the default on recent Ubuntu and Fedora): shortcuts cannot work from other apps, because Wayland does not let programs listen for keys globally. Use the keys inside the window, or bind a key in your desktop's settings to run Snagbook. Screenshots go through your desktop's screen-sharing permission, which may ask each time, and recording is not supported there.
 - Recordings have no sound.
-- There is no mark-up of pictures yet.
 
 ## Building from source
 

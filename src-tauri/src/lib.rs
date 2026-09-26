@@ -2,6 +2,7 @@
 //! item's pictures and videos to the editor.
 
 mod capture;
+mod markup;
 mod media;
 mod record;
 
@@ -274,6 +275,7 @@ struct ConfigPatch {
     header: Option<String>,
     handoff: Option<HandoffStyle>,
     always_on_top: Option<bool>,
+    annotate_screenshots: Option<bool>,
     templates: Option<Vec<Template>>,
     shortcuts: Option<Shortcuts>,
 }
@@ -297,6 +299,9 @@ fn update_config(app: tauri::AppHandle, st: St, patch: ConfigPatch) -> Res<View>
             }
             if let Some(v) = patch.always_on_top {
                 c.always_on_top = v;
+            }
+            if let Some(v) = patch.annotate_screenshots {
+                c.capture.annotate_screenshots = v;
             }
             if let Some(v) = patch.templates {
                 c.templates = v;
@@ -558,9 +563,147 @@ async fn finish_screenshot(app: AppHandle, rect: capture::Rect) -> Res<()> {
     let mut a = st.lock().unwrap();
     let id = target_item(&mut a)?;
     let rel = a.session()?.save_media(id, &png, "shot", "png").map_err(err)?;
+    let annotate = a.store.config.capture.annotate_screenshots;
     drop(a);
+    if annotate {
+        let auto = app.state::<SelftestNext>().0.lock().unwrap().take();
+        if open_markup_now(&app, markup::Pending { id, rel: rel.clone(), is_new: true, auto }).is_ok() {
+            return Ok(());
+        }
+    }
     capture::announce(&app, capture::Captured { id, rel, kind: "image".into(), label: String::new(), problem: None });
     Ok(())
+}
+
+// ---------------------------------------------------------------- mark-up
+
+#[derive(Default)]
+struct Markup(Mutex<Option<markup::Pending>>);
+
+/// The self-test's script for the next mark-up window.
+#[derive(Default)]
+struct SelftestNext(Mutex<Option<String>>);
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Marked {
+    id: i64,
+    rel: String,
+    is_new: bool,
+    /// False when a new screenshot was thrown away.
+    kept: bool,
+    /// True when the picture's pixels changed.
+    changed: bool,
+}
+
+fn markup_files(app: &AppHandle, id: i64, rel: &str) -> Res<markup::Files> {
+    let st = app.state::<Mutex<App>>();
+    let mut a = st.lock().unwrap();
+    let dir = a.session()?.item_dir(id).map_err(err)?;
+    markup::files(&dir, rel).ok_or_else(|| format!("{rel} is not a picture in this item."))
+}
+
+fn open_markup_now(app: &AppHandle, p: markup::Pending) -> Res<()> {
+    markup_files(app, p.id, &p.rel)?;
+    if let Some(w) = app.get_webview_window(markup::WINDOW) {
+        let _ = w.set_focus();
+        return Err("Finish the picture that is already open first.".into());
+    }
+    let name = p.rel.rsplit('/').next().unwrap_or(&p.rel).to_string();
+    *app.state::<Markup>().0.lock().unwrap() = Some(p);
+    let w = WebviewWindowBuilder::new(app, markup::WINDOW, tauri::WebviewUrl::App("annotate.html".into()))
+        .title(format!("Mark up — {name}"))
+        .inner_size(1040.0, 720.0)
+        .min_inner_size(560.0, 360.0)
+        .center()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let _ = w.set_focus();
+    Ok(())
+}
+
+/// Mark up a picture already in a note (double-click it).
+#[tauri::command]
+async fn open_markup(app: AppHandle, id: i64, rel: String) -> Res<()> {
+    open_markup_now(&app, markup::Pending { id, rel, is_new: false, auto: None })
+}
+
+#[tauri::command]
+fn markup_info(app: AppHandle) -> Res<markup::Info> {
+    let p = app.state::<Markup>().0.lock().unwrap().clone().ok_or("No picture is being marked up.")?;
+    let f = markup_files(&app, p.id, &p.rel)?;
+    Ok(markup::info(&f, &p))
+}
+
+fn finish_markup(app: &AppHandle, kept: bool, changed: bool) {
+    let Some(p) = app.state::<Markup>().0.lock().unwrap().take() else { return };
+    if let Some(w) = app.get_webview_window(markup::WINDOW) {
+        let _ = w.destroy();
+    }
+    if let Some(s) = app.state::<Mutex<App>>().lock().unwrap().session.as_ref() {
+        let _ = s.write_readme();
+    }
+    let _ = app.emit_to("main", "marked", Marked { id: p.id, rel: p.rel, is_new: p.is_new, kept, changed });
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// Done: `png` (base64) and `marks` (JSON) to save, or neither to put the original back.
+#[tauri::command]
+async fn save_markup(app: AppHandle, png: Option<String>, marks: Option<String>) -> Res<()> {
+    let p = app.state::<Markup>().0.lock().unwrap().clone().ok_or("No picture is being marked up.")?;
+    let f = markup_files(&app, p.id, &p.rel)?;
+    let bytes = match &png {
+        Some(b) => Some(base64::engine::general_purpose::STANDARD.decode(b.as_bytes()).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    markup::save(&f, bytes.as_deref(), marks.as_deref())?;
+    finish_markup(&app, true, true);
+    Ok(())
+}
+
+/// No Marks / Cancel: the picture stays as it was.
+#[tauri::command]
+async fn skip_markup(app: AppHandle) {
+    finish_markup(&app, true, false);
+}
+
+/// A new screenshot is thrown away.
+#[tauri::command]
+async fn discard_markup(app: AppHandle) -> Res<()> {
+    let p = app.state::<Markup>().0.lock().unwrap().clone().ok_or("No picture is being marked up.")?;
+    if p.is_new {
+        let f = markup_files(&app, p.id, &p.rel)?;
+        let _ = std::fs::remove_file(&f.picture);
+    }
+    finish_markup(&app, !p.is_new, false);
+    Ok(())
+}
+
+#[tauri::command]
+fn markup_open(app: AppHandle) -> bool {
+    app.get_webview_window(markup::WINDOW).is_some()
+}
+
+/// The self-test's script for the next mark-up window.
+#[tauri::command]
+fn selftest_markup_next(app: AppHandle, script: String) -> Res<()> {
+    if !selftest_requested() {
+        return Err("Only during the self-test.".into());
+    }
+    *app.state::<SelftestNext>().0.lock().unwrap() = Some(script);
+    Ok(())
+}
+
+/// Mark up an existing picture with a self-test script.
+#[tauri::command]
+async fn selftest_open_markup(app: AppHandle, id: i64, rel: String, script: String) -> Res<()> {
+    if !selftest_requested() {
+        return Err("Only during the self-test.".into());
+    }
+    open_markup_now(&app, markup::Pending { id, rel, is_new: false, auto: Some(script) })
 }
 
 /// Whether the screenshot window is open (for the self-test).
@@ -731,6 +874,14 @@ pub fn run() {
         .manage(Mutex::new(App::load()))
         .manage(capture::Frozen::default())
         .manage(Recorder::default())
+        .manage(Markup::default())
+        .manage(SelftestNext::default())
+        .on_window_event(|w, e| {
+            // The mark-up window closed with its close button: the picture stays as it was.
+            if w.label() == markup::WINDOW && matches!(e, tauri::WindowEvent::Destroyed) {
+                finish_markup(w.app_handle(), true, false);
+            }
+        })
         .manage(Bindings::default())
         .register_uri_scheme_protocol("snagbook", |ctx, request| media::serve(ctx.app_handle(), &request))
         .setup(|app| {
@@ -771,6 +922,14 @@ pub fn run() {
             stop_recording,
             recording_started,
             recbar_size,
+            open_markup,
+            markup_info,
+            save_markup,
+            skip_markup,
+            discard_markup,
+            markup_open,
+            selftest_markup_next,
+            selftest_open_markup,
             cancel_screenshot,
             finish_screenshot,
             capture_open,

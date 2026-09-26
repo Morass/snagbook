@@ -259,6 +259,18 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     else flash(`${kind === "video" ? "Recording" : "Screenshot"} saved to ${where}`);
   }
 
+  /// The mark-up window finished: a new screenshot goes into the note (or is gone); an
+  /// existing picture is redrawn.
+  async function onMarked({ id, rel, isNew, kept, changed }) {
+    if (isNew && kept) return onCaptured({ id, rel, kind: "image" });
+    if (isNew) {
+      await refresh();
+      return flash("Screenshot discarded");
+    }
+    if (changed) snag()?.refreshMedia(rel);
+    await refresh();
+  }
+
   async function copyHandoff() {
     await flush();
     const text = await call("copy_handoff");
@@ -547,6 +559,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     header.value = c.header;
     const onTop = el("input", { type: "checkbox" });
     onTop.checked = !!c.alwaysOnTop;
+    const markUp = el("input", { type: "checkbox" });
+    markUp.checked = c.capture?.annotateScreenshots !== false;
     const handoff = el("select", {}, el("option", { value: "header", text: "The header, with the session filled in" }), el("option", { value: "path", text: "Only the path of README.md" }));
     handoff.value = c.handoff;
     const keyField = (value) => {
@@ -594,6 +608,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       el("p", { class: "hint", text: "Tokens: {hash} {yyyy} {MM} {dd} {HH} {mm}. A leading ~ is your home folder." }),
       el("label", { class: "field" }, el("span", { text: "Copy Hand-off copies" }), handoff),
       el("label", {}, onTop, " Keep the notebook above other windows"),
+      el("label", {}, markUp, " Open new screenshots in the mark-up window"),
       el("div", { class: "field" }, el("span", { text: "Shortcuts that work in any app" }),
         el("div", { class: "keys-grid" }, el("span", { text: "Screenshot" }), kShot, el("span", { text: "Record" }), kRec, el("span", { text: "New item" }), kNew, el("span", { text: "Show notebook" }), kShow)),
       errs,
@@ -613,6 +628,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
           header: header.value,
           handoff: handoff.value,
           alwaysOnTop: onTop.checked,
+          annotateScreenshots: markUp.checked,
           templates,
           shortcuts: { screenshot: kShot.value, record: kRec.value, newItem: kNew.value, showNotebook: kShow.value },
         },
@@ -647,7 +663,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         await call("open_link", { id: selected, href: msg.href }).catch(() => {});
         break;
       case "annotate":
-        flash("Marking up pictures is not in this version yet.");
+        if (selected != null && msg.src && !msg.src.includes("://")) await call("open_markup", { id: selected, rel: msg.src }).catch(() => {});
         break;
     }
   }
@@ -742,6 +758,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     record,
     setRecording,
     onCaptured,
+    onMarked,
     sessionMenu,
     settings,
     onEditorMessage,

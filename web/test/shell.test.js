@@ -63,6 +63,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
     copy_handoff: () => `Read ${session.path}/README.md`,
     set_session_title: ({ title }) => ((session.title = title || "Session 25 Sep, 18:00"), view()),
     set_selected: () => null,
+    update_config: ({ patch }) => (Object.assign(config, patch), view()),
     start_screenshot: () => null,
   };
   const invoke = async (cmd, args = {}) => {
@@ -366,4 +367,17 @@ test("a title typed and not yet saved goes to its own item when you switch", asy
   t.$("item-title").blur();
   await t.settle();
   assert.deepEqual(t.shell.view().session.items.map((i) => i.title), ["Item 1", "Inventory"]);
+});
+
+test("Settings can turn off opening screenshots in mark-up", async () => {
+  const t = await setup({ session: true });
+  const p = t.shell.settings();
+  await t.settle();
+  const box = [...t.$("modal").querySelectorAll("label")].find((l) => /mark-up window/.test(l.textContent)).querySelector("input");
+  assert.equal(box.checked, true, "on by default, as on the macOS app");
+  box.checked = false;
+  await t.answer(true);
+  await p;
+  const patch = t.app.calls.find(([c]) => c === "update_config")[1].patch;
+  assert.equal(patch.annotateScreenshots, false);
 });

@@ -119,27 +119,86 @@ export async function runSelfTest(shell, invoke) {
     const text = await shell.copyHandoff();
     check(text.includes(path), "Copy Hand-off names the session folder");
 
-    // 10. a screenshot: the frozen screen, cropped to a rectangle, lands in the shown item
+    // 10. a screenshot: the frozen screen, cropped to a rectangle, marked up, into the note
     await shell.show(1);
-    const captured = new Promise((resolve) => {
-      const orig = shell.onCaptured;
-      shell.onCaptured = async (p) => {
-        await orig(p);
-        resolve(p);
-      };
-    });
+    const nextMarked = () =>
+      new Promise((resolve) => {
+        const orig = shell.onMarked;
+        shell.onMarked = async (p) => {
+          shell.onMarked = orig;
+          await orig(p);
+          resolve(p);
+        };
+      });
+    const base = () => `${location.protocol === "http:" || navigator.userAgent.includes("Windows") ? "http://snagbook.localhost" : "snagbook://localhost"}/item/1/`;
+    const fetchText = (rel) => fetch(base() + rel + "?t=" + Date.now()).then((r) => (r.ok ? r.text() : null)).catch(() => null);
+    const fetchSize = (rel) => fetch(base() + rel + "?t=" + Date.now()).then((r) => (r.ok ? r.arrayBuffer().then((x) => x.byteLength) : null)).catch(() => null);
+    const pixel = async (rel, fx, fy) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = base() + rel + "?t=" + Date.now();
+      if (!(await imageLoaded(img))) return null;
+      const c = Object.assign(document.createElement("canvas"), { width: img.naturalWidth, height: img.naturalHeight });
+      const g = c.getContext("2d");
+      g.drawImage(img, 0, 0);
+      return [...g.getImageData(Math.round(img.naturalWidth * fx), Math.round(img.naturalHeight * fy), 1, 1).data];
+    };
+
+    let marked = nextMarked();
+    await invoke("selftest_markup_next", { script: "ring" });
     await invoke("start_screenshot");
     check(await until(() => invoke("capture_open")), "Screenshot opens the full-screen window");
     await invoke("finish_screenshot", { rect: { x: 0.1, y: 0.1, w: 0.25, h: 0.2 } });
-    const got = await Promise.race([captured, sleep(5000).then(() => null)]);
-    check(got?.id === 1 && got?.rel === "media/shot-001.png", "the screenshot is saved into item 1 as media/shot-001.png");
-    check(await until(async () => !(await invoke("capture_open"))), "the screenshot window closes");
+    check(await until(() => invoke("markup_open")), "a new screenshot opens in the mark-up window");
+    let m = await Promise.race([marked, sleep(10000).then(() => null)]);
+    check(m?.id === 1 && m?.rel === "media/shot-001.png" && m.isNew && m.kept, "Done saves it into item 1 as media/shot-001.png: " + JSON.stringify(m));
+    check(await until(async () => !(await invoke("capture_open")) && !(await invoke("markup_open"))), "the screenshot and mark-up windows close");
     await shell.flush();
     check((await invoke("read_note", { id: 1 })).includes("media/shot-001.png"), "the screenshot is in the note");
     const shot = [...document.querySelectorAll("#editor .img-wrap img")].find((i) => i.src.includes("shot-001"));
     const loaded = await imageLoaded(shot);
     const want = Math.round(screen.width * devicePixelRatio * 0.25);
     check(loaded && Math.abs(shot.naturalWidth - want) <= 1, `the screenshot is a quarter of the screen wide: ${shot?.naturalWidth} of ${want}`);
+    const marks1 = JSON.parse((await fetchText("media/shot-001.marks.json")) || "null");
+    check(marks1?.marks?.length === 1 && marks1.marks[0].tool === "ellipse" && marks1.width === want, "shot-001.marks.json holds the circle, in the macOS app's format");
+    const origSize = await fetchSize("media/shot-001.orig.png");
+    check(origSize > 0, "the untouched original is kept as shot-001.orig.png");
+    const ring = await pixel("media/shot-001.png", 0.2, 0.5);
+    check(ring && ring[0] > 200 && ring[1] < 110 && ring[2] < 110, "the circle is drawn into the picture: " + JSON.stringify(ring));
+
+    // 10b. marking up a picture again keeps its marks and its original
+    marked = nextMarked();
+    await invoke("selftest_open_markup", { id: 1, rel: "media/shot-001.png", script: "count" });
+    m = await Promise.race([marked, sleep(10000).then(() => null)]);
+    check(m && !m.isNew && m.changed, "marking up an existing picture saves it again");
+    const marks2 = JSON.parse((await fetchText("media/shot-001.marks.json")) || "null");
+    check(marks2?.marks?.map((x) => x.tool).join() === "ellipse,counter" && marks2.marks[1].number === 1, "the new mark joins the old one: " + marks2?.marks?.map((x) => x.tool));
+    check((await fetchSize("media/shot-001.orig.png")) === origSize, "the original is still the first one");
+
+    // 10c. removing every mark puts the original back
+    marked = nextMarked();
+    await invoke("selftest_open_markup", { id: 1, rel: "media/shot-001.png", script: "clear" });
+    await Promise.race([marked, sleep(10000)]);
+    check((await fetchSize("media/shot-001.png")) === origSize && (await fetchSize("media/shot-001.orig.png")) === null && (await fetchText("media/shot-001.marks.json")) === null, "no marks: the picture is the original again, with no companions");
+
+    // 10d. No Marks keeps a new screenshot as it is; Discard throws it away
+    marked = nextMarked();
+    await invoke("selftest_markup_next", { script: "skip" });
+    await invoke("start_screenshot");
+    await until(() => invoke("capture_open"));
+    await invoke("finish_screenshot", { rect: { x: 0.5, y: 0.5, w: 0.2, h: 0.2 } });
+    m = await Promise.race([marked, sleep(10000).then(() => null)]);
+    await shell.flush();
+    check(m?.rel === "media/shot-002.png" && m.kept && (await invoke("read_note", { id: 1 })).includes("media/shot-002.png") && (await fetchText("media/shot-002.marks.json")) === null, "No Marks keeps the screenshot without companions");
+    marked = nextMarked();
+    await invoke("selftest_markup_next", { script: "discard" });
+    await invoke("start_screenshot");
+    await until(() => invoke("capture_open"));
+    await invoke("finish_screenshot", { rect: { x: 0.5, y: 0.1, w: 0.2, h: 0.2 } });
+    m = await Promise.race([marked, sleep(10000).then(() => null)]);
+    await shell.flush();
+    check(m?.rel === "media/shot-003.png" && !m.kept && (await fetchSize("media/shot-003.png")) === null && !(await invoke("read_note", { id: 1 })).includes("shot-003"), "Discard throws the screenshot away");
+
     await invoke("start_screenshot");
     await until(() => invoke("capture_open"));
     await invoke("cancel_screenshot");
@@ -174,8 +233,7 @@ export async function runSelfTest(shell, invoke) {
     else check(rec?.kind === "image" && rec?.rel === wantRel && /ffmpeg/.test(rec?.problem || ""), "without ffmpeg the contact sheet is saved, and the reason is given: " + JSON.stringify(rec));
     check((await invoke("read_note", { id: 1 })).includes(wantRel), "the recording is in the note");
     check(await until(() => $("rec").textContent === "Record"), "the button says Record again");
-    const base = document.querySelector("#editor .img-wrap img")?.src.replace(/media\/.*$/, "") || "";
-    const info = await fetch(base + "media/clip-001.json").then((r) => r.json()).catch(() => null);
+    const info = await fetch(base() + "media/clip-001.json").then((r) => r.json()).catch(() => null);
     check(info && info.duration >= 2.3 && info.duration <= 3.6, "clip-001.json gives the length: " + info?.duration);
     check(info?.stills?.length === 3 && info.stills[0].file === "clip-001-frames/0001.jpg", "one still a second beside it: " + info?.stills?.length);
     check(info?.width === Math.round(screen.width * devicePixelRatio * 0.4) - (Math.round(screen.width * devicePixelRatio * 0.4) % 2), "the video is the area's size: " + info?.width);
@@ -184,7 +242,7 @@ export async function runSelfTest(shell, invoke) {
       check(await imageLoaded(poster), "the video card shows its first still");
     }
     const sheet = new Image();
-    sheet.src = base + "media/clip-001-contact.jpg";
+    sheet.src = base() + "media/clip-001-contact.jpg";
     check(await imageLoaded(sheet), "the contact sheet is there");
 
     // 12. a session deleted from outside is closed, not written back

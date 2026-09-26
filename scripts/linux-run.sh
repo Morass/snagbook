@@ -6,7 +6,9 @@
 #   scripts/linux-run.sh shot OUT.png [SETUP]     a picture of the window; SETUP is a script
 #                                                 run first with $HOME set, to lay out sessions
 #   scripts/linux-run.sh capture                  the global screenshot key and a real mouse
-#                                                 drag; checks the saved picture's size
+#                                                 drag, then an arrow and a circle drawn in the
+#                                                 mark-up window and Enter (MARK_SHOT=file.png
+#                                                 photographs it); checks the files
 #   scripts/linux-run.sh record                   the same for a recording; REC_SHOT=file.png
 #                                                 also photographs the screen while it runs
 set -euo pipefail
@@ -59,14 +61,24 @@ case "$mode" in
       DISPLAY=:$n xdotool mousemove 640 400 key --clearmodifiers ctrl+alt+s
       sleep 2
       DISPLAY=:$n xdotool mousemove 200 150 mousedown 1 mousemove 360 250 mousemove 520 390 mouseup 1
+      sleep 3
+      DISPLAY=:$n xdotool key a mousemove 420 320 mousedown 1 mousemove 560 400 mousemove 700 500 mouseup 1
+      DISPLAY=:$n xdotool key o mousemove 560 340 mousedown 1 mousemove 650 420 mousemove 760 520 mouseup 1
+      sleep 1
+      ${MARK_SHOT:+DISPLAY=:$n import -window root '$MARK_SHOT';}
+      DISPLAY=:$n xdotool key Return
       sleep 2
       kill \$app" >/dev/null 2>&1 || true
     shot="$H/Snagbook/1a2b3c4d_25-09-2026/03-save-slot-names/media/shot-001.png"
     [ -f "$shot" ] || { echo "FAIL no screenshot was saved"; exit 1; }
+    marks="${shot%.png}.marks.json"
+    tools=$(python3 -c "import json,sys; print(','.join(m['tool'] for m in json.load(open(sys.argv[1]))['marks']))" "$marks" 2>/dev/null || true)
+    [ "$tools" = "arrow,ellipse" ] || { echo "FAIL the marks are '$tools', not arrow,ellipse"; exit 1; }
+    [ -f "${shot%.png}.orig.png" ] || { echo "FAIL the original was not kept"; exit 1; }
     size=$(python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(24); print(*struct.unpack('>II', d[16:24]))" "$shot")
     grep -q 'shot-001.png' "$H/Snagbook/1a2b3c4d_25-09-2026/03-save-slot-names/notes.md" || { echo "FAIL the note does not show it"; exit 1; }
     [ "$size" = "320 240" ] || { echo "FAIL the picture is $size, not 320 240"; exit 1; }
-    echo "ok   Ctrl+Alt+S and a mouse drag saved a 320×240 screenshot into the shown item"
+    echo "ok   Ctrl+Alt+S, a drag, an arrow and a circle drawn by mouse, Enter: a 320×240 marked-up screenshot, its original and its marks"
     ;;
   record)
     CONFIG="$T/config.json" HOME="$H" bash scripts/demo-session.sh

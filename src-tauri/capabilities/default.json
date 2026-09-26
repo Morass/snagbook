@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "What the notebook window may call",
-  "windows": ["main", "capture", "recbar"],
+  "windows": ["main", "capture", "recbar", "annotate"],
   "permissions": ["core:default"]
 }
