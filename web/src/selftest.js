@@ -226,7 +226,11 @@ export async function runSelfTest(shell, invoke) {
     check(bar && bar[1] < 80 && bar[0] > 150, "the timer window is a small bar: " + JSON.stringify(bar));
     await sleep(2600);
     await invoke("stop_recording");
-    const rec = await Promise.race([recorded, sleep(20000).then(() => null)]);
+    const stoppedAt = Date.now();
+    // A first run of a freshly installed ffmpeg can be slow (a virus scan); the recorder
+    // itself gives ffmpeg a minute.
+    const rec = await Promise.race([recorded, sleep(120000).then(() => null)]);
+    lines.push(`note the recording was finished ${((Date.now() - stoppedAt) / 1000).toFixed(1)}s after Stop`);
     const video = await invoke("ffmpeg_found");
     const wantRel = video ? "media/clip-001.mp4" : "media/clip-001-contact.jpg";
     if (video) check(rec?.kind === "video" && rec?.rel === wantRel, "the recording is saved as " + wantRel + ": " + JSON.stringify(rec));
@@ -235,7 +239,7 @@ export async function runSelfTest(shell, invoke) {
     check(await until(() => $("rec").textContent === "Record"), "the button says Record again");
     const info = await fetch(base() + "media/clip-001.json").then((r) => r.json()).catch(() => null);
     check(info && info.duration >= 2.3 && info.duration <= 3.6, "clip-001.json gives the length: " + info?.duration);
-    check(info?.stills?.length === 3 && info.stills[0].file === "clip-001-frames/0001.jpg", "one still a second beside it: " + info?.stills?.length);
+    check(info?.stills?.length === Math.min(60, Math.floor(info.duration) + 1) && info.stills[0].file === "clip-001-frames/0001.jpg", `one still a second beside it: ${info?.stills?.length} for ${info?.duration}s`);
     check(info?.width === Math.round(screen.width * devicePixelRatio * 0.4) - (Math.round(screen.width * devicePixelRatio * 0.4) % 2), "the video is the area's size: " + info?.width);
     if (video) {
       const poster = [...document.querySelectorAll("#editor .video-card img")].find((i) => i.src.includes("clip-001-frames"));
