@@ -12,7 +12,7 @@ When you play-test a game or click through an app, the findings pile up faster t
 
 Everything is saved as ordinary files as you type: a folder per session, a folder per item, Markdown notes, PNG pictures and MP4 videos. Every video gets still frames and a contact sheet beside it, so someone (or something) that cannot play it can still see what happened. There is nothing to export.
 
-It runs on Linux and Windows.
+This is Snagbook for **Linux and Windows**, maintained on a best-effort basis. The main Snagbook is the macOS app, [Morass/snagbook](https://github.com/Morass/snagbook); both keep sessions in the same folder format, so a session made on one system opens on the other.
 
 ## Contents
 
@@ -69,6 +69,8 @@ Pictures you paste or drop into a note are saved into the item as well.
 
 ### Marking up pictures
 
+<p align="center"><img src="docs/images/markup.png" alt="The mark-up window: a screenshot with a highlighter stroke, a circle, an arrow, a numbered marker and a caption" width="720"></p>
+
 A new screenshot opens in the mark-up window; double-click any picture in a note to open it there later. Pick a tool and drag on the picture:
 
 | Key | Tool |
@@ -89,6 +91,8 @@ A new screenshot opens in the mark-up window; double-click any picture in a note
 The untouched picture is kept beside the marked-up one (`shot-001.orig.png`, with the marks in `shot-001.marks.json`), so marks can be changed or removed later: remove every mark and the original comes back.
 
 ### Recordings
+
+<p align="center"><img src="docs/images/recording.png" alt="A note with a picture and, under it, a recording showing its first frame and a play button" width="720"></p>
 
 Press **Ctrl+Alt+R** in any app, or the **Record** button, and drag the area to record (Enter records the whole screen). A small bar with a timer and **Stop** appears in a corner the recording does not cover; press Stop, or Ctrl+Alt+R again, to finish. The video goes into the item and into its note, where it plays in place.
 

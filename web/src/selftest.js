@@ -60,10 +60,9 @@ export async function runSelfTest(shell, invoke) {
     t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     check(await until(() => items()[0]?.folder === "01-main-menu"), "typing a title renames the item's folder");
 
-    // 3. typed text reaches notes.md
+    // 3. typed text reaches notes.md by itself, without switching items
     snag().typeText("The logo overlaps the Start button.");
-    await shell.flush();
-    check((await invoke("read_note", { id: 1 })).includes("The logo overlaps the Start button."), "typed text reaches notes.md");
+    check(await until(async () => (await invoke("read_note", { id: 1 })).includes("The logo overlaps the Start button."), 5000), "typed text reaches notes.md by itself");
 
     // 4. a template button types its text
     document.querySelector("#templates .template")?.click();
@@ -179,6 +178,15 @@ export async function runSelfTest(shell, invoke) {
       doc.marks[0].opacity = 0.4;
       const faint = px();
       check(solid[1] < 40 && faint[0] > 245 && faint[1] > 130 && faint[1] < 180, `a 40% mark is pink over white, a solid one red: ${solid} / ${faint}`);
+    }
+
+    // 10a'. double-clicking a picture in the note opens it in the mark-up window
+    {
+      const pic = [...document.querySelectorAll("#editor .img-wrap")].find((w) => w.querySelector("img")?.src.includes("shot-001"));
+      pic?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 }));
+      check(await until(() => invoke("markup_open"), 5000), "double-clicking a picture in the note opens the mark-up window" + (pic ? "" : " (no picture found)"));
+      await invoke("skip_markup").catch(() => {});
+      await until(async () => !(await invoke("markup_open")));
     }
 
     // 10b. marking up a picture again keeps its marks and its original

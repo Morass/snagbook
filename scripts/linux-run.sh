@@ -9,6 +9,7 @@
 #                                                 drag, then an arrow and a circle drawn in the
 #                                                 mark-up window and Enter (MARK_SHOT=file.png
 #                                                 photographs it); checks the files
+#   scripts/linux-run.sh pictures DIR             README pictures: notebook, mark-up, recording
 #   scripts/linux-run.sh record                   the same for a recording; REC_SHOT=file.png
 #                                                 also photographs the screen while it runs
 set -euo pipefail
@@ -107,5 +108,33 @@ case "$mode" in
     [ -f "$m/clip-001-contact.jpg" ] && [ -f "$m/clip-001.json" ] && [ "$stills" -ge 3 ] || { echo "FAIL companions missing ($stills stills)"; exit 1; }
     echo "ok   Ctrl+Alt+R, a drag, Ctrl+Alt+R: a ${dur}s 640×480 video, $stills stills, a contact sheet and clip-001.json"
     ;;
-  *) echo "selftest, shot, capture or record" >&2; exit 2 ;;
+  pictures)
+    # README pictures from the invented session: the notebook, a picture marked up by mouse
+    # and keyboard, and a note with a recording. OUT is a directory.
+    out="$(realpath -m "${2:?output directory}")"; mkdir -p "$out"
+    CONFIG="$T/config.json" HOME="$H" bash scripts/demo-session.sh
+    n=$((90 + RANDOM % 100))
+    "${run_env[@]}" xvfb-run -n "$n" -s "-screen 0 1280x800x24" sh -c "
+      dbus-run-session -- '$BIN' & app=\$!
+      sleep 5
+      X() { DISPLAY=:$n xdotool \"\$@\"; }
+      X mousemove 100 80 click 1; sleep 1.5
+      DISPLAY=:$n import -window root -crop 980x720+0+0 +repage '$out/notebook.png'
+      X mousemove 510 300 click --repeat 2 --delay 80 1; sleep 3
+      X mousemove 575 453 mousedown 1 mousemove 640 453 mousemove 706 453 mouseup 1; sleep 0.5
+      X key o; sleep 0.3; X mousemove 552 423 mousedown 1 mousemove 640 460 mousemove 729 489 mouseup 1; sleep 0.5
+      X key a; sleep 0.3; X mousemove 855 540 mousedown 1 mousemove 800 515 mousemove 738 487 mouseup 1; sleep 0.5
+      X key n; sleep 0.3; X mousemove 540 345 click 1; sleep 0.5
+      X key t; sleep 0.3; X mousemove 414 500 click 1; sleep 1.2; X type --delay 40 'logo covers Start'; sleep 0.5; X key Return; sleep 1
+      DISPLAY=:$n import -window root -crop 1040x720+120+40 +repage '$out/markup.png'
+      X key Escape; sleep 2
+      X mousemove 100 109 click 1; sleep 1; X mousemove 100 80 click 1; sleep 1
+      X mousemove 640 400 key --clearmodifiers ctrl+alt+r; sleep 2
+      X mousemove 272 172 mousedown 1 mousemove 500 300 mousemove 748 438 mouseup 1
+      sleep 4; X key --clearmodifiers ctrl+alt+r; sleep 5
+      DISPLAY=:$n import -window root -crop 980x720+0+0 +repage '$out/recording.png'
+      kill \$app" >/dev/null 2>&1 || true
+    ls "$out"
+    ;;
+  *) echo "selftest, shot, capture, record or pictures" >&2; exit 2 ;;
 esac
