@@ -215,6 +215,33 @@ pub fn nearest(have: &[f64], t: f64) -> Option<usize> {
 
 // ---------------------------------------------------------------- the recording
 
+/// Stop, and when it was pressed: the recording ends at that moment, not when a slow screen
+/// grab gets round to noticing it.
+#[derive(Default)]
+pub struct Stop {
+    flag: AtomicBool,
+    at: std::sync::Mutex<Option<Instant>>,
+}
+
+impl Stop {
+    pub fn new() -> Arc<Stop> {
+        Arc::new(Stop::default())
+    }
+
+    pub fn request(&self) {
+        self.at.lock().unwrap().get_or_insert_with(Instant::now);
+        self.flag.store(true, Ordering::SeqCst);
+    }
+
+    pub fn requested(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+
+    fn at(&self) -> Option<Instant> {
+        *self.at.lock().unwrap()
+    }
+}
+
 #[derive(Serialize)]
 pub struct Still {
     pub time: f64,
@@ -259,7 +286,7 @@ pub struct Finished {
 }
 
 /// Take frames from `grab` until `stop` is set; write the video and its companions.
-pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Arc<AtomicBool>) -> Result<Finished, String> {
+pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Arc<Stop>) -> Result<Finished, String> {
     let first = grab()?;
     let src = first.dimensions();
     let dst = capture_math::output_size(src.0 as f64, src.1 as f64, plan.max_long_edge);
@@ -352,7 +379,7 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
                 thumbs.push((t, fit(&frame, 480)));
             }
         }
-        if stop.load(Ordering::SeqCst) {
+        if stop.requested() {
             break;
         }
         let next = Duration::from_secs_f64(written as f64 / fps as f64);
@@ -362,7 +389,8 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
         frame = Arc::new(grab()?);
     }
     // Up to the moment Stop was pressed, whatever the last grab cost.
-    let due = (start.elapsed().as_secs_f64() * fps as f64) as u64;
+    let end = stop.at().map_or_else(|| start.elapsed(), |at| at.saturating_duration_since(start));
+    let due = (end.as_secs_f64() * fps as f64) as u64;
     if writer.is_some() {
         offer(&mut pending, &last_good, due.saturating_sub(written));
         let deadline = Instant::now() + plan.finish_timeout;
@@ -372,6 +400,8 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
         }
     }
     written = written.max(due);
+    // Frames counted after Stop (a grab that returned late) do not lengthen the clip.
+    let written = written.min(due.max(1));
     let duration = written as f64 / fps as f64;
     drop(tx);
     let mut video_name = None;
@@ -490,11 +520,11 @@ mod tests {
             n = n.wrapping_add(9);
             Ok(RgbaImage::from_pixel(321, 241, Rgba([n, 128, 255 - n, 255])))
         };
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Stop::new();
         let s2 = stop.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(2400));
-            s2.store(true, Ordering::SeqCst);
+            s2.request();
         });
         let ff = with_ffmpeg();
         let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: ff.clone(), source: "test".into(), finish_timeout: Duration::from_secs(60) };
@@ -528,11 +558,11 @@ mod tests {
         std::fs::write(&slow, format!("#!/bin/sh\ncase \"$*\" in *-encoders*) exec '{0}' \"$@\";; esac\nsleep 4\nexec '{0}' \"$@\"\n", real.display())).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Stop::new();
         let s2 = stop.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(3000));
-            s2.store(true, Ordering::SeqCst);
+            s2.request();
         });
         let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(slow), source: "test".into(), finish_timeout: Duration::from_secs(60) };
         // Big frames fill the pipe at once, so a blocking write would stall the grab loop.
@@ -554,11 +584,11 @@ mod tests {
         std::fs::write(&slow, format!("#!/bin/sh\ncase \"$*\" in *-encoders*) sleep 4;; esac\nexec '{0}' \"$@\"\n", real.display())).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Stop::new();
         let s2 = stop.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(3000));
-            s2.store(true, Ordering::SeqCst);
+            s2.request();
         });
         let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(slow), source: "test".into(), finish_timeout: Duration::from_secs(60) };
         let f = run(|| Ok(RgbaImage::from_pixel(320, 240, Rgba([30, 30, 200, 255]))), plan, stop).unwrap();
@@ -577,11 +607,11 @@ mod tests {
         std::fs::write(&stuck, format!("#!/bin/sh\ncase \"$*\" in *-encoders*) exec '{0}' \"$@\";; esac\nexec sleep 600\n", real.display())).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Stop::new();
         let s2 = stop.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(12000));
-            s2.store(true, Ordering::SeqCst);
+            s2.request();
         });
         let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(stuck), source: "test".into(), finish_timeout: Duration::from_secs(2) };
         let t0 = Instant::now();
@@ -593,10 +623,31 @@ mod tests {
         assert!(dir.path().join("clip-001-frames/0012.jpg").is_file(), "the stills are kept");
     }
 
+    /// A grab that takes seconds (a busy machine) must not stretch the clip past Stop.
+    #[test]
+    fn the_clip_ends_when_stop_is_pressed() {
+        let dir = tempfile::tempdir().unwrap();
+        let stop = Stop::new();
+        let s2 = stop.clone();
+        let mut n = 0;
+        let grab = move || {
+            n += 1;
+            if n == 20 {
+                s2.request();
+                std::thread::sleep(Duration::from_millis(3000)); // the grab after Stop is slow
+            }
+            Ok(RgbaImage::from_pixel(64, 48, Rgba([1, 2, 3, 255])))
+        };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), finish_timeout: Duration::from_secs(60) };
+        let f = run(grab, plan, stop).unwrap();
+        assert!(f.duration < 2.0, "the clip runs {}s past a Stop at about 1.3s", f.duration);
+    }
+
     #[test]
     fn without_ffmpeg_the_stills_still_come() {
         let dir = tempfile::tempdir().unwrap();
-        let stop = Arc::new(AtomicBool::new(true));
+        let stop = Stop::new();
+        stop.request();
         let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-002".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), finish_timeout: Duration::from_secs(60) };
         let f = run(|| Ok(RgbaImage::from_pixel(10, 10, Rgba([1, 2, 3, 255]))), plan, stop).unwrap();
         assert!(f.video.is_none());

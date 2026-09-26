@@ -418,7 +418,7 @@ fn recording_started(app: AppHandle) -> Option<u64> {
 }
 
 struct Active {
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    stop: std::sync::Arc<record::Stop>,
     handle: std::thread::JoinHandle<Result<record::Finished, String>>,
     id: i64,
     stem: String,
@@ -464,7 +464,7 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
         source: format!("region {w}×{h} at {x},{y}"),
         finish_timeout: std::time::Duration::from_secs(60),
     };
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop = record::Stop::new();
     let stop2 = stop.clone();
     let handle = std::thread::spawn(move || {
         let screen = xcap::Monitor::from_point(center.0, center.1).map_err(|e| format!("The screen could not be read: {e}"))?;
@@ -526,7 +526,7 @@ fn stop_recording_now(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("recbar") {
         let _ = w.destroy();
     }
-    active.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    active.stop.request();
     let app = app.clone();
     std::thread::spawn(move || {
         let result = active.handle.join().unwrap_or_else(|_| Err("the recording stopped unexpectedly".into()));

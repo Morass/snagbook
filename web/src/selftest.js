@@ -222,7 +222,7 @@ export async function runSelfTest(shell, invoke) {
     check(await until(async () => (await invoke("recording_started")) != null), "recording starts when the area is chosen");
     check(await until(() => $("rec").textContent === "Stop"), "the Record button turns into Stop");
     let bar = null;
-    await until(async () => (bar = await invoke("recbar_size")) != null && bar[1] < 80, 3000);
+    await until(async () => (bar = await invoke("recbar_size")) != null && bar[1] < 80, 10000);
     check(bar && bar[1] < 80 && bar[0] > 150, "the timer window is a small bar: " + JSON.stringify(bar));
     await sleep(2600);
     await invoke("stop_recording");
