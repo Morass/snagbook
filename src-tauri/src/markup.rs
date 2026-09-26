@@ -79,7 +79,10 @@ pub fn save(f: &Files, png: Option<&[u8]>, marks: Option<&str>) -> Result<(), St
                 return Err("the drawing is not a PNG".into());
             }
             if !f.orig.is_file() {
-                fs::copy(&f.picture, &f.orig).map_err(|e| e.to_string())?;
+                // Through a temporary file: a half-copied original would be trusted later and
+                // the real one lost.
+                let data = fs::read(&f.picture).map_err(|e| e.to_string())?;
+                write_atomic(&f.orig, &data)?;
             }
             write_atomic(&f.picture, png)?;
             write_atomic(&f.marks, marks.as_bytes())

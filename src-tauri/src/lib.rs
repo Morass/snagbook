@@ -204,7 +204,10 @@ fn rename_item(st: St, id: i64, title: String) -> Res<View> {
 /// Move an item's folder to the Trash. When that is impossible the answer starts with
 /// "NOTRASH:" and the page asks before calling again with `permanently`.
 #[tauri::command]
-fn delete_item(st: St, id: i64, permanently: bool) -> Res<View> {
+fn delete_item(window: tauri::Window, st: St, id: i64, permanently: bool) -> Res<View> {
+    if window.label() != "main" {
+        return Err("Items are deleted from the notebook window.".into());
+    }
     let mut a = st.lock().unwrap();
     let s = a.session()?;
     let r = if permanently {
@@ -358,6 +361,10 @@ fn open_link(app: tauri::AppHandle, st: St, id: Option<i64>, href: String) -> Re
     let dir = a.session()?.item_dir(id).map_err(err)?;
     let rel = percent_encoding::percent_decode_str(&href).decode_utf8_lossy().to_string();
     let Some(file) = media::contained(&dir, &rel) else { return Err("That link points outside the item.".into()) };
+    // A shared session may carry anything; only open what a note's media is, never a program.
+    if !media::openable(&file) {
+        return Err(format!("Snagbook only opens pictures, videos and documents from a note, not {rel}."));
+    }
     app.opener().open_path(file.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
 }
 
@@ -455,6 +462,7 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
         max_stills: cap.max_stills,
         ffmpeg: record::find_ffmpeg(),
         source: format!("region {w}×{h} at {x},{y}"),
+        finish_timeout: std::time::Duration::from_secs(60),
     };
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop2 = stop.clone();
@@ -805,6 +813,9 @@ fn selftest_requested() -> bool {
 /// One self-test line, as soon as it is known: a run that hangs still shows how far it got.
 #[tauri::command]
 fn selftest_log(line: String) {
+    if !selftest_requested() {
+        return;
+    }
     println!("{line}");
     if let Ok(out) = std::env::var("SNAGBOOK_SELFTEST_OUT") {
         use std::io::Write;
@@ -837,6 +848,10 @@ fn selftest_delete_session(st: St) -> Res<()> {
 
 #[tauri::command]
 fn selftest_done(app: tauri::AppHandle, ok: bool, lines: Vec<String>) {
+    // Only the self-test may end the app this way.
+    if !selftest_requested() {
+        return;
+    }
     let verdict = if ok { "SELFTEST PASS" } else { "SELFTEST FAIL" };
     println!("{verdict}");
     // A Windows GUI program has no console: SNAGBOOK_SELFTEST_OUT names a file for the verdict.

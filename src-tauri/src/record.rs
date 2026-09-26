@@ -54,8 +54,10 @@ pub fn bit_rate(w: u32, h: u32, fps: i64) -> i64 {
 }
 
 pub struct Encoder {
-    child: Child,
+    /// Shared so a stuck ffmpeg can be killed from outside the thread that feeds it.
+    child: Arc<std::sync::Mutex<Child>>,
     stdin: Option<ChildStdin>,
+    stderr: Option<std::process::ChildStderr>,
 }
 
 impl Encoder {
@@ -77,21 +79,42 @@ impl Encoder {
         }
         let mut child = cmd.spawn().map_err(|e| format!("ffmpeg could not start: {e}"))?;
         let stdin = child.stdin.take();
-        Ok(Encoder { child, stdin })
+        let stderr = child.stderr.take();
+        Ok(Encoder { child: Arc::new(std::sync::Mutex::new(child)), stdin, stderr })
+    }
+
+    pub fn killer(&self) -> Arc<std::sync::Mutex<Child>> {
+        self.child.clone()
     }
 
     pub fn frame(&mut self, rgba: &[u8]) -> Result<(), String> {
         self.stdin.as_mut().ok_or("ffmpeg has stopped")?.write_all(rgba).map_err(|e| format!("ffmpeg stopped taking frames: {e}"))
     }
 
-    pub fn finish(mut self) -> Result<(), String> {
+    /// Close ffmpeg's input and wait for it, at most `limit`; a stuck one is killed.
+    pub fn finish(mut self, limit: Duration) -> Result<(), String> {
         drop(self.stdin.take());
-        let out = self.child.wait_with_output().map_err(|e| e.to_string())?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(format!("ffmpeg failed: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("")))
+        let deadline = Instant::now() + limit;
+        let status = loop {
+            let polled = self.child.lock().unwrap().try_wait();
+            match polled {
+                Ok(Some(st)) => break st,
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                _ => {
+                    let _ = self.child.lock().unwrap().kill();
+                    return Err("ffmpeg did not finish, so the video was not saved".into());
+                }
+            }
+        };
+        if status.success() {
+            return Ok(());
         }
+        let mut err = String::new();
+        if let Some(mut e) = self.stderr.take() {
+            use std::io::Read;
+            let _ = e.read_to_string(&mut err);
+        }
+        Err(format!("ffmpeg failed: {}", err.lines().last().unwrap_or("")))
     }
 }
 
@@ -223,6 +246,8 @@ pub struct Plan {
     pub max_stills: i64,
     pub ffmpeg: Option<PathBuf>,
     pub source: String,
+    /// How long ffmpeg may take to finish after Stop before it is given up on.
+    pub finish_timeout: Duration,
 }
 
 pub struct Finished {
@@ -240,48 +265,50 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
     let dst = capture_math::output_size(src.0 as f64, src.1 as f64, plan.max_long_edge);
     let fps = plan.fps.clamp(1, 60);
     let mut problem = None;
-    let mut video: Option<(Encoder, String)> = None;
-    let mut video_name: Option<String> = None;
-    if let Some(ff) = &plan.ffmpeg {
-        let encoders = Command::new(ff).args(["-hide_banner", "-encoders"]).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
-        match pick_codec(&encoders, bit_rate(dst.0, dst.1, fps)) {
-            Some((ext, args)) => {
-                let name = format!("{}.{ext}", plan.stem);
-                match Encoder::start(ff, &args, src, dst, fps, &plan.dir.join(&name)) {
-                    Ok(e) => video = Some((e, name)),
-                    Err(e) => problem = Some(e),
-                }
-            }
-            None => problem = Some("this ffmpeg has no H.264 or VP9 encoder".into()),
-        }
-    } else {
-        problem = Some("ffmpeg was not found, so only the stills and the contact sheet were saved".into());
-    }
-
-    // ffmpeg gets its frames on a thread of its own: a slow start (a virus scan of a large
-    // ffmpeg, a busy disk) must not stop the screen being read or the clock. A frame travels
-    // with how many times it is to be shown, so a backlog costs no memory.
+    // Everything about ffmpeg happens on a thread of its own: asking it for its encoders,
+    // starting it, feeding it. The first run of a freshly downloaded ffmpeg can take seconds
+    // (a virus scan), and none of that may hold up the screen being read or the clock. A frame
+    // travels with how many times it is to be shown, so a backlog costs no memory.
     let (tx, rx) = std::sync::mpsc::sync_channel::<(Arc<RgbaImage>, u64)>(fps as usize * 10);
-    let writer = video.take().map(|(mut enc, name)| {
-        video_name = Some(name);
-        std::thread::spawn(move || -> Result<(), String> {
-            let mut failed = None;
-            for (frame, times) in rx {
-                for _ in 0..times {
-                    if failed.is_none() {
-                        if let Err(e) = enc.frame(frame.as_raw()) {
-                            failed = Some(e);
+    let killer: Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<Child>>>>> = Arc::new(std::sync::Mutex::new(None));
+    let writer = match plan.ffmpeg.clone() {
+        None => {
+            problem = Some("ffmpeg was not found, so only the stills and the contact sheet were saved".into());
+            None
+        }
+        Some(ff) => {
+            let (dir, stem) = (plan.dir.clone(), plan.stem.clone());
+            let slot = killer.clone();
+            let limit = plan.finish_timeout;
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let r = (|| -> Result<String, String> {
+                let encoders = Command::new(&ff).args(["-hide_banner", "-encoders"]).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                let (ext, args) = pick_codec(&encoders, bit_rate(dst.0, dst.1, fps)).ok_or("this ffmpeg has no H.264 or VP9 encoder")?;
+                let name = format!("{stem}.{ext}");
+                let mut enc = Encoder::start(&ff, &args, src, dst, fps, &dir.join(&name))?;
+                *slot.lock().unwrap() = Some(enc.killer());
+                let mut failed = None;
+                for (frame, times) in rx {
+                    for _ in 0..times {
+                        if failed.is_none() {
+                            if let Err(e) = enc.frame(frame.as_raw()) {
+                                failed = Some(e);
+                            }
                         }
                     }
                 }
-            }
-            let done = enc.finish();
-            match failed {
-                Some(e) => Err(e),
-                None => done,
-            }
-        })
-    });
+                let done = enc.finish(limit);
+                match failed {
+                    Some(e) => Err(e),
+                    None => done.map(|_| name),
+                }
+                })();
+                let _ = done_tx.send(r);
+            });
+            Some(done_rx)
+        }
+    };
     let frames_dir = plan.dir.join(format!("{}-frames", plan.stem));
     let _ = std::fs::remove_dir_all(&frames_dir);
     std::fs::create_dir_all(&frames_dir).map_err(|e| e.to_string())?;
@@ -291,14 +318,28 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
     let mut written: u64 = 0;
     let mut frame = Arc::new(first);
     let mut last_good = frame.clone();
+    // Frames not yet taken by the writer. Never block on it: a backlog becomes the latest
+    // frame shown for longer, and the loop keeps reading the screen and watching for Stop.
+    let mut pending: Option<(Arc<RgbaImage>, u64)> = None;
+    let offer = |pending: &mut Option<(Arc<RgbaImage>, u64)>, frame: &Arc<RgbaImage>, add: u64| {
+        if add > 0 {
+            let n = pending.take().map_or(0, |p| p.1);
+            *pending = Some((frame.clone(), n + add));
+        }
+        if let Some(p) = pending.take() {
+            if let Err(std::sync::mpsc::TrySendError::Full(p)) = tx.try_send(p) {
+                *pending = Some(p);
+            }
+        }
+    };
     loop {
         let t = start.elapsed().as_secs_f64();
         if frame.dimensions() == src {
             // The video keeps the wall clock: a slow grab repeats the frame instead of
             // speeding time up.
             let due = (t * fps as f64) as u64 + 1;
-            if due > written && writer.is_some() {
-                let _ = tx.send((frame.clone(), due - written));
+            if writer.is_some() {
+                offer(&mut pending, &frame, due.saturating_sub(written));
             }
             written = written.max(due);
             last_good = frame.clone();
@@ -322,19 +363,29 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
     }
     // Up to the moment Stop was pressed, whatever the last grab cost.
     let due = (start.elapsed().as_secs_f64() * fps as f64) as u64;
-    if due > written && writer.is_some() {
-        let _ = tx.send((last_good.clone(), due - written));
+    if writer.is_some() {
+        offer(&mut pending, &last_good, due.saturating_sub(written));
+        let deadline = Instant::now() + plan.finish_timeout;
+        while pending.is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            offer(&mut pending, &last_good, 0);
+        }
     }
     written = written.max(due);
     let duration = written as f64 / fps as f64;
     drop(tx);
-    if let Some(w) = writer {
-        match w.join().unwrap_or_else(|_| Err("the video writer stopped unexpectedly".into())) {
-            Ok(()) => {}
-            Err(e) => {
-                problem = Some(e);
-                video_name = None;
+    let mut video_name = None;
+    if let Some(done) = writer {
+        let result = done.recv_timeout(plan.finish_timeout + Duration::from_secs(2)).unwrap_or_else(|_| {
+            // Stuck writing to an ffmpeg that stopped reading: kill it, which ends the write.
+            if let Some(child) = killer.lock().unwrap().as_ref() {
+                let _ = child.lock().unwrap().kill();
             }
+            done.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| Err("ffmpeg did not finish, so the video was not saved".into()))
+        });
+        match result {
+            Ok(name) => video_name = Some(name),
+            Err(e) => problem = Some(e),
         }
     }
 
@@ -446,7 +497,7 @@ mod tests {
             s2.store(true, Ordering::SeqCst);
         });
         let ff = with_ffmpeg();
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: ff.clone(), source: "test".into() };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: ff.clone(), source: "test".into(), finish_timeout: Duration::from_secs(60) };
         let f = run(grab, plan, stop).unwrap();
         assert!((2.3..3.2).contains(&f.duration), "{}", f.duration);
         let info: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("clip-001.json")).unwrap()).unwrap();
@@ -483,7 +534,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(3000));
             s2.store(true, Ordering::SeqCst);
         });
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(slow), source: "test".into() };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(slow), source: "test".into(), finish_timeout: Duration::from_secs(60) };
         // Big frames fill the pipe at once, so a blocking write would stall the grab loop.
         let f = run(|| Ok(RgbaImage::from_pixel(1280, 720, Rgba([200, 30, 30, 255]))), plan, stop).unwrap();
         assert_eq!(f.video.as_deref(), Some("clip-001.mp4"), "{:?}", f.problem);
@@ -492,11 +543,61 @@ mod tests {
         assert!(info["stills"].as_array().unwrap().len() >= 3, "stills kept coming while ffmpeg was slow");
     }
 
+    /// A stand-in ffmpeg whose encoder list takes longer than the whole recording (a first
+    /// run on Windows, scanned by the virus checker) must not shorten the recording either.
+    #[cfg(unix)]
+    #[test]
+    fn a_slow_first_answer_from_ffmpeg_does_not_stop_the_clock() {
+        let Some(real) = find_ffmpeg() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let slow = dir.path().join("slow-ffmpeg");
+        std::fs::write(&slow, format!("#!/bin/sh\ncase \"$*\" in *-encoders*) sleep 4;; esac\nexec '{0}' \"$@\"\n", real.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let s2 = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(3000));
+            s2.store(true, Ordering::SeqCst);
+        });
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(slow), source: "test".into(), finish_timeout: Duration::from_secs(60) };
+        let f = run(|| Ok(RgbaImage::from_pixel(320, 240, Rgba([30, 30, 200, 255]))), plan, stop).unwrap();
+        assert!(f.duration >= 2.8, "the clip is {}s long, not 3", f.duration);
+        assert_eq!(f.video.as_deref(), Some("clip-001.mp4"), "{:?}", f.problem);
+    }
+
+    /// An ffmpeg that never reads its input must not hang Stop: it is killed after the
+    /// deadline, the stills are kept, and the reason is given.
+    #[cfg(unix)]
+    #[test]
+    fn a_stuck_ffmpeg_does_not_hang_stop() {
+        let Some(real) = find_ffmpeg() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let stuck = dir.path().join("stuck-ffmpeg");
+        std::fs::write(&stuck, format!("#!/bin/sh\ncase \"$*\" in *-encoders*) exec '{0}' \"$@\";; esac\nexec sleep 600\n", real.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let s2 = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(12000));
+            s2.store(true, Ordering::SeqCst);
+        });
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(stuck), source: "test".into(), finish_timeout: Duration::from_secs(2) };
+        let t0 = Instant::now();
+        // Big frames: the pipe and then the queue fill within the 12 seconds.
+        let f = run(|| Ok(RgbaImage::from_pixel(1280, 720, Rgba([9, 9, 9, 255]))), plan, stop).unwrap();
+        assert!(t0.elapsed() < Duration::from_secs(25), "Stop took {:?}", t0.elapsed());
+        assert!(f.video.is_none() && f.problem.as_deref().unwrap_or("").contains("ffmpeg"), "{:?}", f.problem);
+        assert!(f.duration >= 11.5, "{}", f.duration);
+        assert!(dir.path().join("clip-001-frames/0012.jpg").is_file(), "the stills are kept");
+    }
+
     #[test]
     fn without_ffmpeg_the_stills_still_come() {
         let dir = tempfile::tempdir().unwrap();
         let stop = Arc::new(AtomicBool::new(true));
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-002".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into() };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-002".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), finish_timeout: Duration::from_secs(60) };
         let f = run(|| Ok(RgbaImage::from_pixel(10, 10, Rgba([1, 2, 3, 255]))), plan, stop).unwrap();
         assert!(f.video.is_none());
         assert!(f.problem.unwrap().contains("ffmpeg"));

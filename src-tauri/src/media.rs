@@ -44,6 +44,25 @@ pub fn contained(dir: &Path, rel: &str) -> Option<PathBuf> {
     Some(full)
 }
 
+/// Whether a note's link may hand this file to the system: pictures, videos and documents,
+/// never a program or a script.
+pub fn openable(p: &Path) -> bool {
+    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "heic" | "tif" | "tiff" | "mp4" | "m4v" | "mov" | "webm" | "mkv"
+            | "pdf" | "txt" | "md" | "log" | "csv" | "json"
+    )
+}
+
+/// Largest piece of a file sent for one request: a video is read in pieces, not whole.
+pub const MAX_PIECE: u64 = 8 * 1024 * 1024;
+
+/// The range actually sent: at most MAX_PIECE bytes from `start`.
+pub fn capped(start: u64, end: u64) -> (u64, u64) {
+    (start, end.min(start + MAX_PIECE - 1))
+}
+
 fn content_type(p: &Path) -> &'static str {
     match p.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref() {
         Some("png") => "image/png",
@@ -115,6 +134,7 @@ pub fn serve(app: &tauri::AppHandle, request: &Request<Vec<u8>>) -> Response<Vec
     match range {
         Some(None) => Response::builder().status(StatusCode::RANGE_NOT_SATISFIABLE).header(header::CONTENT_RANGE, format!("bytes */{len}")).body(Vec::new()).unwrap(),
         Some(Some((start, end))) => {
+            let (start, end) = capped(start, end);
             let mut buf = vec![0; (end - start + 1) as usize];
             if f.seek(SeekFrom::Start(start)).and_then(|_| f.read_exact(&mut buf)).is_err() {
                 return status(StatusCode::INTERNAL_SERVER_ERROR);
@@ -173,6 +193,22 @@ mod tests {
         assert_eq!(parse_range("bytes=10-", 10), None);
         assert_eq!(parse_range("items=0-1", 10), None);
         assert_eq!(parse_range("bytes=0-1", 0), None);
+    }
+
+    #[test]
+    fn only_media_and_documents_are_opened() {
+        assert!(openable(Path::new("/s/01-x/media/clip-001.MP4")));
+        assert!(openable(Path::new("/s/01-x/notes.md")));
+        for bad in ["payload.exe", "run.bat", "x.sh", "x.desktop", "x.lnk", "x.ps1", "x.app", "noext"] {
+            assert!(!openable(Path::new(bad)), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_video_is_served_in_pieces() {
+        assert_eq!(capped(0, 999), (0, 999));
+        assert_eq!(capped(0, 1 << 30), (0, MAX_PIECE - 1), "bytes=0- on a 1 GB file");
+        assert_eq!(capped(10, 20), (10, 20));
     }
 
     #[test]
