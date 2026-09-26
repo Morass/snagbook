@@ -444,15 +444,20 @@ fn target_item(a: &mut App) -> Res<i64> {
     }
 }
 
+/// The recording's file name, held with an empty file until ffmpeg writes it: a video
+/// pasted meanwhile would otherwise be given the same name and be overwritten.
+fn hold_clip_name(s: &Session, id: i64) -> Res<PathBuf> {
+    let (_, path) = s.reserve_media_name(id, "clip", "mp4").map_err(err)?;
+    std::fs::write(&path, b"").map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u32), monitor: (i32, i32, u32, u32)) -> Res<()> {
     let st = app.state::<Mutex<App>>();
     let mut a = st.lock().unwrap();
     let id = target_item(&mut a)?;
     let cap = a.store.config.capture.clone();
-    let (_, path) = a.session()?.reserve_media_name(id, "clip", "mp4").map_err(err)?;
-    // Hold the name with an empty file until ffmpeg writes it: a video pasted meanwhile would
-    // otherwise be given the same name and be overwritten.
-    std::fs::write(&path, b"").map_err(|e| e.to_string())?;
+    let path = hold_clip_name(a.session()?, id)?;
     drop(a);
     let dir = path.parent().ok_or("no media folder")?.to_path_buf();
     let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).ok_or("no name")?;
@@ -960,4 +965,20 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("Snagbook could not start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_video_pasted_during_a_recording_gets_its_own_name() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        let id = s.add_item(None, Utc::now()).unwrap().id;
+        let held = hold_clip_name(&s, id).unwrap();
+        assert_eq!(held.file_name().unwrap(), "clip-001.mp4");
+        assert_eq!(s.save_media(id, b"pasted", "clip", "mp4").unwrap(), "media/clip-002.mp4");
+        assert_eq!(std::fs::read(&held).unwrap(), b"");
+    }
 }
