@@ -32,7 +32,7 @@ Download the package for your system from the [Releases](../../releases) page:
 
 - **Debian, Ubuntu and relatives:** `sudo apt install ./Snagbook_0.1.0_amd64.deb`
 - **Any other Linux:** the `.AppImage`. Make it executable (`chmod +x Snagbook_0.1.0_amd64.AppImage`) and run it.
-- **Windows:** the `Snagbook_0.1.0_x64-setup.exe` installer.
+- **Windows:** the `Snagbook_0.1.0_x64-setup.exe` installer. It is not signed, so SmartScreen warns the first time: choose **More info**, then **Run anyway**.
 
 To save recordings as video, Snagbook uses **ffmpeg**. On Linux install it with your package manager (`sudo apt install ffmpeg`); on Windows, `winget install ffmpeg`, or put `ffmpeg.exe` next to `snagbook.exe`. Without it, recordings keep their still frames and contact sheet, and Snagbook tells you the video is missing.
 
