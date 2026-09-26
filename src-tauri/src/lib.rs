@@ -450,6 +450,9 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
     let id = target_item(&mut a)?;
     let cap = a.store.config.capture.clone();
     let (_, path) = a.session()?.reserve_media_name(id, "clip", "mp4").map_err(err)?;
+    // Hold the name with an empty file until ffmpeg writes it: a video pasted meanwhile would
+    // otherwise be given the same name and be overwritten.
+    std::fs::write(&path, b"").map_err(|e| e.to_string())?;
     drop(a);
     let dir = path.parent().ok_or("no media folder")?.to_path_buf();
     let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).ok_or("no name")?;

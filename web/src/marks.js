@@ -184,6 +184,9 @@ export function encodeDocument(doc) {
   return JSON.stringify(sortKeys(doc), null, 2);
 }
 
+/// What a new mark stores for `opacity`: null when solid, so files stay as they were.
+export const markOpacity = (o) => (o >= 0.995 ? null : Math.round(Math.max(0.1, o) * 100) / 100);
+
 /// Stroke width that looks the same on any picture size.
 export const defaultWidth = (w, h) => Math.min(12, Math.round(Math.max(3, Math.max(w, h) / 320)));
 /// Font size of a new text mark.

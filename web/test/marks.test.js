@@ -81,3 +81,14 @@ test("default sizes follow the picture", () => {
   assert.equal(M.textSize(3), 18);
   assert.equal(M.textSize(8), 40);
 });
+
+test("opacity is optional in the file, as on the macOS app", () => {
+  assert.equal(M.markOpacity(1), null);
+  assert.equal(M.markOpacity(0.456), 0.46);
+  assert.equal(M.markOpacity(0.01), 0.1);
+  const d = M.newDocument(10, 20);
+  d.marks.push({ tool: "pen", points: [M.pt(1, 2)], color: "#fff", width: 3, opacity: M.markOpacity(1) });
+  assert.ok(!M.encodeDocument(d).includes("opacity"), "a solid mark writes no opacity");
+  d.marks[0].opacity = 0.5;
+  assert.equal(M.parseDocument(M.encodeDocument(d), 10, 20).marks[0].opacity, 0.5);
+});

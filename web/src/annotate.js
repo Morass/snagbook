@@ -19,6 +19,7 @@ let tool = "highlighter";
 const colors = { highlighter: M.PALETTE[1] };
 let color = M.PALETTE[1];
 let width = 4;
+let opacity = 1;
 let undoStack = [];
 let redoStack = [];
 let draft = null;
@@ -69,6 +70,13 @@ function setColor(c) {
   color = c;
   colors[tool] = c;
   if (tool === "select" && selected != null) commit((d) => (d.marks[selected].color = c));
+  renderBar();
+}
+
+/// How solid new marks are; with Select, the selected mark's.
+function setOpacity(o) {
+  opacity = Math.min(1, Math.max(0.1, o));
+  if (tool === "select" && selected != null && doc.marks[selected].tool !== "pixelate") commit((d) => (d.marks[selected].opacity = M.markOpacity(opacity)));
   renderBar();
 }
 
@@ -133,6 +141,11 @@ $("stage").addEventListener("mousedown", (e) => {
   if (tool === "select") {
     selected = null;
     for (let i = doc.marks.length - 1; i >= 0; i--) if (M.hit(doc.marks[i], p, 6 / scale())) { selected = i; break; }
+    // The slider shows the selected mark's opacity, so it can be changed from there.
+    if (selected != null) {
+      opacity = doc.marks[selected].opacity ?? 1;
+      renderBar();
+    }
     moveFrom = selected == null ? null : p;
     movedOnce = false;
     if (e.detail === 2 && selected != null && doc.marks[selected].tool === "text") beginText(doc.marks[selected].points[0], selected);
@@ -143,10 +156,10 @@ $("stage").addEventListener("mousedown", (e) => {
     beginText(p, null);
   } else if (tool === "counter") {
     const n = M.nextCounter(doc);
-    commit((d) => d.marks.push({ tool: "counter", points: [p], color, width, number: n }));
+    commit((d) => d.marks.push({ tool: "counter", points: [p], color, width, number: n, opacity: M.markOpacity(opacity) }));
   } else {
     dragStart = p;
-    draft = { tool, points: M.isPath(tool) ? [p] : [p, p], color: tool === "pixelate" ? "#000000" : color, width: tool === "highlighter" ? width * 4 : width };
+    draft = { tool, points: M.isPath(tool) ? [p] : [p, p], color: tool === "pixelate" ? "#000000" : color, width: tool === "highlighter" ? width * 4 : width, opacity: tool === "pixelate" ? null : M.markOpacity(opacity) };
   }
   draw();
 });
@@ -230,7 +243,7 @@ function endText(keep) {
   textBox.hidden = true;
   if (!keep) return draw();
   if (index != null) commit((d) => (text ? (d.marks[index].text = text) : d.marks.splice(index, 1)));
-  else if (text) commit((d) => d.marks.push({ tool: "text", points: [anchor], color, width: M.textSize(width), text }));
+  else if (text) commit((d) => d.marks.push({ tool: "text", points: [anchor], color, width: M.textSize(width), text, opacity: M.markOpacity(opacity) }));
   else draw();
 }
 
@@ -274,6 +287,8 @@ addEventListener("keydown", (e) => {
   const t = M.TOOLS.find((x) => x.key === k);
   if (t) return setTool(t.id);
   if (/^[1-6]$/.test(k)) return setColor(M.PALETTE[Number(k) - 1]);
+  if (k === ",") return setOpacity(opacity - 0.1);
+  if (k === ".") return setOpacity(opacity + 0.1);
   if (k === "[") return setWidth(width - 1);
   if (k === "]") return setWidth(width + 1);
 });
@@ -337,9 +352,14 @@ function renderBar() {
     cs.append(b);
   });
   $("width").textContent = String(width);
+  $("opacity").value = String(Math.round(opacity * 100));
+  $("opacity-n").textContent = Math.round(opacity * 100) + "%";
 }
 
 $("thinner").addEventListener("click", () => setWidth(width - 1));
+$("opacity").addEventListener("input", (e) => setOpacity(Number(e.target.value) / 100));
+// Keys go to the picture, not the slider, once it has been dragged.
+$("opacity").addEventListener("change", () => $("opacity").blur());
 $("thicker").addEventListener("click", () => setWidth(width + 1));
 $("undo").addEventListener("click", undo);
 $("done").addEventListener("click", done);

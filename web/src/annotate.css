@@ -13,6 +13,10 @@ body { display: flex; flex-direction: column; user-select: none; -webkit-user-se
 .grow { flex: 1; }
 .swatch { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(127, 127, 127, 0.6) !important; padding: 0 !important; margin: 0 2px; }
 .swatch.on { outline: 2.5px solid var(--sel); outline-offset: 1px; }
+#opacity-box { display: inline-flex; align-items: center; gap: 6px; }
+#opacity { width: 90px; }
+#opacity-n { min-width: 34px; font-variant-numeric: tabular-nums; }
+.half { opacity: 0.7; }
 #width { min-width: 20px; text-align: center; font-variant-numeric: tabular-nums; }
 #stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 #canvas { max-width: calc(100% - 32px); max-height: calc(100% - 32px); box-shadow: 0 2px 14px rgba(0, 0, 0, 0.25); background: #fff; cursor: crosshair; }

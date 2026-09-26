@@ -29,6 +29,39 @@ pub fn find_ffmpeg() -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(exe)).find(|p| p.is_file()))
 }
 
+/// `ffmpeg -encoders`, given at most `limit`: a hanging ffmpeg is killed, not waited on.
+pub fn encoder_list(ff: &Path, limit: Duration) -> Result<String, String> {
+    let mut cmd = Command::new(ff);
+    cmd.args(["-hide_banner", "-encoders"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("ffmpeg could not start: {e}"))?;
+    let mut out = child.stdout.take().ok_or("no output from ffmpeg")?;
+    // Read on a thread: a long list would otherwise fill the pipe while we wait.
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        use std::io::Read;
+        let _ = out.read_to_string(&mut s);
+        s
+    });
+    let deadline = Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("ffmpeg did not answer, so the video was not saved".into());
+            }
+        }
+    }
+    Ok(reader.join().unwrap_or_default())
+}
+
 /// How to encode: the extension and ffmpeg's output arguments, best first. H.264 in MP4 plays
 /// everywhere Snagbook runs, including the macOS app; VP9 in WebM is the free fallback.
 pub fn pick_codec(encoders: &str, bitrate: i64) -> Option<(&'static str, Vec<String>)> {
@@ -296,7 +329,9 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
     // starting it, feeding it. The first run of a freshly downloaded ffmpeg can take seconds
     // (a virus scan), and none of that may hold up the screen being read or the clock. A frame
     // travels with how many times it is to be shown, so a backlog costs no memory.
-    let (tx, rx) = std::sync::mpsc::sync_channel::<(Arc<RgbaImage>, u64)>(fps as usize * 10);
+    // A few frames of slack only: each is a whole picture (8 MB at 1080p), and a longer backlog
+    // is merged into the latest frame anyway.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<(Arc<RgbaImage>, u64)>(8);
     let killer: Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<Child>>>>> = Arc::new(std::sync::Mutex::new(None));
     let writer = match plan.ffmpeg.clone() {
         None => {
@@ -310,7 +345,7 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
             let (done_tx, done_rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let r = (|| -> Result<String, String> {
-                let encoders = Command::new(&ff).args(["-hide_banner", "-encoders"]).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                let encoders = encoder_list(&ff, Duration::from_secs(20))?;
                 let (ext, args) = pick_codec(&encoders, bit_rate(dst.0, dst.1, fps)).ok_or("this ffmpeg has no H.264 or VP9 encoder")?;
                 let name = format!("{stem}.{ext}");
                 let mut enc = Encoder::start(&ff, &args, src, dst, fps, &dir.join(&name))?;
@@ -430,6 +465,13 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
     }
     for (_, p) in &stills {
         let _ = std::fs::remove_file(p);
+    }
+
+    // The app reserves "<stem>.mp4" with an empty file while recording; drop it unless it is
+    // the video.
+    let placeholder = plan.dir.join(format!("{}.mp4", plan.stem));
+    if video_name.as_deref() != Some(&format!("{}.mp4", plan.stem)) && std::fs::metadata(&placeholder).map(|m| m.len() == 0).unwrap_or(false) {
+        let _ = std::fs::remove_file(&placeholder);
     }
 
     let thumb_times: Vec<f64> = thumbs.iter().map(|t| t.0).collect();
@@ -641,6 +683,30 @@ mod tests {
         let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), finish_timeout: Duration::from_secs(60) };
         let f = run(grab, plan, stop).unwrap();
         assert!(f.duration < 2.0, "the clip runs {}s past a Stop at about 1.3s", f.duration);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hanging_encoder_list_is_given_up_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let hang = dir.path().join("hang");
+        std::fs::write(&hang, "#!/bin/sh\nexec sleep 600\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hang, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let t0 = Instant::now();
+        assert!(encoder_list(&hang, Duration::from_millis(500)).is_err());
+        assert!(t0.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn an_unused_reservation_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("clip-004.mp4"), b"").unwrap();
+        let stop = Stop::new();
+        stop.request();
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-004".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), finish_timeout: Duration::from_secs(60) };
+        run(|| Ok(RgbaImage::from_pixel(10, 10, Rgba([1, 2, 3, 255]))), plan, stop).unwrap();
+        assert!(!dir.path().join("clip-004.mp4").exists(), "no ffmpeg: the empty reservation goes");
     }
 
     #[test]

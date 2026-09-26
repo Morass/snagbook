@@ -56,7 +56,26 @@ function pixelate(ctx, original, box, doc) {
   ctx.restore();
 }
 
+/// A see-through mark is drawn whole on its own layer, then laid on at its opacity, so
+/// overlapping parts (an arrow's head and shaft, text's outline) do not double up — as the
+/// macOS app's transparency layer does.
 export function drawMark(ctx, m, original, doc) {
+  const alpha = Math.min(1, Math.max(0.1, m.opacity ?? 1));
+  if (alpha >= 1 || m.tool === "pixelate") return drawSolid(ctx, m, original, doc);
+  const layer = ctx.canvas.ownerDocument.createElement("canvas");
+  layer.width = ctx.canvas.width;
+  layer.height = ctx.canvas.height;
+  const l = layer.getContext("2d");
+  l.setTransform(ctx.getTransform());
+  drawSolid(l, m, original, doc);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
+}
+
+function drawSolid(ctx, m, original, doc) {
   const color = m.color;
   ctx.save();
   ctx.lineCap = "round";

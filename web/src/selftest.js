@@ -166,6 +166,21 @@ export async function runSelfTest(shell, invoke) {
     const ring = await pixel("media/shot-001.png", 0.2, 0.5);
     check(ring && ring[0] > 200 && ring[1] < 110 && ring[2] < 110, "the circle is drawn into the picture: " + JSON.stringify(ring));
 
+    // 10a. a see-through mark lets the picture show through, drawn by the real canvas
+    {
+      const { renderDocument } = await import("./markrender.js");
+      const white = Object.assign(document.createElement("canvas"), { width: 100, height: 60 });
+      const w = white.getContext("2d");
+      w.fillStyle = "#ffffff";
+      w.fillRect(0, 0, 100, 60);
+      const doc = { version: 1, width: 100, height: 60, crop: null, marks: [{ tool: "rect", points: [{ x: 20, y: 10 }, { x: 80, y: 50 }], color: "#ff0000", width: 8 }] };
+      const px = () => [...renderDocument(doc, white, (a, b) => Object.assign(document.createElement("canvas"), { width: a, height: b })).getContext("2d").getImageData(20, 30, 1, 1).data];
+      const solid = px();
+      doc.marks[0].opacity = 0.4;
+      const faint = px();
+      check(solid[1] < 40 && faint[0] > 245 && faint[1] > 130 && faint[1] < 180, `a 40% mark is pink over white, a solid one red: ${solid} / ${faint}`);
+    }
+
     // 10b. marking up a picture again keeps its marks and its original
     marked = nextMarked();
     await invoke("selftest_open_markup", { id: 1, rel: "media/shot-001.png", script: "count" });
@@ -221,6 +236,8 @@ export async function runSelfTest(shell, invoke) {
     await invoke("finish_screenshot", { rect: { x: 0.2, y: 0.2, w: 0.4, h: 0.3 } });
     check(await until(async () => (await invoke("recording_started")) != null), "recording starts when the area is chosen");
     check(await until(() => $("rec").textContent === "Stop"), "the Record button turns into Stop");
+    const pasted = await invoke("save_media", { id: 1, base64: "AAAA", mime: "video/mp4", name: "" });
+    check(pasted === "media/clip-002.mp4", "a video pasted during the recording gets its own name: " + pasted);
     let bar = null;
     await until(async () => (bar = await invoke("recbar_size")) != null && bar[1] < 80, 10000);
     check(bar && bar[1] < 80 && bar[0] > 150, "the timer window is a small bar: " + JSON.stringify(bar));

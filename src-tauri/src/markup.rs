@@ -61,8 +61,16 @@ pub fn info(f: &Files, p: &Pending) -> Info {
     }
 }
 
+/// A different temporary name for every write, even two at once in one process.
+fn rand_suffix() -> u32 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    t ^ N.fetch_add(0x9e37_79b9, Ordering::Relaxed) ^ std::process::id()
+}
+
 fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
-    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    let tmp = path.with_extension(format!("tmp{:08x}", rand_suffix()));
     fs::write(&tmp, data).map_err(|e| e.to_string())?;
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);

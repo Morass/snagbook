@@ -97,6 +97,18 @@ pub fn parse_range(value: &str, len: u64) -> Option<(u64, u64)> {
     (start <= end && start < len).then_some((start, end))
 }
 
+/// What to send for a request: None for the whole (small) file, Some(None) for an
+/// unsatisfiable range, Some(Some((start, end))) for a piece of at most MAX_PIECE bytes. A large
+/// file asked for whole is still sent in pieces, so it is never read into memory at once.
+pub fn byte_range(header: Option<&str>, len: u64) -> Option<Option<(u64, u64)>> {
+    match header.map(|v| parse_range(v, len)) {
+        Some(Some((a, b))) => Some(Some(capped(a, b))),
+        Some(None) => Some(None),
+        None if len > MAX_PIECE => Some(Some(capped(0, len - 1))),
+        None => None,
+    }
+}
+
 /// "/item/5/media/shot-001.png" -> (5, "media/shot-001.png")
 pub fn parse_path(path: &str) -> Option<(i64, String)> {
     let decoded = percent_encoding::percent_decode_str(path).decode_utf8().ok()?.to_string();
@@ -124,7 +136,7 @@ pub fn serve(app: &tauri::AppHandle, request: &Request<Vec<u8>>) -> Response<Vec
     let Ok(mut f) = File::open(&file) else { return status(StatusCode::NOT_FOUND) };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let kind = content_type(&file);
-    let range = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).map(|v| parse_range(v, len));
+    let range = byte_range(request.headers().get(header::RANGE).and_then(|v| v.to_str().ok()), len);
     // The page's own origin differs from this scheme's; the files are the page's to read.
     let builder = Response::builder()
         .header(header::CONTENT_TYPE, kind)
@@ -134,7 +146,6 @@ pub fn serve(app: &tauri::AppHandle, request: &Request<Vec<u8>>) -> Response<Vec
     match range {
         Some(None) => Response::builder().status(StatusCode::RANGE_NOT_SATISFIABLE).header(header::CONTENT_RANGE, format!("bytes */{len}")).body(Vec::new()).unwrap(),
         Some(Some((start, end))) => {
-            let (start, end) = capped(start, end);
             let mut buf = vec![0; (end - start + 1) as usize];
             if f.seek(SeekFrom::Start(start)).and_then(|_| f.read_exact(&mut buf)).is_err() {
                 return status(StatusCode::INTERNAL_SERVER_ERROR);
@@ -202,6 +213,14 @@ mod tests {
         for bad in ["payload.exe", "run.bat", "x.sh", "x.desktop", "x.lnk", "x.ps1", "x.app", "noext"] {
             assert!(!openable(Path::new(bad)), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_large_file_asked_for_whole_is_served_in_pieces() {
+        assert_eq!(byte_range(None, 1 << 30), Some(Some((0, MAX_PIECE - 1))), "no Range on a 1 GB video");
+        assert_eq!(byte_range(Some("bytes=0-"), 1 << 30), Some(Some((0, MAX_PIECE - 1))));
+        assert_eq!(byte_range(None, 1000), None, "a small picture is sent whole");
+        assert_eq!(byte_range(Some("bytes=5000-"), 1000), Some(None));
     }
 
     #[test]

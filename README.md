@@ -84,7 +84,7 @@ A new screenshot opens in the mark-up window; double-click any picture in a note
 | C | Crop (a click removes the crop) |
 | V | Select: click a mark to move it, recolour it, or delete it with Delete |
 
-1 to 6 choose a colour, [ and ] make lines thinner or thicker, Shift while dragging makes squares and circles, and snaps arrows to 45°. Ctrl+Z undoes, Ctrl+Shift+Z redoes. **Enter** (Done) saves; **Esc** keeps the picture as it was (No Marks); **Ctrl+Backspace** throws a new screenshot away (Discard). To have screenshots go straight into the note instead, turn mark-up off in Settings.
+1 to 6 choose a colour, [ and ] make lines thinner or thicker, the **opacity** slider (or , and .) makes marks see-through so the picture shows under them, Shift while dragging makes squares and circles, and snaps arrows to 45°. Ctrl+Z undoes, Ctrl+Shift+Z redoes. **Enter** (Done) saves; **Esc** keeps the picture as it was (No Marks); **Ctrl+Backspace** throws a new screenshot away (Discard). To have screenshots go straight into the note instead, turn mark-up off in Settings.
 
 The untouched picture is kept beside the marked-up one (`shot-001.orig.png`, with the marks in `shot-001.marks.json`), so marks can be changed or removed later: remove every mark and the original comes back.
 
