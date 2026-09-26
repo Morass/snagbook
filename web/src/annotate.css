@@ -6,7 +6,11 @@ body { display: flex; flex-direction: column; user-select: none; -webkit-user-se
 #bar button { border: 1px solid transparent; background: transparent; color: inherit; font: inherit; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
 #bar button:hover { background: rgba(127, 127, 127, 0.15); }
 #bar button.on { background: rgba(10, 100, 216, 0.18); border-color: rgba(10, 100, 216, 0.45); }
-#bar button.primary { background: var(--sel); color: #fff; }
+/* Icons that never shrink or wrap apart: on a narrow window the words were squeezed. */
+.ends { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-left: auto; }
+#bar button.icon { font-size: 17px; min-width: 32px; }
+#bar button.tick { width: 32px; height: 32px; border-radius: 50%; background: #2fb34a; color: #fff; font-size: 19px; font-weight: 700; padding: 0; line-height: 1; }
+#bar button.tick:hover { background: #28a043; }
 #bar button.danger { color: #d92c20; }
 #tools button { min-width: 30px; font-size: 15px; padding: 3px 6px; }
 .sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }

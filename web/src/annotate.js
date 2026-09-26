@@ -392,10 +392,9 @@ async function start() {
   width = M.defaultWidth(canvas.width, canvas.height);
   document.title = "Mark up — " + info.rel.split("/").pop();
   $("discard").hidden = !info.isNew;
-  $("discard").title = "Throw this screenshot away  Ctrl+Backspace";
-  $("skip").textContent = info.isNew ? "No Marks" : "Cancel";
-  $("skip").title = info.isNew ? "Keep the screenshot as it is  Esc" : "Keep the picture as it was  Esc";
-  $("done").title = "Save  Enter";
+  $("discard").title = "Discard: throw this screenshot away  Ctrl+Backspace";
+  $("skip").title = info.isNew ? "No marks: keep the screenshot as it is  Esc" : "Cancel: keep the picture as it was  Esc";
+  $("done").title = "Done: save the marks  Enter";
   $("undo").title = "Undo  Ctrl+Z";
   renderBar();
   draw();
