@@ -343,3 +343,35 @@ fn delete_that_trashes_never_asks() {
     s.delete_item(rec.id, Session::trash_or_delete(|p| { trashed = Some(p.to_path_buf()); Ok(()) }, |_| panic!("asked although the Trash worked"))).unwrap();
     assert_eq!(trashed.unwrap().file_name().unwrap(), "01-new");
 }
+
+/// Writes a session for the macOS app to open (see the interop check in the hub's notes):
+/// `SNAG_INTEROP_OUT=<dir> cargo test -p snagbook-core -- --ignored interop`.
+#[test]
+#[ignore]
+fn interop_write_a_session_for_the_macos_app() {
+    let Ok(out) = std::env::var("SNAG_INTEROP_OUT") else { return };
+    let mut s = Session::create(&out, &Config::default(), date("2026-09-26T10:00:00Z"), "d35c7070").unwrap();
+    s.set_title("Made on Linux").unwrap();
+    s.add_item(Some("Main menu: logo"), date("2026-09-26T10:01:00Z")).unwrap();
+    s.add_item(Some("Příliš žluťoučký kůň"), date("2026-09-26T10:02:00Z")).unwrap();
+    s.write_note(1, "**Bug:** the logo overlaps.\n\n![](media/shot-001.png)\n").unwrap();
+    s.save_media(1, b"\x89PNG not really", "shot", "png").unwrap();
+    s.delete_item(2, |p| std::fs::remove_dir_all(p).map_err(Into::into)).unwrap();
+    s.add_item(Some("Third"), date("2026-09-26T10:03:00Z")).unwrap();
+    println!("{}", s.dir.display());
+}
+
+/// Reads a session the macOS app wrote: `SNAG_INTEROP_IN=<session dir> cargo test ... -- --ignored interop`.
+#[test]
+#[ignore]
+fn interop_read_a_session_from_the_macos_app() {
+    let Ok(dir) = std::env::var("SNAG_INTEROP_IN") else { return };
+    let mut s = Session::open(&dir, "h").unwrap();
+    let titles: Vec<_> = s.manifest.items.iter().map(|r| r.title.clone()).collect();
+    println!("titles={titles:?} next={}", s.manifest.next_item);
+    let ids: Vec<i64> = s.manifest.items.iter().map(|r| r.id).collect();
+    assert!(ids.iter().any(|id| s.read_note(*id).unwrap().contains("from the Mac")), "a note written on the Mac reads back");
+    let added = s.add_item(Some("Added on Linux"), Utc::now()).unwrap();
+    assert_eq!(added.id, s.manifest.items.iter().map(|r| r.id).max().unwrap());
+    s.write_note(added.id, "written by the desktop app\n").unwrap();
+}
