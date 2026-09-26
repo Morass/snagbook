@@ -30,6 +30,10 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     /// How solid new marks are, 10–100%. With Select, it changes the selected mark.
     @Published var opacity: Double = 1
     @Published var selected: Int?
+    /// True while the opacity slider is being dragged: one drag is one step to undo, however
+    /// many values it passes through.
+    var sliding = false { didSet { if !sliding { slideCommitted = false } } }
+    private var slideCommitted = false
     private var undoStack: [MarkDocument] = []
     private var redoStack: [MarkDocument] = []
     private var window: NSWindow!
@@ -268,7 +272,7 @@ struct AnnotatorView: View {
                 Button { a.width = min(40, a.width + 1) } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("Thicker (])")
                 Divider().frame(height: 20).padding(.horizontal, 4)
                 Image(systemName: "circle.lefthalf.filled").foregroundStyle(.secondary).help("Opacity")
-                Slider(value: Binding(get: { a.opacity }, set: { a.setOpacity($0) }), in: 0.1...1)
+                Slider(value: Binding(get: { a.opacity }, set: { a.setOpacity($0) }), in: 0.1...1, onEditingChanged: { a.sliding = $0 })
                     .frame(minWidth: 40, idealWidth: 90, maxWidth: 90)
                     .help("How solid marks are: drag left to see the picture through them (, and . step it)")
                 Text("\(Int((a.opacity * 100).rounded()))%").font(.caption.monospacedDigit()).frame(width: 34, alignment: .leading)
@@ -314,7 +318,13 @@ extension Annotator {
     func setOpacity(_ v: Double) {
         opacity = min(1, max(0.1, v))
         guard tool == .select, let i = selected, doc.marks.indices.contains(i), doc.marks[i].tool != .pixelate else { return }
+        if sliding && slideCommitted {
+            doc.marks[i].opacity = markOpacity
+            canvas?.needsDisplay = true
+            return
+        }
         commit { $0.marks[i].opacity = self.markOpacity }
+        slideCommitted = sliding
     }
 
     func recolorSelected(_ c: String) {

@@ -54,6 +54,18 @@ final class RenderTests: XCTestCase {
         XCTAssertTrue(b.1 > 120 && b.1 < 190 && b.2 > 120 && b.2 < 190, "40% red over white is pink, not red: \(b)")
     }
 
+    func testASeeThroughHighlighterStillTints() throws {
+        let ctx = CGContext(data: nil, width: 100, height: 60, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 60))
+        var m = Mark(tool: .highlighter, points: [Pt(10, 30), Pt(90, 30)], color: "#ffd60a", width: 24)
+        m.opacity = 0.5
+        let out = try XCTUnwrap(MarkRenderer.render(MarkDocument(width: 100, height: 60, marks: [m]), original: ctx.makeImage()!))
+        let c = pixel(out, 50, 30)
+        XCTAssertTrue(c.0 < 8 && c.1 < 8 && c.2 < 8, "black under a half see-through highlighter stays black: \(c)")
+    }
+
     func testCropChangesTheOutputSizeAndOffsetsMarks() throws {
         let doc = MarkDocument(width: 200, height: 100, crop: Box(x: 100, y: 0, w: 100, h: 50),
                                marks: [Mark(tool: .ellipse, points: [Pt(110, 5), Pt(190, 45)], color: "#ff0000", width: 6)])

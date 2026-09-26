@@ -23,6 +23,8 @@ public enum MarkRenderer {
         let alpha = min(1, max(0.1, m.opacity ?? 1))
         if alpha < 1 {
             ctx.setAlpha(alpha)
+            // A highlighter tints what is under it (black text stays black), see-through or not.
+            if m.tool == .highlighter { ctx.setBlendMode(.multiply) }
             ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         }
         defer { if alpha < 1 { ctx.endTransparencyLayer() } }
