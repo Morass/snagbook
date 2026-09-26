@@ -27,6 +27,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     }
     private var colors: [Tool: String] = [.mark(.highlighter): Annotator.palette[1]]
     @Published var width: Double
+    /// How solid new marks are, 10–100%. With Select, it changes the selected mark.
+    @Published var opacity: Double = 1
     @Published var selected: Int?
     private var undoStack: [MarkDocument] = []
     private var redoStack: [MarkDocument] = []
@@ -264,6 +266,12 @@ struct AnnotatorView: View {
                 Button { a.width = max(1, a.width - 1) } label: { Image(systemName: "minus") }.buttonStyle(.borderless).help("Thinner ([)")
                 Text("\(Int(a.width))").font(.caption.monospacedDigit()).frame(width: 20)
                 Button { a.width = min(40, a.width + 1) } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("Thicker (])")
+                Divider().frame(height: 20).padding(.horizontal, 4)
+                Image(systemName: "circle.lefthalf.filled").foregroundStyle(.secondary).help("Opacity")
+                Slider(value: Binding(get: { a.opacity }, set: { a.setOpacity($0) }), in: 0.1...1)
+                    .frame(width: 90)
+                    .help("How solid marks are: drag left to see the picture through them (, and . step it)")
+                Text("\(Int((a.opacity * 100).rounded()))%").font(.caption.monospacedDigit()).frame(width: 34, alignment: .leading)
                 Spacer(minLength: 12)
                 Button { a.undo() } label: { Image(systemName: "arrow.uturn.backward") }.buttonStyle(.borderless).help("Undo (⌘Z)")
                 if a.isNew {
@@ -283,6 +291,15 @@ struct AnnotatorView: View {
 }
 
 extension Annotator {
+    /// What a new mark stores: nil when solid, so files stay as they were.
+    var markOpacity: Double? { opacity >= 0.995 ? nil : (opacity * 100).rounded() / 100 }
+
+    func setOpacity(_ v: Double) {
+        opacity = min(1, max(0.1, v))
+        guard tool == .select, let i = selected, doc.marks.indices.contains(i), doc.marks[i].tool != .pixelate else { return }
+        commit { $0.marks[i].opacity = self.markOpacity }
+    }
+
     func recolorSelected(_ c: String) {
         guard tool == .select, let i = selected, doc.marks.indices.contains(i) else { return }
         commit { $0.marks[i].color = c }

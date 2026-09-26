@@ -129,6 +129,8 @@ final class AnnotationCanvas: NSView, NSTextFieldDelegate {
         switch a.tool {
         case .select:
             a.selected = a.doc.marks.indices.reversed().first { a.doc.marks[$0].hit(p, tolerance: 6 / layout.scale) }
+            // The slider shows the selected mark's opacity, so it can be changed from there.
+            if let i = a.selected { a.opacity = a.doc.marks[i].opacity ?? 1 }
             moveFrom = a.selected == nil ? nil : p
             moved = false
             if event.clickCount == 2, let i = a.selected, a.doc.marks[i].tool == .text { beginTextEditing(at: a.doc.marks[i].points[0], editing: i) }
@@ -141,10 +143,10 @@ final class AnnotationCanvas: NSView, NSTextFieldDelegate {
                 beginTextEditing(at: p, editing: nil)
             case .counter:
                 let n = a.doc.nextCounter
-                a.commit { $0.marks.append(Mark(tool: .counter, points: [p], color: a.color, width: a.width, number: n)) }
+                a.commit { $0.marks.append(Mark(tool: .counter, points: [p], color: a.color, width: a.width, number: n, opacity: a.markOpacity)) }
             default:
                 dragStart = p
-                draft = Mark(tool: t, points: t.isPath ? [p] : [p, p], color: t == .pixelate ? "#000000" : a.color, width: t == .highlighter ? a.width * 4 : a.width)
+                draft = Mark(tool: t, points: t.isPath ? [p] : [p, p], color: t == .pixelate ? "#000000" : a.color, width: t == .highlighter ? a.width * 4 : a.width, opacity: t == .pixelate ? nil : a.markOpacity)
             }
         }
         needsDisplay = true
@@ -224,6 +226,8 @@ final class AnnotationCanvas: NSView, NSTextFieldDelegate {
                 a.recolorSelected(a.color)
                 return
             }
+            if c == "," { a.setOpacity(a.opacity - 0.1); return }
+            if c == "." { a.setOpacity(a.opacity + 0.1); return }
             if c == "[" { a.width = max(1, a.width - 1); return }
             if c == "]" { a.width = min(40, a.width + 1); return }
         }
@@ -281,7 +285,7 @@ final class AnnotationCanvas: NSView, NSTextFieldDelegate {
                 a.commit { d in if text.isEmpty { d.marks.remove(at: i) } else { d.marks[i].text = text } }
             } else if !text.isEmpty {
                 let size = max(18, a.width * 5)
-                a.commit { $0.marks.append(Mark(tool: .text, points: [p], color: a.color, width: size, text: text)) }
+                a.commit { $0.marks.append(Mark(tool: .text, points: [p], color: a.color, width: size, text: text, opacity: a.markOpacity)) }
             }
         }
         window?.makeFirstResponder(self)

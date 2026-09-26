@@ -43,6 +43,17 @@ final class RenderTests: XCTestCase {
         XCTAssertTrue(isWhite(pixel(out, 150, 90)), "below the box stays clear")
     }
 
+    func testOpacityLetsThePictureShowThrough() throws {
+        let solid = MarkDocument(width: 200, height: 100, marks: [Mark(tool: .rect, points: [Pt(120, 10), Pt(180, 60)], color: "#ff0000", width: 8)])
+        var faint = solid
+        faint.marks[0].opacity = 0.4
+        let a = pixel(try XCTUnwrap(MarkRenderer.render(solid, original: testImage())), 120, 30)
+        let b = pixel(try XCTUnwrap(MarkRenderer.render(faint, original: testImage())), 120, 30)
+        XCTAssertTrue(isRed(a), "\(a)")
+        XCTAssertEqual(b.0, 255, accuracy: 3)
+        XCTAssertTrue(b.1 > 120 && b.1 < 190 && b.2 > 120 && b.2 < 190, "40% red over white is pink, not red: \(b)")
+    }
+
     func testCropChangesTheOutputSizeAndOffsetsMarks() throws {
         let doc = MarkDocument(width: 200, height: 100, crop: Box(x: 100, y: 0, w: 100, h: 50),
                                marks: [Mark(tool: .ellipse, points: [Pt(110, 5), Pt(190, 45)], color: "#ff0000", width: 6)])

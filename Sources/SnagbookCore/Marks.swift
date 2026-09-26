@@ -85,14 +85,17 @@ public struct Mark: Codable, Equatable {
     public var width: Double
     public var text: String?
     public var number: Int?
+    /// 0.1…1; nil is solid (and is what files from before opacity existed say).
+    public var opacity: Double?
 
-    public init(tool: MarkTool, points: [Pt], color: String, width: Double, text: String? = nil, number: Int? = nil) {
+    public init(tool: MarkTool, points: [Pt], color: String, width: Double, text: String? = nil, number: Int? = nil, opacity: Double? = nil) {
         self.tool = tool
         self.points = points
         self.color = color
         self.width = width
         self.text = text
         self.number = number
+        self.opacity = opacity
     }
 
     /// Roughly the area the mark covers, for hit testing and redraw.

@@ -106,6 +106,16 @@ final class MarksTests: XCTestCase {
         XCTAssertEqual(c.marks, "media/shot-001.marks.json")
     }
 
+    func testOpacityIsOptionalInTheFile() throws {
+        let old = ##"{"height":20,"marks":[{"color":"#fff","points":[{"x":1,"y":2}],"tool":"pen","width":3}],"version":1,"width":10}"##
+        let d = try MarkDocument.decode(Data(old.utf8))
+        XCTAssertNil(d.marks[0].opacity, "a file from before opacity reads as solid")
+        var faint = d
+        faint.marks[0].opacity = 0.5
+        XCTAssertEqual(try MarkDocument.decode(faint.encoded()).marks[0].opacity, 0.5)
+        XCTAssertFalse(String(decoding: try d.encoded(), as: UTF8.self).contains("opacity"), "a solid mark writes no opacity")
+    }
+
     func testSimplifyKeepsEnds() {
         let pts = (0...100).map { Pt(Double($0) * 0.1, 0) }
         let s = Geometry.simplify(pts, minStep: 1)

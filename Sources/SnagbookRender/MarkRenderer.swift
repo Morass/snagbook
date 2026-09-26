@@ -19,6 +19,13 @@ public enum MarkRenderer {
         let color = cgColor(m.color)
         ctx.saveGState()
         defer { ctx.restoreGState() }
+        // The whole mark at once, so a see-through arrow's head and shaft do not double up.
+        let alpha = min(1, max(0.1, m.opacity ?? 1))
+        if alpha < 1 {
+            ctx.setAlpha(alpha)
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
+        defer { if alpha < 1 { ctx.endTransparencyLayer() } }
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
         ctx.setStrokeColor(color)
