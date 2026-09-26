@@ -178,6 +178,12 @@ export async function runSelfTest(shell, invoke) {
       doc.marks[0].opacity = 0.4;
       const faint = px();
       check(solid[1] < 40 && faint[0] > 245 && faint[1] > 130 && faint[1] < 180, `a 40% mark is pink over white, a solid one red: ${solid} / ${faint}`);
+      // A see-through highlighter still tints: black under it stays black.
+      w.fillStyle = "#000000";
+      w.fillRect(0, 0, 100, 60);
+      const hl = { version: 1, width: 100, height: 60, crop: null, marks: [{ tool: "highlighter", points: [{ x: 10, y: 30 }, { x: 90, y: 30 }], color: "#ffd60a", width: 24, opacity: 0.5 }] };
+      const under = [...renderDocument(hl, white, (a, b) => Object.assign(document.createElement("canvas"), { width: a, height: b })).getContext("2d").getImageData(50, 30, 1, 1).data];
+      check(under[0] < 8 && under[1] < 8 && under[2] < 8, `a half see-through highlighter leaves black text black: ${under}`);
     }
 
     // 10a'. double-clicking a picture in the note opens it in the mark-up window
@@ -246,6 +252,11 @@ export async function runSelfTest(shell, invoke) {
     check(await until(() => $("rec").textContent === "Stop"), "the Record button turns into Stop");
     const pasted = await invoke("save_media", { id: 1, base64: "AAAA", mime: "video/mp4", name: "" });
     check(pasted === "media/clip-002.mp4", "a video pasted during the recording gets its own name: " + pasted);
+    // Renaming the item while it records: its folder keeps its name until the recording ends.
+    const folderBefore = items().find((i) => i.id === 1)?.folder;
+    await invoke("rename_item", { id: 1, title: "Recorded item" });
+    await shell.refresh();
+    check(items().find((i) => i.id === 1)?.folder === folderBefore, "renaming an item while it records keeps its folder for now: " + folderBefore);
     let bar = null;
     await until(async () => (bar = await invoke("recbar_size")) != null && bar[1] < 80, 10000);
     check(bar && bar[1] < 80 && bar[0] > 150, "the timer window is a small bar: " + JSON.stringify(bar));
@@ -264,6 +275,8 @@ export async function runSelfTest(shell, invoke) {
     else check(rec?.kind === "image" && rec?.rel === wantRel && /ffmpeg/.test(rec?.problem || ""), "without ffmpeg the contact sheet is saved, and the reason is given: " + JSON.stringify(rec));
     check((await invoke("read_note", { id: 1 })).includes(wantRel), "the recording is in the note");
     check(await until(() => $("rec").textContent === "Record"), "the button says Record again");
+    await shell.refresh();
+    check(/recorded-item/.test(items().find((i) => i.id === 1)?.folder || ""), "after the recording the folder follows the new title: " + items().find((i) => i.id === 1)?.folder);
     const info = await fetch(base() + "media/clip-001.json").then((r) => r.json()).catch(() => null);
     check(info && Math.abs(info.duration - expected) < 0.8, `clip-001.json gives the length: ${info?.duration}s for ${expected.toFixed(2)}s between Record and Stop`);
     check(info?.stills?.length === Math.min(60, Math.floor(info.duration) + 1) && info.stills[0].file === "clip-001-frames/0001.jpg", `one still a second beside it: ${info?.stills?.length} for ${info?.duration}s`);
@@ -275,6 +288,26 @@ export async function runSelfTest(shell, invoke) {
     const sheet = new Image();
     sheet.src = base() + "media/clip-001-contact.jpg";
     check(await imageLoaded(sheet), "the contact sheet is there");
+
+    // 11b. a recording still going when another session is opened goes into its own note
+    await shell.show(1);
+    await invoke("toggle_recording");
+    await until(() => invoke("capture_open"));
+    await invoke("finish_screenshot", { rect: { x: 0.2, y: 0.2, w: 0.3, h: 0.3 } });
+    check(await until(async () => (await invoke("recording_started")) != null), "a second recording starts");
+    const refused = await invoke("delete_item", { id: 1, permanently: true }).then(() => "deleted", (e) => String(e));
+    check(/still being saved/.test(refused), "an item being recorded is not deleted: " + refused);
+    await sleep(1500);
+    await shell.newSession();
+    const other = shell.view().session.path;
+    await invoke("stop_recording");
+    check(await until(() => $("rec").textContent === "Record", 120000), "the button says Record once it is finished");
+    await sleep(500);
+    check(!(await invoke("read_note", { id: 1 })).includes("clip-"), "the session opened meanwhile gets no link");
+    await shell.openSession(path);
+    const back = await invoke("read_note", { id: 1 });
+    check(/\]\(media\/clip-003\.(mp4|webm)\)|clip-003-contact/.test(back), "the recording is at the end of its own item's note: " + JSON.stringify(back.slice(-50)));
+    check(other !== path, "(two sessions were used)");
 
     // 12. a session deleted from outside is closed, not written back
     await invoke("selftest_delete_session");

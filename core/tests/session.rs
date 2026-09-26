@@ -375,3 +375,19 @@ fn interop_read_a_session_from_the_macos_app() {
     assert_eq!(added.id, s.manifest.items.iter().map(|r| r.id).max().unwrap());
     s.write_note(added.id, "written by the desktop app\n").unwrap();
 }
+
+#[test]
+fn an_item_being_recorded_keeps_its_folder_until_the_recording_ends() {
+    let e = env();
+    let mut s = new(&e);
+    let item = add(&mut s);
+    let before = s.dir.join(&item.folder);
+    let kept = s.retitle_item(item.id, "Login screen", false).unwrap();
+    assert_eq!(kept.title, "Login screen");
+    assert_eq!(kept.folder, item.folder, "the folder stays while it is written to");
+    assert!(before.is_dir());
+    assert!(fs::read_to_string(before.join("notes.md")).unwrap().contains("Login screen"));
+    let moved = s.retitle_item(item.id, "Login screen", true).unwrap();
+    assert_ne!(moved.folder, item.folder, "afterwards the same title moves it");
+    assert!(s.dir.join(&moved.folder).is_dir() && !before.exists());
+}

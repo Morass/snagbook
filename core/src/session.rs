@@ -263,17 +263,24 @@ impl Session {
 
     /// Rename an item: its title, its note's front matter and its folder name.
     pub fn rename_item(&mut self, id: i64, title: &str) -> Result<ItemRecord> {
+        self.retitle_item(id, title, true)
+    }
+
+    /// Change an item's title; its folder follows only when `move_folder` is set (not while
+    /// files are being written into it). Called again with the same title and `move_folder`,
+    /// it brings a folder left behind up to date.
+    pub fn retitle_item(&mut self, id: i64, title: &str, move_folder: bool) -> Result<ItemRecord> {
         let t = title.trim().to_string();
         if t.is_empty() {
             return Err(SnagError::BadName(title.into()));
         }
         let i = self.manifest.items.iter().position(|r| r.id == id).ok_or(SnagError::NoSuchItem(id))?;
         let mut rec = self.manifest.items[i].clone();
-        if rec.title == t {
+        let new_folder = Naming::item_folder(id, &t);
+        if rec.title == t && (!move_folder || new_folder == rec.folder || self.dir.join(&new_folder).exists()) {
             return Ok(rec);
         }
-        let new_folder = Naming::item_folder(id, &t);
-        if new_folder != rec.folder {
+        if move_folder && new_folder != rec.folder {
             let to = self.dir.join(&new_folder);
             if !to.exists() {
                 fs::rename(self.dir.join(&rec.folder), &to)?;

@@ -11,6 +11,7 @@ const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8")
 function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
   const calls = [];
   const notes = new Map();
+  let slowNote = null;
   let session = null;
   let nextHash = 1;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
@@ -58,7 +59,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
       session.items.splice(index, 0, it);
       return view();
     },
-    read_note: ({ id }) => notes.get(id) ?? "",
+    read_note: ({ id }) => (slowNote === id ? new Promise((r) => setTimeout(() => r(notes.get(id) ?? ""), 30)) : notes.get(id) ?? ""),
     write_note: ({ id, markdown }) => (notes.set(id, markdown), true),
     copy_handoff: () => `Read ${session.path}/README.md`,
     set_session_title: ({ title }) => ((session.title = title || "Session 25 Sep, 18:00"), view()),
@@ -75,6 +76,9 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
     invoke,
     calls,
     notes,
+    slowNoteFor(id) {
+      slowNote = id;
+    },
     list,
     deleteFromOutside() {
       list.splice(list.findIndex((s) => s.path === session.path), 1);
@@ -380,4 +384,21 @@ test("Settings can turn off opening screenshots in mark-up", async () => {
   await p;
   const patch = t.app.calls.find(([c]) => c === "update_config")[1].patch;
   assert.equal(patch.annotateScreenshots, false);
+});
+
+test("a slow note of an item left behind does not open over the one chosen next", async () => {
+  const { shell, app, editor, settle } = await setup({ session: true });
+  await shell.newItem();
+  app.notes.set(1, "one");
+  app.notes.set(2, "two");
+  app.slowNoteFor(1);
+  editor.log.length = 0;
+  const first = shell.show(1);
+  const second = shell.show(2);
+  await Promise.all([first, second]);
+  await new Promise((r) => setTimeout(r, 60));
+  await settle();
+  const opened = editor.log.filter((e) => e[0] === "open").map((e) => e[1].id);
+  assert.deepEqual(opened, [2], "only item 2 is opened: " + JSON.stringify(opened));
+  assert.equal(shell.selected(), 2, "and item 2 stays selected");
 });

@@ -128,9 +128,15 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   // ------------------------------------------------------------ items
 
+  let showing = 0;
+
   async function show(id, { focus = true } = {}) {
+    // Only the latest call opens its note: a slow read of an item left behind must not
+    // open over the one chosen after it (its typing would go into the wrong note).
+    const turn = ++showing;
     await flush();
     if (titleFor != null && titleFor !== id) await renameSelected().catch(() => {});
+    if (turn !== showing) return;
     selected = id;
     invoke("set_selected", { id }).catch(() => {});
     renderList();
@@ -143,6 +149,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     } catch {
       return refresh();
     }
+    if (turn !== showing || selected !== id) return;
     ed.open({ id, markdown: md, base: mediaBase(platform(), id), focus });
   }
 

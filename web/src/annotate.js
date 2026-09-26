@@ -73,10 +73,19 @@ function setColor(c) {
   renderBar();
 }
 
-/// How solid new marks are; with Select, the selected mark's.
-function setOpacity(o) {
+/// How solid new marks are; with Select, the selected mark's. One drag of the slider is one
+/// step to undo, however many values it passes through.
+let sliding = false;
+function setOpacity(o, drag = false) {
   opacity = Math.min(1, Math.max(0.1, o));
-  if (tool === "select" && selected != null && doc.marks[selected].tool !== "pixelate") commit((d) => (d.marks[selected].opacity = M.markOpacity(opacity)));
+  if (tool === "select" && selected != null && doc.marks[selected].tool !== "pixelate") {
+    const change = (d) => (d.marks[selected].opacity = M.markOpacity(opacity));
+    if (drag && sliding) {
+      change(doc);
+      draw();
+    } else commit(change);
+    sliding = drag;
+  }
   renderBar();
 }
 
@@ -357,9 +366,12 @@ function renderBar() {
 }
 
 $("thinner").addEventListener("click", () => setWidth(width - 1));
-$("opacity").addEventListener("input", (e) => setOpacity(Number(e.target.value) / 100));
+$("opacity").addEventListener("input", (e) => setOpacity(Number(e.target.value) / 100, true));
 // Keys go to the picture, not the slider, once it has been dragged.
-$("opacity").addEventListener("change", () => $("opacity").blur());
+$("opacity").addEventListener("change", () => {
+  sliding = false;
+  $("opacity").blur();
+});
 $("thicker").addEventListener("click", () => setWidth(width + 1));
 $("undo").addEventListener("click", undo);
 $("done").addEventListener("click", done);

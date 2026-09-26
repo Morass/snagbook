@@ -97,14 +97,19 @@ pub fn parse_range(value: &str, len: u64) -> Option<(u64, u64)> {
     (start <= end && start < len).then_some((start, end))
 }
 
-/// What to send for a request: None for the whole (small) file, Some(None) for an
-/// unsatisfiable range, Some(Some((start, end))) for a piece of at most MAX_PIECE bytes. A large
-/// file asked for whole is still sent in pieces, so it is never read into memory at once.
+/// Above this, a file asked for whole is sent in pieces rather than read into memory at once.
+/// Pictures are asked for whole and cannot take a piece (a 12 MB screenshot would be cut off),
+/// so the limit is far above any picture; only a long video is bigger, and players ask for
+/// ranges.
+pub const MAX_WHOLE: u64 = 256 * 1024 * 1024;
+
+/// What to send for a request: None for the whole file, Some(None) for an unsatisfiable range,
+/// Some(Some((start, end))) for a piece of at most MAX_PIECE bytes.
 pub fn byte_range(header: Option<&str>, len: u64) -> Option<Option<(u64, u64)>> {
     match header.map(|v| parse_range(v, len)) {
         Some(Some((a, b))) => Some(Some(capped(a, b))),
         Some(None) => Some(None),
-        None if len > MAX_PIECE => Some(Some(capped(0, len - 1))),
+        None if len > MAX_WHOLE => Some(Some(capped(0, len - 1))),
         None => None,
     }
 }
@@ -220,6 +225,7 @@ mod tests {
         assert_eq!(byte_range(None, 1 << 30), Some(Some((0, MAX_PIECE - 1))), "no Range on a 1 GB video");
         assert_eq!(byte_range(Some("bytes=0-"), 1 << 30), Some(Some((0, MAX_PIECE - 1))));
         assert_eq!(byte_range(None, 1000), None, "a small picture is sent whole");
+        assert_eq!(byte_range(None, 20 << 20), None, "a 20 MB picture is sent whole, not cut off at 8 MB");
         assert_eq!(byte_range(Some("bytes=5000-"), 1000), Some(None));
     }
 

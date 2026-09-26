@@ -134,7 +134,11 @@ impl Encoder {
                 Ok(Some(st)) => break st,
                 Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
                 _ => {
-                    let _ = self.child.lock().unwrap().kill();
+                    // Killed and reaped: a process left over would hold the file open (so a
+                    // failed video could not be removed on Windows) and linger as a zombie.
+                    let mut child = self.child.lock().unwrap();
+                    let _ = child.kill();
+                    let _ = child.wait();
                     return Err("ffmpeg did not finish, so the video was not saved".into());
                 }
             }
@@ -318,8 +322,34 @@ pub struct Finished {
     pub problem: Option<String>,
 }
 
-/// Take frames from `grab` until `stop` is set; write the video and its companions.
-pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Arc<Stop>) -> Result<Finished, String> {
+/// The most thumbnails kept at once for the contact sheet (about half a megabyte each).
+const MAX_THUMBS: usize = 64;
+
+/// Keep every other thumbnail, the first always.
+fn thin(thumbs: &mut Vec<(f64, RgbaImage)>) {
+    let mut i = 0;
+    thumbs.retain(|_| {
+        i += 1;
+        i % 2 == 1
+    });
+}
+
+/// Take frames from `grab` until `stop` is set; write the video and its companions. A failed
+/// recording leaves nothing behind: not the empty file holding its name, not its frames.
+pub fn run(grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Arc<Stop>) -> Result<Finished, String> {
+    let (dir, stem) = (plan.dir.clone(), plan.stem.clone());
+    let result = record(grab, plan, stop);
+    if result.is_err() {
+        let placeholder = dir.join(format!("{stem}.mp4"));
+        if std::fs::metadata(&placeholder).map(|m| m.len() == 0).unwrap_or(false) {
+            let _ = std::fs::remove_file(&placeholder);
+        }
+        let _ = std::fs::remove_dir_all(dir.join(format!("{stem}-frames")));
+    }
+    result
+}
+
+fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Arc<Stop>) -> Result<Finished, String> {
     let first = grab()?;
     let src = first.dimensions();
     let dst = capture_math::output_size(src.0 as f64, src.1 as f64, plan.max_long_edge);
@@ -361,10 +391,15 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
                     }
                 }
                 let done = enc.finish(limit);
-                match failed {
+                let r = match failed {
                     Some(e) => Err(e),
-                    None => done.map(|_| name),
+                    None => done.map(|_| name.clone()),
+                };
+                // A video that did not finish is not a video: nothing would play it.
+                if r.is_err() {
+                    let _ = std::fs::remove_file(dir.join(&name));
                 }
+                r
                 })();
                 let _ = done_tx.send(r);
             });
@@ -376,6 +411,9 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
     std::fs::create_dir_all(&frames_dir).map_err(|e| e.to_string())?;
     let mut stills: Vec<(f64, PathBuf)> = vec![];
     let mut thumbs: Vec<(f64, RgbaImage)> = vec![];
+    // Every half second at first; a long recording keeps fewer, further apart, so their
+    // memory stays bounded (the contact sheet needs 16).
+    let mut thumb_every = 0.5;
     let start = Instant::now();
     let mut written: u64 = 0;
     let mut frame = Arc::new(first);
@@ -410,8 +448,12 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
                 std::fs::write(&p, jpeg(&fit(&frame, 1568), 72)?).map_err(|e| e.to_string())?;
                 stills.push((t, p));
             }
-            if thumbs.last().map_or(true, |(s, _)| t - s >= 0.5 - 0.5 / fps as f64) {
+            if thumbs.last().map_or(true, |(s, _)| t - s >= thumb_every - 0.5 / fps as f64) {
                 thumbs.push((t, fit(&frame, 480)));
+                if thumbs.len() >= MAX_THUMBS {
+                    thin(&mut thumbs);
+                    thumb_every *= 2.0;
+                }
             }
         }
         if stop.requested() {
@@ -421,7 +463,19 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
         if let Some(wait) = next.checked_sub(start.elapsed()) {
             std::thread::sleep(wait);
         }
-        frame = Arc::new(grab()?);
+        if stop.requested() {
+            break;
+        }
+        match grab() {
+            // A grab that came back after Stop shows the screen after it: not part of the clip.
+            Ok(_) if stop.requested() => break,
+            Ok(f) => frame = Arc::new(f),
+            // The screen went away (locked, unplugged): what was recorded so far is kept.
+            Err(e) => {
+                problem = Some(format!("the recording ended early: {e}"));
+                break;
+            }
+        }
     }
     // Up to the moment Stop was pressed, whatever the last grab cost.
     let end = stop.at().map_or_else(|| start.elapsed(), |at| at.saturating_duration_since(start));
@@ -450,7 +504,7 @@ pub fn run(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop
         });
         match result {
             Ok(name) => video_name = Some(name),
-            Err(e) => problem = Some(e),
+            Err(e) => problem = Some(match problem { Some(p) => format!("{p}; {e}"), None => e }),
         }
     }
 
@@ -719,5 +773,95 @@ mod tests {
         assert!(f.video.is_none());
         assert!(f.problem.unwrap().contains("ffmpeg"));
         assert!(dir.path().join("clip-002-frames/0001.jpg").is_file());
+    }
+
+    fn plan(dir: &std::path::Path, ffmpeg: Option<PathBuf>) -> Plan {
+        Plan { dir: dir.to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg, source: "test".into(), finish_timeout: Duration::from_secs(20) }
+    }
+
+    /// The screen cannot be read at all: nothing is left behind, not even the file holding
+    /// the name.
+    #[test]
+    fn a_recording_that_never_starts_leaves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("clip-001.mp4"), b"").unwrap();
+        let r = run(|| Err("no screen".to_string()), plan(dir.path(), None), Stop::new());
+        assert!(r.is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "the folder is as it was before");
+    }
+
+    /// The screen goes away part way: the clip so far is kept, and the reason given.
+    #[test]
+    fn a_screen_lost_part_way_keeps_what_was_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let t0 = Instant::now();
+        let grab = move || if t0.elapsed() < Duration::from_millis(1500) { Ok(RgbaImage::from_pixel(64, 48, Rgba([9, 9, 9, 255]))) } else { Err("the screen was locked".to_string()) };
+        let f = run(grab, plan(dir.path(), find_ffmpeg()), Stop::new()).unwrap();
+        assert!(f.problem.as_deref().unwrap_or("").contains("the screen was locked"), "{:?}", f.problem);
+        assert!((1.3..2.0).contains(&f.duration), "{}", f.duration);
+        assert!(dir.path().join("clip-001.json").is_file() && dir.path().join("clip-001-contact.jpg").is_file());
+    }
+
+    /// An encoder that fails leaves no half-written video under the clip's name.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_video_is_removed() {
+        let Some(real) = find_ffmpeg() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("bad-ffmpeg");
+        // Lists the real encoders, then writes a few bytes of "video" and fails.
+        std::fs::write(&bad, format!("#!/bin/sh\ncase \"$*\" in *-encoders*) exec '{0}' \"$@\";; esac\nfor a; do out=$a; done\nprintf junk > \"$out\"\ncat > /dev/null\nexit 1\n", real.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.path().join("clip-001.mp4"), b"").unwrap();
+        let stop = Stop::new();
+        let s2 = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1200));
+            s2.request();
+        });
+        let f = run(|| Ok(RgbaImage::from_pixel(64, 48, Rgba([9, 9, 9, 255]))), plan(dir.path(), Some(bad)), stop).unwrap();
+        assert!(f.video.is_none() && f.problem.is_some(), "{:?}", f.problem);
+        assert!(!dir.path().join("clip-001.mp4").exists(), "no broken clip-001.mp4 is left");
+        assert!(dir.path().join("clip-001-contact.jpg").is_file(), "the stills are still kept");
+    }
+
+    #[test]
+    fn thumbnails_are_thinned_evenly() {
+        let mut t: Vec<(f64, RgbaImage)> = (0..64).map(|i| (i as f64 * 0.5, RgbaImage::new(1, 1))).collect();
+        thin(&mut t);
+        assert_eq!(t.len(), 32);
+        assert_eq!(t[0].0, 0.0);
+        assert_eq!(t[1].0, 1.0);
+        assert_eq!(t[31].0, 31.0);
+    }
+
+    /// A screen grab that comes back after Stop adds nothing to the video: the frames sent to
+    /// ffmpeg match the clip's length.
+    #[cfg(unix)]
+    #[test]
+    fn a_grab_returning_after_stop_does_not_lengthen_the_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let counting = dir.path().join("counting-ffmpeg");
+        // Claims H.264, then keeps the raw frames it is given as the "video".
+        std::fs::write(&counting, "#!/bin/sh\ncase \"$*\" in *-encoders*) echo ' V....D libx264  H.264'; exit 0;; esac\nfor a; do out=$a; done\ncat > \"$out\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&counting, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stop = Stop::new();
+        let s2 = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1000));
+            s2.request();
+        });
+        // Each grab takes 700 ms, so the one under way at Stop returns 400 ms after it.
+        let grab = || {
+            std::thread::sleep(Duration::from_millis(700));
+            Ok(RgbaImage::from_pixel(64, 48, Rgba([9, 9, 9, 255])))
+        };
+        let f = run(grab, plan(dir.path(), Some(counting)), stop).unwrap();
+        assert_eq!(f.video.as_deref(), Some("clip-001.mp4"), "{:?}", f.problem);
+        let frames = std::fs::metadata(dir.path().join("clip-001.mp4")).unwrap().len() / (64 * 48 * 4);
+        let expected = (f.duration * 15.0).round() as u64;
+        assert!(frames <= expected + 1, "{frames} frames sent for a {}s clip ({expected} expected)", f.duration);
     }
 }

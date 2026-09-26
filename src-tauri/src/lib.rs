@@ -10,7 +10,7 @@ use base64::Engine;
 use chrono::Utc;
 use serde::Serialize;
 use snagbook_core::{Config, ConfigStore, HandoffStyle, Paths, Session, Shortcuts, SnagError, Summary, Template};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -195,20 +195,25 @@ fn add_item(st: St, title: Option<String>) -> Res<View> {
 }
 
 #[tauri::command]
-fn rename_item(st: St, id: i64, title: String) -> Res<View> {
+fn rename_item(app: AppHandle, st: St, id: i64, title: String) -> Res<View> {
     let mut a = st.lock().unwrap();
-    a.session()?.rename_item(id, &title).map_err(err)?;
+    // A recording is writing into this item's folder: the folder is renamed when it is done.
+    let busy = app.state::<Busy>().has(a.session.as_ref().map(|s| s.dir.as_path()), id);
+    a.session()?.retitle_item(id, &title, !busy).map_err(err)?;
     Ok(a.view())
 }
 
 /// Move an item's folder to the Trash. When that is impossible the answer starts with
 /// "NOTRASH:" and the page asks before calling again with `permanently`.
 #[tauri::command]
-fn delete_item(window: tauri::Window, st: St, id: i64, permanently: bool) -> Res<View> {
+fn delete_item(app: AppHandle, window: tauri::Window, st: St, id: i64, permanently: bool) -> Res<View> {
     if window.label() != "main" {
         return Err("Items are deleted from the notebook window.".into());
     }
     let mut a = st.lock().unwrap();
+    if app.state::<Busy>().has(a.session.as_ref().map(|s| s.dir.as_path()), id) {
+        return Err("A recording is still being saved into this item. Delete it once the recording is in its note.".into());
+    }
     let s = a.session()?;
     let r = if permanently {
         s.delete_item(id, |p| std::fs::remove_dir_all(p).map_err(Into::into))
@@ -421,8 +426,43 @@ struct Active {
     stop: std::sync::Arc<record::Stop>,
     handle: std::thread::JoinHandle<Result<record::Finished, String>>,
     id: i64,
+    /// The session the recording goes into (its folder), which may no longer be the open one
+    /// when it ends.
+    session: PathBuf,
+    session_name: String,
     stem: String,
     started_ms: u64,
+}
+
+/// Recordings still being finished after Stop; the app does not quit under them.
+#[derive(Default)]
+struct Finishing(std::sync::atomic::AtomicUsize);
+
+/// Items a recording is writing into, from Record until its files are finished (after Stop):
+/// their folders are not renamed or deleted meanwhile. Counted, as a second recording into the
+/// same item can start while the first is still being finished.
+#[derive(Default)]
+struct Busy(Mutex<std::collections::HashMap<(PathBuf, i64), usize>>);
+
+impl Busy {
+    fn add(&self, session: &Path, id: i64) {
+        *self.0.lock().unwrap().entry((session.to_path_buf(), id)).or_default() += 1;
+    }
+    /// True when this was the last recording into the item.
+    fn release(&self, session: &Path, id: i64) -> bool {
+        let mut m = self.0.lock().unwrap();
+        let key = (session.to_path_buf(), id);
+        let n = m.get(&key).copied().unwrap_or(1).saturating_sub(1);
+        if n == 0 {
+            m.remove(&key);
+        } else {
+            m.insert(key, n);
+        }
+        n == 0
+    }
+    fn has(&self, session: Option<&Path>, id: i64) -> bool {
+        session.is_some_and(|s| self.0.lock().unwrap().contains_key(&(s.to_path_buf(), id)))
+    }
 }
 
 #[derive(Default)]
@@ -458,6 +498,7 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
     let id = target_item(&mut a)?;
     let cap = a.store.config.capture.clone();
     let path = hold_clip_name(a.session()?, id)?;
+    let (session, session_name) = { let s = a.session()?; (s.dir.clone(), s.display_path.clone()) };
     drop(a);
     let dir = path.parent().ok_or("no media folder")?.to_path_buf();
     let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).ok_or("no name")?;
@@ -486,7 +527,8 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
         record::run(grab, plan, stop2)
     });
     let started_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, stem, started_ms });
+    app.state::<Busy>().add(&session, id);
+    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, session, session_name, stem, started_ms });
     open_recbar(app, rect, monitor);
     let _ = app.emit_to("main", "recording", true);
     Ok(())
@@ -506,7 +548,17 @@ fn open_recbar(app: &AppHandle, rect: (u32, u32, u32, u32), monitor: (i32, i32, 
     let overlaps = |bx: u32, by: u32| bx < rect.0 + rect.2 && rect.0 < bx + bw && by < rect.1 + rect.3 && rect.1 < by + bh;
     let spots = [(mw.saturating_sub(bw + margin), margin), (margin, margin), (mw.saturating_sub(bw + margin), mh.saturating_sub(bh + margin)), (margin, mh.saturating_sub(bh + margin))];
     let (bx, by) = spots.iter().copied().find(|(x, y)| !overlaps(*x, *y)).unwrap_or(spots[0]);
-    if let Ok(w) = WebviewWindowBuilder::new(app, "recbar", tauri::WebviewUrl::App("recbar.html".into()))
+    // The last recording's bar may still be closing (Windows closes a window a moment later).
+    if let Some(w) = app.get_webview_window("recbar") {
+        let _ = w.destroy();
+        for _ in 0..60 {
+            if app.get_webview_window("recbar").is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    let built = WebviewWindowBuilder::new(app, "recbar", tauri::WebviewUrl::App("recbar.html".into()))
         .title("Snagbook recording")
         .decorations(false)
         .always_on_top(true)
@@ -518,8 +570,11 @@ fn open_recbar(app: &AppHandle, rect: (u32, u32, u32, u32), monitor: (i32, i32, 
         .min_inner_size(250.0, 46.0)
         .max_inner_size(250.0, 46.0)
         .visible(false)
-        .build()
-    {
+        .build();
+    if let Err(e) = &built {
+        let _ = app.emit_to("main", "problem", format!("The recording runs, but its Stop bar could not be shown ({e}): stop it from the Record button or its shortcut."));
+    }
+    if let Ok(w) = built {
         let _ = w.set_size(tauri::PhysicalSize::new(bw, bh));
         let _ = w.set_position(tauri::PhysicalPosition::new(mx + bx as i32, my + by as i32));
         let _ = w.show();
@@ -535,27 +590,87 @@ fn stop_recording_now(app: &AppHandle) {
         let _ = w.destroy();
     }
     active.stop.request();
+    app.state::<Finishing>().0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let app = app.clone();
     std::thread::spawn(move || {
-        let result = active.handle.join().unwrap_or_else(|_| Err("the recording stopped unexpectedly".into()));
-        let _ = app.emit_to("main", "recording", false);
-        match result {
-            Ok(f) => {
-                let (rel, kind) = match (&f.video, &f.sheet) {
-                    (Some(v), _) => (format!("media/{v}"), "video"),
-                    (None, Some(s)) => (format!("media/{s}"), "image"),
-                    (None, None) => {
-                        let _ = app.emit_to("main", "problem", f.problem.unwrap_or_else(|| "Nothing was recorded.".into()));
-                        return;
-                    }
-                };
-                let label = format!("Recording {}", snagbook_core::capture_math::duration(f.duration));
-                capture::announce(&app, capture::Captured { id: active.id, rel, kind: kind.into(), label, problem: f.problem });
-            }
-            Err(e) => {
-                let _ = app.emit_to("main", "problem", format!("The recording {} failed: {e}", active.stem));
-            }
+        let Active { handle, id, session, session_name, stem, .. } = active;
+        let result = handle.join().unwrap_or_else(|_| Err("the recording stopped unexpectedly".into()));
+        // Another recording may have started meanwhile: the button shows whichever is true now.
+        let now = app.state::<Recorder>().0.lock().unwrap().is_some();
+        let _ = app.emit_to("main", "recording", now);
+        finish_recording(&app, Done { id, session, session_name, stem }, result);
+        let left = app.state::<Finishing>().0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
+        // The windows were closed while it finished: quit now, as closing them would have.
+        if left == 0 && app.webview_windows().is_empty() {
+            app.exit(0);
         }
+    });
+}
+
+/// A stopped recording, as it is announced.
+struct Done {
+    id: i64,
+    session: PathBuf,
+    session_name: String,
+    stem: String,
+}
+
+fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finished, String>) {
+    let outcome = result.and_then(|f| match (&f.video, &f.sheet) {
+        (Some(v), _) => Ok((format!("media/{v}"), "video", f)),
+        (None, Some(s)) => Ok((format!("media/{s}"), "image", f)),
+        (None, None) => Err(f.problem.unwrap_or_else(|| "nothing was recorded".into())),
+    });
+    let st = app.state::<Mutex<App>>();
+    let mut a = st.lock().unwrap();
+    let last = app.state::<Busy>().release(&active.session, active.id);
+    let open_here = a.session.as_ref().is_some_and(|s| s.dir == active.session);
+    // The session the recording went into: the open one, or its folder opened again.
+    let mut other = None;
+    if !open_here {
+        other = Session::open(&active.session.to_string_lossy(), &a.store.config.header).ok();
+    }
+    let s = if open_here { a.session.as_mut() } else { other.as_mut() };
+    let Some(s) = s.filter(|s| s.item(active.id).is_ok()) else {
+        drop(a);
+        let _ = app.emit_to("main", "problem", match outcome {
+            Ok((rel, ..)) => format!("The recording {rel} was saved, but item {} of {} is gone, so it is in no note.", active.id, active.session_name),
+            Err(e) => format!("The recording {} failed: {e}", active.stem),
+        });
+        return;
+    };
+    // A title typed during the recording moves the folder now that nothing writes into it.
+    if last {
+        if let Ok(title) = s.item(active.id).map(|r| r.title.clone()) {
+            let _ = s.retitle_item(active.id, &title, true);
+        }
+    }
+    let (rel, kind, f) = match outcome {
+        Ok(o) => o,
+        Err(e) => {
+            drop(a);
+            let _ = app.emit_to("main", "problem", format!("The recording {} failed: {e}", active.stem));
+            return;
+        }
+    };
+    let label = format!("Recording {}", snagbook_core::capture_math::duration(f.duration));
+    // Shown in the notebook: its editor adds the link where the note is being written.
+    if open_here && app.get_webview_window("main").is_some() {
+        drop(a);
+        capture::announce(app, capture::Captured { id: active.id, rel, kind: kind.into(), label, problem: f.problem });
+        return;
+    }
+    // Otherwise (another session open, or the notebook closed) the link goes at the end of
+    // the item's note here.
+    let link = if kind == "video" { format!("[{label}]({rel})") } else { format!("![{label}]({rel})") };
+    let body = s.read_note(active.id).unwrap_or_default();
+    let body = body.trim_end();
+    let written = s.write_note(active.id, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") });
+    let title = s.item(active.id).map(|r| r.title.clone()).unwrap_or_default();
+    drop(a);
+    let _ = app.emit_to("main", "problem", match written {
+        Ok(_) => format!("The recording was added to the end of “{title}” in {}.", active.session_name),
+        Err(e) => format!("The recording {rel} was saved in {}, but its note could not be written: {e}", active.session_name),
     });
 }
 
@@ -571,6 +686,16 @@ async fn cancel_screenshot(app: AppHandle) {
 /// one when nothing is shown, a new session when none is open); a recording starts.
 #[tauri::command]
 async fn finish_screenshot(app: AppHandle, rect: capture::Rect) -> Res<()> {
+    let r = finish_capture(&app, rect);
+    // The capture window closes on an error; say why in the notebook, or it just vanishes.
+    if let Err(e) = &r {
+        let _ = app.emit_to("main", "problem", format!("The screenshot could not be saved: {e}"));
+    }
+    r
+}
+
+fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
+    let app = app.clone();
     let png = match capture::finish(&app, rect)? {
         capture::Chosen::Picture(png) => png,
         capture::Chosen::Region { center, rect, monitor } => return begin_recording(&app, center, rect, monitor),
@@ -897,6 +1022,8 @@ pub fn run() {
         .manage(Mutex::new(App::load()))
         .manage(capture::Frozen::default())
         .manage(Recorder::default())
+        .manage(Finishing::default())
+        .manage(Busy::default())
         .manage(Markup::default())
         .manage(SelftestNext::default())
         .on_window_event(|w, e| {
@@ -963,8 +1090,16 @@ pub fn run() {
             selftest_delete_session,
             selftest_done,
         ])
-        .run(tauri::generate_context!())
-        .expect("Snagbook could not start");
+        .build(tauri::generate_context!())
+        .expect("Snagbook could not start")
+        .run(|app, event| {
+            // Closing the last window while a recording is being finished waits for it.
+            if let tauri::RunEvent::ExitRequested { api, code: None, .. } = event {
+                if app.state::<Finishing>().0.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 #[cfg(test)]

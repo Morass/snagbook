@@ -71,6 +71,8 @@ export function drawMark(ctx, m, original, doc) {
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = alpha;
+  // A highlighter tints what is under it (black text stays black), see-through or not.
+  if (m.tool === "highlighter") ctx.globalCompositeOperation = "multiply";
   ctx.drawImage(layer, 0, 0);
   ctx.restore();
 }
