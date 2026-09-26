@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             KeyboardShortcuts.onKeyUp(for: .showNotebook) { WindowPlacement.toggle(model) }
             SelfTest.runIfRequested(model)
+            Shots.runIfRequested(model)
         }
     }
 

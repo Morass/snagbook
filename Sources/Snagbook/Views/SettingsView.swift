@@ -110,6 +110,8 @@ struct ShortcutSettings: View {
             }
             Section("In the notebook") {
                 shortcut("New item", "⌘N")
+                shortcut("New session / open a session", "⇧⌘N  ⌘O")
+                shortcut("Edit the session header", "⇧⌘H")
                 shortcut("Back / Forward", "⌘[  ⌘]")
                 shortcut("Templates 1–9", "⌘1 … ⌘9")
                 shortcut("Copy hand-off", "⇧⌘C")
@@ -121,6 +123,17 @@ struct ShortcutSettings: View {
             Section("While dragging the rectangle") {
                 shortcut("Whole screen instead", "F")
                 shortcut("Cancel", "Esc")
+            }
+            Section("In the mark-up window") {
+                shortcut("Highlighter, circle, arrow, box, pen", "H  O  A  R  P")
+                shortcut("Text, number, blur, crop, select", "T  N  B  C  V")
+                shortcut("Colour 1–6", "1 … 6")
+                shortcut("Thinner / thicker", "[  ]")
+                shortcut("More see-through / more solid", ",  .")
+                shortcut("Square, circle, 45° arrow", "hold ⇧ while dragging")
+                shortcut("Undo / redo", "⌘Z  ⇧⌘Z")
+                shortcut("Delete the selected mark", "⌫")
+                shortcut("Done / keep as it was / throw away", "↩  Esc  ⌘⌫")
             }
         }
         .formStyle(.grouped)

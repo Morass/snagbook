@@ -11,6 +11,14 @@ struct NotebookView: View {
         Group {
             if model.session == nil {
                 WelcomeView()
+            } else if Shots.isCapturing {
+                // README pictures: the same two panes without the glass sidebar container,
+                // which cannot be drawn offscreen.
+                HStack(spacing: 0) {
+                    ShotSidebar().frame(width: 230)
+                    Divider()
+                    ItemDetail()
+                }
             } else {
                 NavigationSplitView {
                     ItemList()
@@ -48,6 +56,8 @@ struct NotebookToolbar: ToolbarContent {
             Button { model.goForward() } label: { Image(systemName: "chevron.right") }
                 .help(tip("Forward", "⌘]")).disabled(!model.canGoForward)
         }
+        // README pictures: the glass capsule cannot be drawn offscreen; the buttons can.
+        .withoutGlassWhenCapturing()
         ToolbarItemGroup(placement: .primaryAction) {
             Button { model.newItemFromMenu() } label: { Label("New Item", systemImage: "plus.square") }
                 .help(tip("New item", "⌘N", "anywhere " + KeyboardShortcuts.Name.newItem.hint))
@@ -64,6 +74,18 @@ struct NotebookToolbar: ToolbarContent {
             Button { model.copyHandoff() } label: { Label("Copy Hand-off", systemImage: "arrowshape.turn.up.right") }
                 .help(tip("Copy hand-off", "⇧⌘C", then: "the text that hands this session to an agent"))
                 .disabled(model.session == nil)
+        }
+        .withoutGlassWhenCapturing()
+    }
+}
+
+extension ToolbarContent {
+    /// For the README pictures only: the toolbar's glass capsules cannot be drawn offscreen.
+    @ToolbarContentBuilder func withoutGlassWhenCapturing() -> some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            self.sharedBackgroundVisibility(Shots.isCapturing ? .hidden : .automatic)
+        } else {
+            self
         }
     }
 }
@@ -179,6 +201,37 @@ struct SessionMenu: View {
                 Text("For you only; the folder keeps its name.")
             }
         }
+    }
+}
+
+/// The sidebar for README pictures only: the same session button and rows as ItemList, in a
+/// plain stack, because the system sidebar list draws blank offscreen.
+struct ShotSidebar: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            SessionMenu()
+            Divider()
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
+                    let on = item.id == model.selectedID
+                    ItemRow(index: index + 1, item: item)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .foregroundStyle(on ? Color.white : Color.primary)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(on ? Color.accentColor : Color.clear))
+                }
+            }
+            .padding(10)
+            Spacer()
+            HStack {
+                Label("New Item", systemImage: "plus")
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+        }
+        .background(Color(nsColor: .underPageBackgroundColor))
     }
 }
 
