@@ -18,6 +18,8 @@ final class AppModel: ObservableObject {
     @Published var focusTitle = false
     /// A short line shown at the bottom of the notebook ("Saved clip-001.mp4 to Item 3").
     @Published var status: String?
+    /// The status line reports a success (drawn green), such as a finished Copy Hand-off.
+    @Published var statusIsSuccess = false
     @Published var alert: AlertInfo?
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
@@ -435,7 +437,7 @@ final class AppModel: ObservableObject {
             let text = session.handoff(style: config.handoff)
             pasteboard.clearContents()
             pasteboard.setString(text, forType: .string)
-            flash("Copied: \(session.displayPath)/README.md")
+            flash("Copied: \(session.displayPath)/README.md", success: true)
         }
     }
 
@@ -458,8 +460,9 @@ final class AppModel: ObservableObject {
 
     // MARK: - feedback
 
-    func flash(_ text: String) {
+    func flash(_ text: String, success: Bool = false) {
         status = text
+        statusIsSuccess = success
         statusTimer?.invalidate()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.status = nil }

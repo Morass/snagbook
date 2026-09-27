@@ -205,6 +205,7 @@ enum SelfTest {
         check(readme.contains("## 1. Main menu") && readme.contains("](01-main-menu/media/shot-001.png)"), "README holds every item with links into its folder")
         let clip = model.pasteboard.string(forType: .string) ?? ""
         check(clip.contains(session.displayPath), "Copy Hand-off puts the session path on the clipboard: \(clip.prefix(80))")
+        check(model.statusIsSuccess && model.status?.hasPrefix("Copied") == true, "Copy Hand-off says so in green")
 
         // 11b. Sessions have names and can be switched without restarting anything.
         model.renameSession("Inventory pass")

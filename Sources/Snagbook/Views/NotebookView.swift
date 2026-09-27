@@ -331,7 +331,11 @@ struct StatusBar: View {
                 Text("Recording").foregroundStyle(.red)
             }
             if let s = model.status {
-                Text(s).lineLimit(1).truncationMode(.middle)
+                if model.statusIsSuccess {
+                    Label(s, systemImage: "checkmark.circle.fill").lineLimit(1).truncationMode(.middle).foregroundStyle(.green)
+                } else {
+                    Text(s).lineLimit(1).truncationMode(.middle)
+                }
             } else if let session = model.session {
                 Text(session.displayPath).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
                     .textSelection(.enabled)
