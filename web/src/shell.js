@@ -84,17 +84,19 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return await invoke(cmd, args);
     } catch (e) {
       const msg = String(e?.message || e);
-      if (!msg.startsWith("NOTRASH:")) flash(msg, true);
+      if (!msg.startsWith("NOTRASH:")) flash(msg, "error");
       throw e;
     }
   }
 
-  function flash(text, error = false) {
+  /// A line in the status bar: tone "error" is red and stays longer, "ok" is green.
+  function flash(text, tone = "") {
     const t = $("status-text");
     t.textContent = text;
-    t.classList.toggle("error", error);
+    t.classList.toggle("error", tone === "error");
+    t.classList.toggle("ok", tone === "ok");
     clearTimeout(statusTimer);
-    statusTimer = setTimeout(() => (t.textContent = ""), error ? 8000 : 4000);
+    statusTimer = setTimeout(() => (t.textContent = ""), tone === "error" ? 8000 : 4000);
   }
 
   /// Save what the editor has not reported yet (before switching items or sessions).
@@ -108,7 +110,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function apply(v, { select } = {}) {
     const newSession = v.session?.path !== shownPath;
     view = v;
-    if (v.closed) flash(`The session folder ${v.closed} was deleted, so it was closed.`, true);
+    if (v.closed) flash(`The session folder ${v.closed} was deleted, so it was closed.`, "error");
     if (newSession) {
       shownPath = v.session?.path ?? null;
       selected = null;
@@ -262,7 +264,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     await refresh();
     const it = items().find((i) => i.id === id);
     const where = it?.title ?? "item " + id;
-    if (problem) flash(`${kind === "video" ? "Recording" : "Stills"} saved to ${where}, but ${problem}.`, true);
+    if (problem) flash(`${kind === "video" ? "Recording" : "Stills"} saved to ${where}, but ${problem}.`, "error");
     else flash(`${kind === "video" ? "Recording" : "Screenshot"} saved to ${where}`);
   }
 
@@ -281,7 +283,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function copyHandoff() {
     await flush();
     const text = await call("copy_handoff");
-    flash("Hand-off copied: " + text.split("\n")[0].slice(0, 80));
+    flash("✓ Hand-off copied: " + text.split("\n")[0].slice(0, 80), "ok");
     return text;
   }
 
@@ -306,7 +308,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     $("shot").title = tip("Screenshot", sc.screenshot || "", "drag a rectangle; it goes into this item");
     $("new-item").title = tip("New item", key("Mod+N"), sc.newItem ? "anywhere " + sc.newItem : "");
     $("items").setAttribute("aria-activedescendant", selected == null ? "" : "item-" + selected);
-    if (view?.loadError) flash("Settings could not be read, so they are not saved: " + view.loadError, true);
+    if (view?.loadError) flash("Settings could not be read, so they are not saved: " + view.loadError, "error");
   }
 
   function renderSessionButton() {

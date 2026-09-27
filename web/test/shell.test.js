@@ -402,3 +402,12 @@ test("a slow note of an item left behind does not open over the one chosen next"
   assert.deepEqual(opened, [2], "only item 2 is opened: " + JSON.stringify(opened));
   assert.equal(shell.selected(), 2, "and item 2 stays selected");
 });
+
+test("Copy Hand-off says so in green, and the next plain message is not green", async () => {
+  const { shell, $ } = await setup({ session: true });
+  await shell.copyHandoff();
+  assert.match($("status-text").textContent, /copied/);
+  assert.ok($("status-text").classList.contains("ok"), "the copied line is green");
+  await shell.newSession();
+  assert.ok(!$("status-text").classList.contains("ok"), "an ordinary message is not green");
+});
