@@ -3,21 +3,24 @@ import SnagbookCore
 import UniformTypeIdentifiers
 import WebKit
 
-/// Serves an item's files to the editor as snagbook://item/<id>/<relative path>.
+/// Serves an item's files to the editor as snagbook://item/<id>.<epoch>/<relative path>.
 /// Items are addressed by their permanent id, so renaming an item (and its folder) does not
-/// break pictures on screen. Byte ranges are honoured, which video playback needs.
+/// break pictures on screen. The epoch changes with the session and when an item is
+/// deleted: the page keeps every picture it has shown by address, so without it item 1's
+/// media/image-001.png of another session (or of a deleted item 1) would be shown in place
+/// of a new one of the same name. Byte ranges are honoured, which video playback needs.
 final class MediaSchemeHandler: NSObject, WKURLSchemeHandler {
     static let scheme = "snagbook"
     weak var bridge: EditorBridge?
 
     init(bridge: EditorBridge) { self.bridge = bridge }
 
-    static func base(for id: Int) -> String { "\(scheme)://item/\(id)/" }
+    static func base(for id: Int, epoch: Int) -> String { "\(scheme)://item/\(id).\(epoch)/" }
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url, url.host == "item" else { return fail(task, 400) }
         let parts = url.path.split(separator: "/", omittingEmptySubsequences: true).map { String($0).removingPercentEncoding ?? String($0) }
-        guard let first = parts.first, let id = Int(first), parts.count >= 2 else { return fail(task, 404) }
+        guard let first = parts.first, let id = Int(first.prefix { $0 != "." }), parts.count >= 2 else { return fail(task, 404) }
         let rel = parts.dropFirst().joined(separator: "/")
         let file: URL? = MainActor.assumeIsolated { bridge?.model?.fileURL(item: id, relative: rel) }
         guard let file, let handle = try? FileHandle(forReadingFrom: file) else { return fail(task, 404) }

@@ -13,6 +13,8 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     weak var model: AppModel?
     /// Item currently shown, as the editor knows it.
     private(set) var shownItem: Int?
+    /// Part of every media address; see MediaSchemeHandler.
+    private var epoch = 0
 
     override init() {
         super.init()
@@ -65,13 +67,17 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     func open(item id: Int, markdown: String, focus: Bool) {
         shownItem = id
-        call("snag.open(\(Self.json(["id": id, "markdown": markdown, "base": MediaSchemeHandler.base(for: id), "focus": focus])))")
+        call("snag.open(\(Self.json(["id": id, "markdown": markdown, "base": MediaSchemeHandler.base(for: id, epoch: epoch), "focus": focus])))")
     }
 
     func forget(item id: Int) {
         if shownItem == id { shownItem = nil }
+        epoch += 1
         call("snag.forget(\(id))")
     }
+
+    /// Another session is open: its items reuse the ids and picture names of this one.
+    func sessionChanged() { epoch += 1 }
 
     /// Write out any change the editor has not reported yet, and wait for it.
     func flush() async {

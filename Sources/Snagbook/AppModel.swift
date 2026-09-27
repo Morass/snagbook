@@ -107,6 +107,7 @@ final class AppModel: ObservableObject {
 
     private func use(_ s: Session) {
         session = s
+        editor.sessionChanged()
         items = s.manifest.items
         back.removeAll()
         forward.removeAll()

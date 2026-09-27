@@ -214,6 +214,16 @@ enum SelfTest {
         model.newSession()
         for _ in 0..<30 where model.session?.displayPath == firstPath { await settle(100) }
         check(model.session?.displayPath != firstPath && model.selectedID != nil, "New Session switches to a fresh session with its first item")
+        // A picture pasted here is named like one shown in the first session (item 1,
+        // image-001.png); the editor must show this one, not the old one it has seen.
+        model.insertImageData(ImageFile.pngData(testImage(200, 150, hue: 0.1))!)
+        await settle(800)
+        let shownWidths = await evalAsync(model, """
+            const imgs = [...document.querySelectorAll('.ProseMirror img')].filter((i) => i.src.includes('image-001'));
+            await Promise.all(imgs.map((i) => i.complete ? 0 : new Promise((ok) => { i.onload = i.onerror = ok; })));
+            return imgs.map((i) => i.naturalWidth).join(',');
+            """) as? String ?? ""
+        check(shownWidths == "200", "a picture pasted in another session shows itself, not an earlier session's picture of the same name (\(shownWidths))")
         model.openSession(firstPath)
         for _ in 0..<30 where model.session?.displayPath != firstPath { await settle(100) }
         await settle()
