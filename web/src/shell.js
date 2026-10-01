@@ -342,14 +342,23 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function onCaptured({ sessionId, ack, id, rel, kind = "image", label = "", problem = null }) {
     const expectedSessionId = view?.session?.id;
     const expectedOpenToken = view?.session?.openToken;
+    const stillHere = () => view?.session?.id === expectedSessionId && view?.session?.openToken === expectedOpenToken;
     const belongsHere = ack ? await call("capture_can_insert", { ack }).catch(() => false) : sessionId === view?.session?.id;
-    if (!belongsHere || view?.session?.id !== expectedSessionId || view?.session?.openToken !== expectedOpenToken) {
+    if (!belongsHere || !stillHere()) {
       if (ack) await call("capture_filed", { ack, inserted: false });
       await refresh();
       return flash("The capture stayed in its original session.");
     }
     await apply(await call("state"), { select: id });
+    if (!stillHere()) {
+      if (ack) await call("capture_filed", { ack, inserted: false });
+      return flash("The capture stayed in its original session.");
+    }
     if (selected !== id) await show(id, { focus: false });
+    if (!stillHere() || selected !== id) {
+      if (ack) await call("capture_filed", { ack, inserted: false });
+      return flash("The capture stayed in its original session.");
+    }
     snag()?.insertMedia({ kind, src: rel, label });
     try {
       await flush({ required: !!ack });

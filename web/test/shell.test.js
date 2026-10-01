@@ -12,6 +12,9 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   const calls = [];
   const notes = new Map();
   let slowNote = null;
+  let heldNote = null;
+  let noteGate = null;
+  let releaseNote = null;
   let session = null;
   let nextHash = 1;
   let nextOpen = 1;
@@ -74,7 +77,14 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       session.items.splice(index, 0, it);
       return view();
     },
-    read_note: ({ id }) => (slowNote === id ? new Promise((r) => setTimeout(() => r(notes.get(id) ?? ""), 30)) : notes.get(id) ?? ""),
+    read_note: async ({ id }) => {
+      if (heldNote === id && noteGate) {
+        heldNote = null;
+        await noteGate;
+      }
+      if (slowNote === id) await new Promise((resolve) => setTimeout(resolve, 30));
+      return notes.get(id) ?? "";
+    },
     write_note: ({ sessionId, openToken, id, markdown }) => {
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed before the note could be saved.";
       notes.set(id, markdown);
@@ -110,6 +120,11 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     slowNoteFor(id) {
       slowNote = id;
     },
+    holdNoteFor(id) {
+      heldNote = id;
+      noteGate = new Promise((resolve) => { releaseNote = resolve; });
+    },
+    releaseNote: () => releaseNote?.(),
     list,
     deleteFromOutside() {
       list.splice(list.findIndex((s) => s.path === session.path), 1);
@@ -506,6 +521,22 @@ test("a capture validation response cannot cross a session switch", async () => 
   await filing;
   assert.equal(inserted, 0);
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "slow-ack", inserted: false }]);
+});
+
+test("a capture note read cannot cross a session switch", async () => {
+  const t = await setup({ session: true });
+  await t.shell.newItem();
+  t.app.holdNoteFor(1);
+  let inserted = 0;
+  t.editor.insertMedia = () => { inserted++; };
+  const source = t.shell.view().session;
+  const filing = t.shell.onCaptured({ sessionId: source.id, ack: "read-ack", id: 1, rel: "media/shot-001.png" });
+  await t.settle();
+  await t.shell.newSession();
+  t.app.releaseNote();
+  await filing;
+  assert.equal(inserted, 0);
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "read-ack", inserted: false }]);
 });
 
 test("an open session deleted from outside is closed with a message", async () => {
