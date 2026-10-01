@@ -338,6 +338,14 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     await call("start_screenshot").catch(() => {});
   }
 
+  async function leaveCaptureInOrigin(ack) {
+    if (ack) {
+      try { await call("capture_filed", { ack, inserted: false }); }
+      catch { return false; }
+    }
+    return true;
+  }
+
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
   async function onCaptured({ sessionId, ack, id, rel, kind = "image", label = "", problem = null }) {
     const expectedSessionId = view?.session?.id;
@@ -345,19 +353,22 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const stillHere = () => view?.session?.id === expectedSessionId && view?.session?.openToken === expectedOpenToken;
     const belongsHere = ack ? await call("capture_can_insert", { ack }).catch(() => false) : sessionId === view?.session?.id;
     if (!belongsHere || !stillHere()) {
-      if (ack) await call("capture_filed", { ack, inserted: false });
+      const filed = await leaveCaptureInOrigin(ack);
       await refresh();
-      return flash("The capture stayed in its original session.");
+      if (filed) flash("The capture stayed in its original session.");
+      return;
     }
     await apply(await call("state"), { select: id });
     if (!stillHere()) {
-      if (ack) await call("capture_filed", { ack, inserted: false });
-      return flash("The capture stayed in its original session.");
+      const filed = await leaveCaptureInOrigin(ack);
+      if (filed) flash("The capture stayed in its original session.");
+      return;
     }
     if (selected !== id) await show(id, { focus: false });
     if (!stillHere() || selected !== id) {
-      if (ack) await call("capture_filed", { ack, inserted: false });
-      return flash("The capture stayed in its original session.");
+      const filed = await leaveCaptureInOrigin(ack);
+      if (filed) flash("The capture stayed in its original session.");
+      return;
     }
     snag()?.insertMedia({ kind, src: rel, label });
     try {
@@ -365,8 +376,13 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       if (ack) await call("capture_filed", { ack, inserted: true });
     } catch {
       if (ack) {
+        if (!stillHere()) {
+          const filed = await leaveCaptureInOrigin(ack);
+          if (filed) flash("The capture stayed in its original session.");
+          return;
+        }
         const pending = pendingCaptureAcks.get(id) || [];
-        pending.push({ ack, sessionId, openToken: view?.session?.openToken });
+        pending.push({ ack, sessionId: expectedSessionId, openToken: expectedOpenToken });
         pendingCaptureAcks.set(id, pending);
       }
       return;

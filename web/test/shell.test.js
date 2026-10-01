@@ -8,7 +8,7 @@ import { rectFraction, formatElapsed } from "../src/rect.js";
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
 /// An in-memory stand-in for the app's commands.
-function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowMedia = false } = {}) {
+function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowMedia = false, slowWrite = false, failCaptureFiling = false } = {}) {
   const calls = [];
   const notes = new Map();
   let slowNote = null;
@@ -21,8 +21,10 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let nextMedia = 1;
   let releaseCaptureCheck;
   let releaseMedia;
+  let releaseWrite;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
   const mediaGate = slowMedia ? new Promise((resolve) => { releaseMedia = resolve; }) : null;
+  const writeGate = slowWrite ? new Promise((resolve) => { releaseWrite = resolve; }) : null;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
   const list = [...sessions];
   const view = (extra = {}) => ({ config, session: session && JSON.parse(JSON.stringify(session)), loadError: null, closed: null, platform, ...extra });
@@ -85,7 +87,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (slowNote === id) await new Promise((resolve) => setTimeout(resolve, 30));
       return notes.get(id) ?? "";
     },
-    write_note: ({ sessionId, openToken, id, markdown }) => {
+    write_note: async ({ sessionId, openToken, id, markdown }) => {
+      if (writeGate) await writeGate;
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed before the note could be saved.";
       notes.set(id, markdown);
       return true;
@@ -95,7 +98,10 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     set_selected: () => null,
     update_config: ({ patch }) => (Object.assign(config, patch), view()),
     start_screenshot: () => null,
-    capture_filed: () => null,
+    capture_filed: () => {
+      if (failCaptureFiling) throw "The capture could not be filed.";
+      return null;
+    },
     capture_can_insert: async () => {
       if (captureGate) await captureGate;
       return captureCanInsert;
@@ -117,6 +123,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     notes,
     releaseCaptureCheck: () => releaseCaptureCheck?.(),
     releaseMedia: () => releaseMedia?.(),
+    releaseWrite: () => releaseWrite?.(),
     slowNoteFor(id) {
       slowNote = id;
     },
@@ -507,6 +514,27 @@ test("a delayed capture stays in its source session", async () => {
   await t.shell.onCaptured({ sessionId: "another-session", ack: "source-ack", id: 1, rel: "media/clip-001.mp4", kind: "video" });
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "source-ack", inserted: false }]);
   assert.equal(inserted, 0);
+});
+
+test("a failed origin acknowledgement does not strand the capture event handler", async () => {
+  const t = await setup({ session: true, captureCanInsert: false, failCaptureFiling: true });
+  await assert.doesNotReject(t.shell.onCaptured({ sessionId: "another-session", ack: "failed-ack", id: 1, rel: "media/clip-001.mp4", kind: "video" }));
+  assert.match(t.$("status-text").textContent, /could not be filed/);
+});
+
+test("a note write overtaken by a session switch files the capture in its origin", async () => {
+  const t = await setup({ session: true, slowWrite: true });
+  let pending = null;
+  t.editor.insertMedia = ({ src }) => { pending = { id: 1, markdown: src }; };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.editor.restorePending = (p) => { pending = p; };
+  const source = t.shell.view().session;
+  const filing = t.shell.onCaptured({ sessionId: source.id, ack: "overtaken-ack", id: 1, rel: "media/shot-001.png" });
+  await t.settle();
+  await t.shell.newSession();
+  t.app.releaseWrite();
+  await filing;
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "overtaken-ack", inserted: false }]);
 });
 
 test("a capture validation response cannot cross a session switch", async () => {
