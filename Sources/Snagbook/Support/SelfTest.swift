@@ -427,6 +427,17 @@ enum SelfTest {
         check(await model.editor.flush(), "the pending note retries after its folder is repaired")
         check(read(liveNote).contains("retained after failed save"), "the retried note keeps the text from the failed save")
 
+        let liveItem = try! session.itemURL(id)
+        let heldItem = session.url.appendingPathComponent(".item.selftest")
+        try? FileManager.default.moveItem(at: liveItem, to: heldItem)
+        try? FileManager.default.createDirectory(at: liveItem, withIntermediateDirectories: false)
+        let replacementNote = liveItem.appendingPathComponent(Session.noteName)
+        try? "replacement item\n".write(to: replacementNote, atomically: true, encoding: .utf8)
+        check(model.noteChanged(id: id, markdown: "must not cross item identity") == false, "autosave refuses a replacement item at the same path")
+        check(read(replacementNote) == "replacement item\n", "a replacement item's note is not overwritten")
+        try? FileManager.default.removeItem(at: liveItem)
+        try? FileManager.default.moveItem(at: heldItem, to: liveItem)
+
         // Closing the notebook window and showing it again brings it back.
         WindowPlacement.notebook?.performClose(nil)
         await settle()

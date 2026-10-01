@@ -67,7 +67,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     func open(item id: Int, markdown: String, focus: Bool) {
         shownItem = id
-        call("snag.open(\(Self.json(["id": id, "markdown": markdown, "base": MediaSchemeHandler.base(for: id, epoch: epoch), "focus": focus])))")
+        call("snag.open(\(Self.json(["id": id, "markdown": markdown, "base": MediaSchemeHandler.base(for: id, epoch: epoch), "context": epoch, "focus": focus])))")
     }
 
     func forget(item id: Int) {
@@ -77,7 +77,11 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     }
 
     /// Another session is open: its items reuse the ids and picture names of this one.
-    func sessionChanged() { epoch += 1 }
+    func sessionChanged() {
+        epoch += 1
+        shownItem = nil
+        call("snag.reset()")
+    }
 
     /// The current session vanished, so its unsavable editor state must not block recovery.
     func sessionClosed() {
@@ -132,6 +136,11 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             }
         case "media":
             guard let req = body["reqId"] as? Int else { return }
+            guard let item = body["itemId"] as? Int, let context = body["context"] as? Int,
+                  item == shownItem, context == epoch else {
+                call("snag.mediaFailed(\(req))")
+                return
+            }
             let data = (body["base64"] as? String).flatMap { Data(base64Encoded: $0) }
             let mime = body["mime"] as? String ?? ""
             let name = body["name"] as? String ?? ""

@@ -227,8 +227,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                     throw error
                 }
             }
-            finished = true
             try model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
+            finished = true
             try? live.writeReadme()
             close()
         } catch {

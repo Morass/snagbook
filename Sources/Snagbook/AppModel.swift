@@ -33,6 +33,7 @@ final class AppModel: ObservableObject {
     lazy var capture = CaptureController(model: self)
     private var back: [Int] = []
     private var forward: [Int] = []
+    private var editorItemIdentity: String?
     private var statusTimer: Timer?
 
     struct AlertInfo: Identifiable {
@@ -114,6 +115,7 @@ final class AppModel: ObservableObject {
         updateNav()
         updateConfig { $0.lastSession = s.displayPath }
         selectedID = nil
+        editorItemIdentity = nil
         if let first = items.last { show(first.id, record: false) } else { titleDraft = "" }
     }
 
@@ -127,6 +129,7 @@ final class AppModel: ObservableObject {
         session = nil
         items = []
         selectedID = nil
+        editorItemIdentity = nil
         titleDraft = ""
         back.removeAll()
         forward.removeAll()
@@ -237,6 +240,7 @@ final class AppModel: ObservableObject {
             forward.removeAll()
         }
         selectedID = id
+        editorItemIdentity = try? session.itemIdentity(id)
         titleDraft = rec.title
         let md = (try? session.readNote(id)) ?? ""
         editor.open(item: id, markdown: md, focus: !focusTitle)
@@ -375,9 +379,12 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func noteChanged(id: Int, markdown: String) -> Bool {
-        guard let session else { return false }
+        guard let session, editor.shownItem == id, let editorItemIdentity else { return false }
         do {
-            try session.writeNote(id, body: markdown)
+            let live = try session.reopenedMatchingItem(id, identity: editorItemIdentity, fallbackHeader: config.header)
+            try live.writeNote(id, body: markdown)
+            self.session = live
+            items = live.manifest.items
             return true
         } catch {
             show(error)

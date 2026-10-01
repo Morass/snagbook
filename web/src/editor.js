@@ -462,8 +462,9 @@ function sendFiles(files, pos) {
     if (!/^(image|video)\//.test(file.type)) continue;
     any = true;
     const reqId = nextReq++;
-    pending.set(reqId, { pos, kind: file.type.startsWith("video") ? "video" : "image", name: file.name });
-    fileToBase64(file).then((base64) => post({ type: "media", reqId, name: file.name || "", mime: file.type, base64 }));
+    const origin = { itemId: currentId, context: currentContext };
+    pending.set(reqId, { pos, kind: file.type.startsWith("video") ? "video" : "image", name: file.name, ...origin });
+    fileToBase64(file).then((base64) => post({ type: "media", reqId, name: file.name || "", mime: file.type, base64, ...origin }));
   }
   return any;
 }
@@ -473,6 +474,7 @@ function sendFiles(files, pos) {
 const cache = new Map(); // item id -> {state, memo, saved}
 let view = null;
 let currentId = null;
+let currentContext = null;
 let saveTimer = null;
 let onToolbar = () => {};
 
@@ -567,7 +569,7 @@ export function mount(place, opts = {}) {
 
 export const api = {
   /** Show item `id`. Keeps undo history when coming back to an item whose file did not change. */
-  open({ id, markdown, base, focus = true }) {
+  open({ id, markdown, base, context = null, focus = true }) {
     persistNow();
     const baseChanged = base != null && base !== mediaBase;
     if (base != null) mediaBase = base;
@@ -582,6 +584,7 @@ export const api = {
     }
     if (baseChanged) for (const v of mediaViews) v.render();
     currentId = id;
+    currentContext = context;
     onToolbar(view.state);
     if (focus) api.focus();
     return true;
@@ -591,6 +594,15 @@ export const api = {
   forget(id) {
     cache.delete(id);
     if (currentId === id) currentId = null;
+  },
+
+  reset() {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    cache.clear();
+    pending.clear();
+    currentId = null;
+    currentContext = null;
   },
 
   /** Write out a pending change right now (before switching items or quitting). */
@@ -679,6 +691,7 @@ export const api = {
     const p = pending.get(reqId);
     pending.delete(reqId);
     if (!p) return false;
+    if (p.itemId !== currentId || p.context !== currentContext) return false;
     return api.insertMedia({ kind: p.kind, src, label: "", pos: p.pos });
   },
 

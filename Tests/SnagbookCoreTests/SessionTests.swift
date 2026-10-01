@@ -310,6 +310,17 @@ final class SessionTests: XCTestCase {
         XCTAssertThrowsError(try s.writeNote(item.id, body: "replacement"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: note.path))
     }
+
+    func testRenameDoesNotOverwriteAnUnreadableNote() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        let note = try s.noteURL(item.id)
+        try FileManager.default.removeItem(at: note)
+        try FileManager.default.createDirectory(at: note, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try s.renameItem(item.id, to: "Renamed"))
+        XCTAssertEqual(s.manifest.items.first?.title, "Item 1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: note.path))
+    }
 }
 
 final class ConfigTests: XCTestCase {

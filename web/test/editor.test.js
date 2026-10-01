@@ -132,6 +132,31 @@ test("pasted file bytes go to the app and come back as a picture", async () => {
   assert.match(md(), /!\[\]\(media\/shot-002\.png\)/);
 });
 
+test("a delayed pasted file cannot cross into another item", async () => {
+  let release;
+  const file = { type: "image/png", name: "slow.png", arrayBuffer: () => new Promise((r) => { release = r; }) };
+  api.open({ id: "13", markdown: "source\n", context: 4, focus: false });
+  const before = posted.length;
+  view.someProp("handlePaste", (f) => f(view, { clipboardData: { files: [file] }, preventDefault() {} }));
+  api.open({ id: "14", markdown: "destination\n", context: 4, focus: false });
+  release(new Uint8Array([1, 2]).buffer);
+  await new Promise((r) => setTimeout(r, 0));
+  const msg = posted.slice(before).find((m) => m.type === "media");
+  assert.equal(api.mediaSaved(msg.reqId, "media/image-001.png"), false);
+  assert.equal(md(), "destination\n");
+});
+
+test("a session reset drops undo history even when item ids and text match", () => {
+  api.open({ id: "1", markdown: "old session\n", context: 5, focus: false });
+  api.selectAll();
+  type("shared");
+  api.takePending();
+  api.reset();
+  api.open({ id: "1", markdown: "shared\n", context: 6, focus: false });
+  api.undo();
+  assert.equal(md(), "shared\n");
+});
+
 test("takePending hands over an unsaved change exactly once", () => {
   api.open({ id: "20", markdown: "a\n", focus: false });
   view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));

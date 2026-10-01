@@ -233,6 +233,7 @@ public final class Session {
         guard let i = manifest.items.firstIndex(where: { $0.id == id }) else { throw SnagError.noSuchItem(id) }
         var rec = manifest.items[i]
         if rec.title == t { return rec }
+        let text = try String(contentsOf: url.appendingPathComponent(rec.folder).appendingPathComponent(Self.noteName), encoding: .utf8)
         let newFolder = Naming.itemFolder(id: id, title: t)
         if newFolder != rec.folder {
             let from = url.appendingPathComponent(rec.folder)
@@ -245,7 +246,6 @@ public final class Session {
         rec.title = t
         manifest.items[i] = rec
         let noteURL = url.appendingPathComponent(rec.folder).appendingPathComponent(Self.noteName)
-        let text = (try? String(contentsOf: noteURL, encoding: .utf8)) ?? ""
         let parts = FrontMatter.split(text)
         try Data(FrontMatter.join(raw: parts.raw, updates: [("title", t)], body: parts.body).utf8).write(to: noteURL, options: .atomic)
         try save()
