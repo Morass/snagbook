@@ -8,7 +8,7 @@ import { rectFraction, formatElapsed } from "../src/rect.js";
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
 /// An in-memory stand-in for the app's commands.
-function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
+function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true } = {}) {
   const calls = [];
   const notes = new Map();
   let slowNote = null;
@@ -69,8 +69,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
       return view();
     },
     read_note: ({ id }) => (slowNote === id ? new Promise((r) => setTimeout(() => r(notes.get(id) ?? ""), 30)) : notes.get(id) ?? ""),
-    write_note: ({ sessionId, id, markdown }) => {
-      if (session?.id !== sessionId) throw "The open session changed before the note could be saved.";
+    write_note: ({ sessionId, openToken, id, markdown }) => {
+      if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed before the note could be saved.";
       notes.set(id, markdown);
       return true;
     },
@@ -80,6 +80,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
     update_config: ({ patch }) => (Object.assign(config, patch), view()),
     start_screenshot: () => null,
     capture_filed: () => null,
+    capture_can_insert: () => captureCanInsert,
   };
   const invoke = async (cmd, args = {}) => {
     calls.push([cmd, args]);
@@ -400,6 +401,19 @@ test("a failed ordinary autosave is restored for the next required flush", async
   assert.equal(t.shell.view().session, null);
 });
 
+test("a failed autosave prevents switching to a new session", async () => {
+  const t = await setup({ session: true });
+  let pending = null;
+  t.editor.restorePending = (p) => { pending = p; };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.app.notes.set = () => { throw new Error("disk full"); };
+  const before = t.shell.view().session.openToken;
+  await t.shell.onEditorMessage({ type: "changed", id: 1, markdown: "not lost" });
+  await t.shell.newSession();
+  assert.equal(t.shell.view().session.openToken, before);
+  assert.deepEqual(pending, { type: "changed", id: 1, markdown: "not lost" });
+});
+
 test("every finished recording kind acknowledges only after filing", async () => {
   const t = await setup({ session: true });
   t.editor.insertMedia = () => {};
@@ -416,8 +430,36 @@ test("a marked screenshot carries its native filing acknowledgement", async () =
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "marked-ack", inserted: true }]);
 });
 
-test("a delayed capture stays in its source session", async () => {
+test("a capture is not inserted into a same-id copied session", async () => {
+  const t = await setup({ session: true, captureCanInsert: false });
+  let inserted = 0;
+  t.editor.insertMedia = () => { inserted++; };
+  await t.shell.onMarked({ sessionId: t.shell.view().session.id, ack: "origin-ack", id: 1, rel: "media/shot-001.png", isNew: true, kept: true, changed: true });
+  assert.equal(inserted, 0);
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "origin-ack", inserted: false }]);
+});
+
+test("two captures waiting on one failed note save are both acknowledged", async () => {
   const t = await setup({ session: true });
+  let pending = null;
+  t.editor.insertMedia = ({ src }) => { pending = { id: 1, markdown: src }; };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.editor.restorePending = (p) => { pending = p; };
+  const set = t.app.notes.set.bind(t.app.notes);
+  t.app.notes.set = () => { throw new Error("disk full"); };
+  const sessionId = t.shell.view().session.id;
+  await t.shell.onCaptured({ sessionId, ack: "first", id: 1, rel: "media/shot-001.png" });
+  await t.shell.onCaptured({ sessionId, ack: "second", id: 1, rel: "media/shot-002.png" });
+  t.app.notes.set = set;
+  await t.shell.onEditorMessage({ type: "changed", id: 1, markdown: "both links" });
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [
+    { ack: "first", inserted: true },
+    { ack: "second", inserted: true },
+  ]);
+});
+
+test("a delayed capture stays in its source session", async () => {
+  const t = await setup({ session: true, captureCanInsert: false });
   let inserted = 0;
   t.editor.insertMedia = () => { inserted++; };
   await t.shell.onCaptured({ sessionId: "another-session", ack: "source-ack", id: 1, rel: "media/clip-001.mp4", kind: "video" });
@@ -451,6 +493,7 @@ test("pasted bytes are saved into the shown item and handed back to the editor",
   // The fake app has no save_media: the editor is told it failed, and nothing breaks.
   assert.deepEqual(t.editor.log.pop(), ["failed", 7]);
   assert.equal(t.app.calls.find(([c]) => c === "save_media")[1].sessionId, t.shell.view().session.id);
+  assert.equal(t.app.calls.find(([c]) => c === "save_media")[1].openToken, t.shell.view().session.openToken);
 });
 
 test("switching sessions forgets the old items in the editor", async () => {

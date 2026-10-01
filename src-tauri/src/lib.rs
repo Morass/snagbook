@@ -299,19 +299,21 @@ fn read_note(st: St, id: i64) -> Res<String> {
 }
 
 #[tauri::command]
-fn write_note(st: St, session_id: String, id: i64, markdown: String) -> Res<bool> {
+fn write_note(st: St, session_id: String, open_token: String, id: i64, markdown: String) -> Res<bool> {
     let mut a = st.lock().unwrap();
-    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id) { return Err("The open session changed before the note could be saved.".into()); }
+    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
+        return Err("The open session changed before the note could be saved.".into());
+    }
     a.session()?.write_note(id, &markdown).map_err(err)
 }
 
 /// Bytes pasted or dropped into the editor. Returns the note-relative path.
 #[tauri::command]
-fn save_media(st: St, session_id: String, id: i64, base64: String, mime: String, name: String) -> Res<String> {
+fn save_media(st: St, session_id: String, open_token: String, id: i64, base64: String, mime: String, name: String) -> Res<String> {
     let data = base64::engine::general_purpose::STANDARD.decode(base64.as_bytes()).map_err(|e| e.to_string())?;
     let (prefix, ext) = media::name_for(&mime, &name);
     let mut a = st.lock().unwrap();
-    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id) {
+    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
         return Err("The open session changed before the picture could be saved.".into());
     }
     a.session()?.save_media(id, &data, prefix, &ext).map_err(err)
@@ -778,9 +780,7 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
         if !s.matches_folder_identity(&pending.session_identity) || s.manifest.id != pending.session_id {
             return Err("The recording's session is gone or was replaced.".into());
         }
-        let body = s.read_note(pending.item).unwrap_or_default();
-        let body = body.trim_end();
-        s.write_note(pending.item, &if body.is_empty() { format!("{}\n", pending.link) } else { format!("{body}\n\n{}\n", pending.link) }).map_err(err)?;
+        append_capture_link(&mut s, pending.item, &pending.link)?;
     }
     app.state::<CaptureAcks>().0.lock().unwrap().remove(&ack);
     if app.state::<Busy>().release(&pending.session, pending.item) {
@@ -789,6 +789,23 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
         }
     }
     Ok(())
+}
+
+fn append_capture_link(s: &mut Session, item: i64, link: &str) -> Res<()> {
+    let body = s.read_note(item).unwrap_or_default();
+    let body = body.trim_end();
+    s.write_note(item, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") }).map_err(err)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn capture_can_insert(app: AppHandle, window: tauri::Window, st: St, ack: String) -> Res<bool> {
+    if window.label() != "main" { return Err("Captures are filed from the notebook window.".into()); }
+    let pending = app.state::<CaptureAcks>().0.lock().unwrap().get(&ack).cloned().ok_or("That capture is not waiting to be filed.")?;
+    let a = st.lock().unwrap();
+    Ok(a.session.as_ref().is_some_and(|s| {
+        s.manifest.id == pending.session_id && s.matches_folder_identity(&pending.session_identity)
+    }))
 }
 
 #[tauri::command]
@@ -962,8 +979,19 @@ fn finish_markup(app: &AppHandle, kept: bool, changed: bool) {
             .ok()
             .filter(|s| s.manifest.id == p.session_id && s.matches_folder_identity(&p.session_identity));
     }
+    let file_without_notebook = p.is_new && kept && app.get_webview_window("main").is_none();
+    let mut event_ack = p.ack.clone();
     let source = if open_here { a.session.as_mut() } else { other.as_mut() };
     if let Some(s) = source {
+        if file_without_notebook {
+            if let Some(ack) = &p.ack {
+                if append_capture_link(s, p.id, &format!("![]({})", p.rel)).is_ok() {
+                    app.state::<CaptureAcks>().0.lock().unwrap().remove(ack);
+                    app.state::<Busy>().release(&p.session_dir, p.id);
+                    event_ack = None;
+                }
+            }
+        }
         let _ = s.write_readme();
         if !app.state::<Busy>().has(Some(&s.dir), p.id) {
             if let Ok(title) = s.item(p.id).map(|r| r.title.clone()) {
@@ -978,7 +1006,7 @@ fn finish_markup(app: &AppHandle, kept: bool, changed: bool) {
     if let Some(w) = app.get_webview_window(markup::WINDOW) {
         let _ = w.destroy();
     }
-    let _ = app.emit_to("main", "marked", Marked { session_id: p.session_id, ack: p.ack, id: p.id, rel: p.rel, is_new: p.is_new, kept, changed });
+    let _ = app.emit_to("main", "marked", Marked { session_id: p.session_id, ack: event_ack, id: p.id, rel: p.rel, is_new: p.is_new, kept, changed });
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.set_focus();
@@ -1292,6 +1320,7 @@ pub fn run() {
             cancel_screenshot,
             finish_screenshot,
             capture_filed,
+            capture_can_insert,
             capture_open,
             selftest_requested,
             selftest_mode,

@@ -111,7 +111,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     if (!ed || !editorReady) return;
     const p = ed.takePending?.();
     if (p && p.id != null) {
-      const writing = call("write_note", { sessionId: view?.session?.id, id: p.id, markdown: p.markdown });
+      const writing = call("write_note", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id: p.id, markdown: p.markdown });
       try {
         await writing;
         await acknowledgeCapture(p.id);
@@ -123,10 +123,23 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function acknowledgeCapture(id) {
-    const pending = pendingCaptureAcks.get(id);
-    if (!pending || pending.sessionId !== view?.session?.id) return;
-    await call("capture_filed", { ack: pending.ack, inserted: true });
-    pendingCaptureAcks.delete(id);
+    const pending = pendingCaptureAcks.get(id) || [];
+    const remaining = [];
+    for (const p of pending) {
+      if (p.sessionId !== view?.session?.id || p.openToken !== view?.session?.openToken) {
+        remaining.push(p);
+        continue;
+      }
+      try {
+        await call("capture_filed", { ack: p.ack, inserted: true });
+      } catch (e) {
+        remaining.push(p);
+        pendingCaptureAcks.set(id, remaining.concat(pending.slice(pending.indexOf(p) + 1)));
+        throw e;
+      }
+    }
+    if (remaining.length) pendingCaptureAcks.set(id, remaining);
+    else pendingCaptureAcks.delete(id);
   }
 
   async function apply(v, { select } = {}) {
@@ -191,7 +204,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function newSession() {
-    await flush();
+    try { await flush({ required: true }); }
+    catch { return flash("The note could not be saved, so the session was not changed.", "error"); }
     await apply(await call("new_session"));
     flash(`New session: ${view.session.path}`);
     $("item-title").focus();
@@ -199,7 +213,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function openSession(path) {
-    await flush();
+    try { await flush({ required: true }); }
+    catch { return flash("The note could not be saved, so the session was not changed.", "error"); }
     await apply(await call("open_session", { path }));
   }
 
@@ -312,7 +327,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
   async function onCaptured({ sessionId, ack, id, rel, kind = "image", label = "", problem = null }) {
-    if (sessionId && view?.session?.id !== sessionId) {
+    const belongsHere = ack ? await call("capture_can_insert", { ack }).catch(() => false) : sessionId === view?.session?.id;
+    if (!belongsHere) {
       if (ack) await call("capture_filed", { ack, inserted: false });
       await refresh();
       return flash("The capture stayed in its original session.");
@@ -324,7 +340,11 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       await flush({ required: !!ack });
       if (ack) await call("capture_filed", { ack, inserted: true });
     } catch {
-      if (ack) pendingCaptureAcks.set(id, { ack, sessionId });
+      if (ack) {
+        const pending = pendingCaptureAcks.get(id) || [];
+        pending.push({ ack, sessionId, openToken: view?.session?.openToken });
+        pendingCaptureAcks.set(id, pending);
+      }
       return;
     }
     await refresh();
@@ -337,12 +357,11 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   /// The mark-up window finished: a new screenshot goes into the note (or is gone); an
   /// existing picture is redrawn.
   async function onMarked({ sessionId, ack, id, rel, isNew, kept, changed }) {
+    if (isNew && kept) return onCaptured({ sessionId, ack, id, rel, kind: "image" });
     if (sessionId && view?.session?.id !== sessionId) {
-      if (isNew && kept && ack) await call("capture_filed", { ack, inserted: false });
       await refresh();
       return flash("The marked picture stayed in its original session.");
     }
-    if (isNew && kept) return onCaptured({ sessionId, ack, id, rel, kind: "image" });
     if (isNew) {
       await refresh();
       return flash("Screenshot discarded");
@@ -545,7 +564,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function pickFolder() {
-    await flush();
+    try { await flush({ required: true }); }
+    catch { return flash("The note could not be saved, so the session was not changed.", "error"); }
     const v = await call("pick_session_folder");
     if (v) await apply(v);
   }
@@ -730,7 +750,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       case "changed":
         if (msg.id != null) {
           try {
-            await call("write_note", { sessionId: view?.session?.id, id: msg.id, markdown: msg.markdown });
+            await call("write_note", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id: msg.id, markdown: msg.markdown });
             await acknowledgeCapture(msg.id);
           } catch {
             snag()?.restorePending?.(msg);
@@ -742,7 +762,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         const id = selected;
         try {
           if (id == null) throw new Error("no item");
-          const rel = await call("save_media", { sessionId: view?.session?.id, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
+          const rel = await call("save_media", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
           snag()?.mediaSaved(msg.reqId, rel);
           await refresh();
         } catch {
