@@ -15,6 +15,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let heldNote = null;
   let noteGate = null;
   let releaseNote = null;
+  let staleHeldNote = false;
   let session = null;
   let nextHash = 1;
   let nextOpen = 1;
@@ -110,7 +111,12 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       }
       if (heldNote === id && noteGate) {
         heldNote = null;
+        const heldValue = notes.get(id) ?? "";
         await noteGate;
+        if (staleHeldNote) {
+          staleHeldNote = false;
+          return heldValue;
+        }
       }
       if (slowNote === id) await new Promise((resolve) => setTimeout(resolve, 30));
       return notes.get(id) ?? "";
@@ -180,6 +186,11 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       slowNote = id;
     },
     holdNoteFor(id) {
+      heldNote = id;
+      noteGate = new Promise((resolve) => { releaseNote = resolve; });
+    },
+    holdStaleNoteFor(id) {
+      staleHeldNote = true;
       heldNote = id;
       noteGate = new Promise((resolve) => { releaseNote = resolve; });
     },
@@ -750,6 +761,18 @@ test("a capture validation response cannot cross a session switch", async () => 
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "slow-ack", inserted: false }]);
 });
 
+test("capture fallback reload follows the same session folder after reopening it", async () => {
+  const t = await setup({ session: true, slowCaptureCheck: true });
+  const source = t.shell.view().session;
+  t.app.addCaptureOrigin("reopen-capture", { sessionId: source.id, openToken: source.openToken, id: 1, rel: "media/shot-reopen.png" });
+  const filing = t.shell.onCaptured({ sessionId: source.id, ack: "reopen-capture", id: 1, rel: "media/shot-reopen.png" });
+  await t.settle();
+  await t.shell.openSession(source.path);
+  t.app.releaseCaptureCheck();
+  await filing;
+  assert.match(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, /shot-reopen\.png/);
+});
+
 test("a capture note read cannot cross a session switch", async () => {
   const t = await setup({ session: true });
   await t.shell.newItem();
@@ -861,6 +884,23 @@ test("pasted bytes finishing conversion after an item switch stay with their sou
   assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "save_media").at(-1)[1].id, 1);
   assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "capture_filed").at(-1)[1], { ack: "media-1", inserted: false });
   assert.match(t.app.notes.get(1), /!\[\]\(media\/image-001\.png\)/);
+});
+
+test("a stale item read retries when fallback filing changes its note", async () => {
+  const t = await setup({ session: true, slowMedia: true });
+  t.editor.mediaSaved = () => false;
+  const source = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 18, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  await t.shell.newItem();
+  t.app.holdStaleNoteFor(1);
+  const returning = t.shell.show(1);
+  await t.settle();
+  t.app.releaseMedia();
+  await saving;
+  t.app.releaseNote();
+  await returning;
+  assert.match(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, /!\[\]\(media\/image-001\.png\)/);
 });
 
 test("a paste reply cannot enter an old editor after the backend switched sessions", async () => {

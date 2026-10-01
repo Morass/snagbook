@@ -80,6 +80,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let statusTimer = null;
   const pendingCaptureAcks = new Map();
   const pendingOriginAcks = new Map();
+  const originRevisions = new Map();
   const editorWrites = new Set();
   let flushTail = Promise.resolve();
   let noteTail = Promise.resolve();
@@ -248,8 +249,15 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return;
     }
     let md = "";
+    const revisionKey = originRevisionKey({ path: view.session.path, sessionId: view.session.id, id });
+    let revision = originRevisions.get(revisionKey) || 0;
     try {
-      md = await call("read_note", { id });
+      while (true) {
+        md = await call("read_note", { id });
+        const current = originRevisions.get(revisionKey) || 0;
+        if (current === revision) break;
+        revision = current;
+      }
     } catch {
       return refresh();
     }
@@ -439,6 +447,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         if (isOpen) await flush({ required: true });
         await call("capture_filed", { ack, inserted: false });
         pending.filed = true;
+        bumpOriginRevision(pending);
         if (originIsOpen(pending)) await reloadOriginItem(pending);
         pending.unlock?.();
         pendingOriginAcks.delete(ack);
@@ -464,6 +473,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
           if (isOpen) await flush({ required: true });
           await call("capture_filed", { ack, inserted: false });
           origin.filed = true;
+          bumpOriginRevision(origin);
         }
         if (originIsOpen(origin)) await reloadOriginItem(origin);
         origin.unlock?.();
@@ -490,12 +500,22 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     }
   }
 
+  function originRevisionKey(origin) {
+    return `${origin.path || origin.sessionId}\u0000${origin.id}`;
+  }
+
+  function bumpOriginRevision(origin) {
+    const key = originRevisionKey(origin);
+    originRevisions.set(key, (originRevisions.get(key) || 0) + 1);
+  }
+
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
   async function onCaptured({ sessionId, ack, id, rel, kind = "image", label = "", problem = null }) {
     const expectedSessionId = view?.session?.id;
     const expectedOpenToken = view?.session?.openToken;
+    const expectedPath = view?.session?.path;
     const stillHere = () => view?.session?.id === expectedSessionId && view?.session?.openToken === expectedOpenToken;
-    const origin = { id, sessionId, openToken: expectedOpenToken };
+    const origin = { id, sessionId, openToken: expectedOpenToken, path: expectedPath };
     const belongsHere = ack ? await call("capture_can_insert", { ack }).catch(() => false) : sessionId === view?.session?.id;
     if (!belongsHere || !stillHere()) {
       const filed = await leaveCaptureInOrigin(ack, origin);
