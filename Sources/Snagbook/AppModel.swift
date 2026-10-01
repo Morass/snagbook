@@ -394,9 +394,12 @@ final class AppModel: ObservableObject {
     func move(from offsets: IndexSet, to dest: Int) {
         guard let session, let from = offsets.first else { return }
         let id = items[from].id
+        guard let itemIdentity = itemIdentities[id] else { return flash("That item is no longer there") }
         do {
-            try session.moveItem(id, to: dest > from ? dest - 1 : dest)
-            items = session.manifest.items
+            let live = try session.reopenedMatchingItem(id, identity: itemIdentity, fallbackHeader: config.header)
+            try live.moveItem(id, to: dest > from ? dest - 1 : dest)
+            self.session = live
+            items = live.manifest.items
         } catch {
             show(error)
         }
@@ -544,6 +547,7 @@ final class AppModel: ObservableObject {
 
     private func appendMedia(_ markdown: String, to session: Session, item id: Int) throws {
         let old = try session.readNote(id).trimmingCharacters(in: .whitespacesAndNewlines)
+        if old.split(separator: "\n").contains(Substring(markdown)) { return }
         try session.writeNote(id, body: old.isEmpty ? markdown + "\n" : old + "\n\n" + markdown + "\n")
     }
 

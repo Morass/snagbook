@@ -16,9 +16,9 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     unowned let model: AppModel
     let session: Session
     let itemIdentity: String
-    let pictureBinding: Session.FileBinding
-    let origBinding: Session.FileBinding?
-    let marksBinding: Session.FileBinding?
+    private var pictureBinding: Session.FileBinding
+    private var origBinding: Session.FileBinding?
+    private var marksBinding: Session.FileBinding?
     let original: CGImage
     private let previousApp: NSRunningApplication?
 
@@ -206,6 +206,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                 throw SnagError.mediaChanged(marksURL.lastPathComponent)
             }
             let boundOriginal = try origBinding.map(Session.read)
+            var nextOrigBinding = origBinding
+            var nextMarksBinding = marksBinding
             if doc.marks.isEmpty && doc.crop == nil {
                 if let origBinding, let originalPicture = boundOriginal {
                     let previousPicture = try Session.read(pictureBinding)
@@ -218,6 +220,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                             removedMarks = true
                         }
                         try Session.remove(origBinding)
+                        nextOrigBinding = nil
+                        nextMarksBinding = nil
                     } catch {
                         try? Session.write(previousPicture, to: pictureBinding)
                         if removedMarks, let previousMarks { try? previousMarks.write(to: marksURL, options: .withoutOverwriting) }
@@ -225,6 +229,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                     }
                 } else if let marksBinding {
                     try Session.remove(marksBinding)
+                    nextMarksBinding = nil
                 }
             } else {
                 let previousPicture = try Session.read(pictureBinding)
@@ -246,6 +251,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                         createdMarks = try Session.bindFile(marksURL)
                     }
                     try Session.write(picture, to: pictureBinding)
+                    nextOrigBinding = origBinding ?? createdOrig
+                    nextMarksBinding = marksBinding ?? createdMarks
                 } catch {
                     try? Session.write(previousPicture, to: pictureBinding)
                     if let marksBinding, let previousMarks { try? Session.write(previousMarks, to: marksBinding) }
@@ -254,6 +261,9 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                     throw error
                 }
             }
+            self.pictureBinding = pictureBinding
+            self.origBinding = nextOrigBinding
+            self.marksBinding = nextMarksBinding
             try model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
             finished = true
             try? live.writeReadme()

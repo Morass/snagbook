@@ -423,6 +423,26 @@ enum SelfTest {
             check(false, "the replacement-original mark-up window opens")
         }
 
+        let retryRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.4))!, prefix: "shot", ext: "png")) ?? ""
+        Annotator.open(item: id, relative: retryRel, isNew: true, model: model)
+        await settle()
+        if let retry = Annotator.open.last {
+            retry.commit { $0.marks.append(Mark(tool: .rect, points: [Pt(15, 15), Pt(90, 70)], color: "#ff3b30", width: 4)) }
+            let elsewhere = try? model.addItem(title: "Attachment retry", focusTitle: false)
+            let note = try! session.noteURL(id)
+            let heldNote = note.deletingLastPathComponent().appendingPathComponent(".attachment.selftest.md")
+            try? FileManager.default.moveItem(at: note, to: heldNote)
+            retry.done()
+            check(Annotator.open.contains(where: { $0 === retry }), "a failed screenshot attachment keeps the picture open")
+            try? FileManager.default.moveItem(at: heldNote, to: note)
+            retry.done()
+            await settle()
+            check(!Annotator.open.contains(where: { $0 === retry }) && read(note).contains(retryRel), "screenshot attachment retries after its note is restored")
+            if let elsewhere { model.delete(elsewhere, confirm: false); await settle() }
+        } else {
+            check(false, "the attachment-retry mark-up window opens")
+        }
+
         let failedRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.7))!, prefix: "shot", ext: "png")) ?? ""
         Annotator.open(item: id, relative: failedRel, isNew: true, model: model)
         await settle()
@@ -493,6 +513,10 @@ enum SelfTest {
         check(read(liveNote).contains("retained after failed save"), "the retried note keeps the text from the failed save")
 
         let liveItem = try! session.itemURL(id)
+        let moveSentinel = try? model.addItem(title: "Move sentinel", focusTitle: false)
+        model.select(id)
+        await settle()
+        let orderBeforeReplacement = model.items.map(\.id)
         let heldItem = session.url.appendingPathComponent(".item.selftest")
         try? FileManager.default.moveItem(at: liveItem, to: heldItem)
         try? FileManager.default.createDirectory(at: liveItem, withIntermediateDirectories: false)
@@ -508,6 +532,10 @@ enum SelfTest {
         model.delete(id, confirm: false)
         await settle()
         check(exists(liveItem), "delete refuses a replacement item folder")
+        if let from = model.items.firstIndex(where: { $0.id == id }) {
+            model.move(from: IndexSet(integer: from), to: from == 0 ? model.items.count : 0)
+        }
+        check(model.items.map(\.id) == orderBeforeReplacement, "reorder refuses a replacement item folder")
         do {
             _ = try model.capture.destinationForOpenedItem()
             check(false, "capture refuses a replacement item folder")
@@ -516,6 +544,7 @@ enum SelfTest {
         }
         try? FileManager.default.removeItem(at: liveItem)
         try? FileManager.default.moveItem(at: heldItem, to: liveItem)
+        if let moveSentinel { model.delete(moveSentinel, confirm: false); await settle() }
 
         // Closing the notebook window and showing it again brings it back.
         WindowPlacement.notebook?.performClose(nil)
