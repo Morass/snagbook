@@ -23,6 +23,8 @@ final class CaptureController: ObservableObject {
     private var recordingItem: Int?
     private var recordingSession: Session?
     private var recordingStartup: Task<Void, Never>?
+    private var savingItem: Int?
+    private var savingSession: Session?
     /// The notebook stepped aside for this capture and comes back when it is filed.
     private var restoreNotebook = false
 
@@ -32,6 +34,12 @@ final class CaptureController: ObservableObject {
     }
 
     var isRecording: Bool { phase == .recording }
+
+    func isUsing(_ session: Session, item: Int) -> Bool {
+        let recordingHere = recordingItem == item && recordingSession?.isSameSession(as: session) == true
+        let savingHere = savingItem == item && savingSession?.isSameSession(as: session) == true
+        return phase != .idle && (recordingHere || savingHere)
+    }
 
     var recordButtonTitle: String {
         switch phase {
@@ -151,8 +159,14 @@ final class CaptureController: ObservableObject {
             return showCaptureError(error)
         }
         Task {
+            if finishesStandaloneCapture {
+                savingSession = destination.0
+                savingItem = destination.1
+            }
             defer {
                 if finishesStandaloneCapture {
+                    savingSession = nil
+                    savingItem = nil
                     phase = .idle
                     target = nil
                 }

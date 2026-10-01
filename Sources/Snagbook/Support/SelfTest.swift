@@ -253,10 +253,15 @@ enum SelfTest {
                 check(d > 1.0, "real recording lasts as long as it ran (\(d) s)")
                 try? FileManager.default.removeItem(at: out)
 
-                model.capture.startRecording(t)
+                model.capture.picked(t, intent: .record)
+                if let active = model.selectedID {
+                    model.delete(active, confirm: false)
+                    check(model.items.contains(where: { $0.id == active }), "an item being recorded cannot be deleted and reused")
+                }
                 model.capture.stopRecording()
+                let stopAccepted = model.capture.phase == .saving
                 for _ in 0..<100 where model.capture.phase != .idle { await settle(100) }
-                check(model.capture.phase == .idle, "Stop pressed during recording startup still stops the recording")
+                check(stopAccepted && model.capture.phase == .idle, "Stop pressed during recording startup still stops the recording")
             } catch {
                 check(false, "real capture: \(error.localizedDescription)")
             }

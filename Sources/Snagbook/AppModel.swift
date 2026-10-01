@@ -140,6 +140,9 @@ final class AppModel: ObservableObject {
         if capture.phase != .idle {
             return flash("Finish or cancel the capture before deleting this session")
         }
+        if Annotator.open.contains(where: { $0.session.isSameSession(as: session) }) {
+            return flash("Finish or close the picture before deleting this session")
+        }
         if confirm {
             let a = NSAlert()
             a.messageText = "Delete “\(session.title)”?"
@@ -151,7 +154,9 @@ final class AppModel: ObservableObject {
         }
         Task {
             await editor.flush()
-            guard self.session === session, capture.phase == .idle else {
+            guard self.session === session,
+                  capture.phase == .idle,
+                  !Annotator.open.contains(where: { $0.session.isSameSession(as: session) }) else {
                 return flash("The session changed or a capture started, so it was not deleted")
             }
             do {
@@ -168,6 +173,7 @@ final class AppModel: ObservableObject {
                         return a.runModal() == .alertFirstButtonReturn
                             && self.session === session
                             && self.capture.phase == .idle
+                            && !Annotator.open.contains(where: { $0.session.isSameSession(as: session) })
                             && session.matchesDiskIdentity
                     }))
                 closeSession()
@@ -297,6 +303,10 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: Int, confirm: Bool = true) {
         guard let session, let rec = items.first(where: { $0.id == id }) else { return }
+        guard !capture.isUsing(session, item: id),
+              !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: session) }) else {
+            return flash("Finish the capture or picture before deleting this item")
+        }
         if confirm {
             let a = NSAlert()
             a.messageText = "Delete “\(rec.title)”?"
@@ -308,6 +318,11 @@ final class AppModel: ObservableObject {
         }
         Task {
             await editor.flush()
+            guard self.session?.isSameSession(as: session) == true,
+                  !capture.isUsing(session, item: id),
+                  !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: session) }) else {
+                return flash("The item changed or a capture started, so it was not deleted")
+            }
             do {
                 try session.deleteItem(id, discard: Session.trashOrDelete(
                     trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
@@ -320,6 +335,9 @@ final class AppModel: ObservableObject {
                         a.addButton(withTitle: "Cancel")
                         a.buttons.first?.hasDestructiveAction = true
                         return a.runModal() == .alertFirstButtonReturn
+                            && self.session?.isSameSession(as: session) == true
+                            && !self.capture.isUsing(session, item: id)
+                            && !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: session) })
                     }))
                 editor.forget(item: id)
                 items = session.manifest.items
