@@ -230,6 +230,21 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(s.mediaCount(1), Session.MediaCount(images: 2, videos: 2))
     }
 
+    func testAReplacedMediaReservationIsNeverOverwrittenOrDeleted() throws {
+        let s = try Session.create(root: root, config: Config())
+        try s.addItem()
+        let reservation = try s.reserveMediaName(1, prefix: "clip", ext: "mp4")
+        let original = reservation.url.deletingLastPathComponent().appendingPathComponent(".original-reservation")
+        try FileManager.default.moveItem(at: reservation.url, to: original)
+        try Data("replacement".utf8).write(to: reservation.url)
+        let source = reservation.url.deletingLastPathComponent().appendingPathComponent("source.mp4")
+        try Data("ours".utf8).write(to: source)
+
+        XCTAssertThrowsError(try s.fill(reservation, from: source))
+        XCTAssertEqual(try Data(contentsOf: reservation.url), Data("replacement".utf8))
+        XCTAssertEqual(try Data(contentsOf: source), Data("ours".utf8))
+    }
+
     func testOpenRepairsFoldersRemovedOrAddedByHand() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem(title: "Keep")

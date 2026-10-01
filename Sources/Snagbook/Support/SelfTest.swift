@@ -441,6 +441,8 @@ enum SelfTest {
         try? "replacement item\n".write(to: replacementNote, atomically: true, encoding: .utf8)
         check(model.noteChanged(id: id, markdown: "must not cross item identity") == false, "autosave refuses a replacement item at the same path")
         check(read(replacementNote) == "replacement item\n", "a replacement item's note is not overwritten")
+        let crossedPaste = model.savePasted(data: ImageFile.pngData(testImage(32, 32, hue: 0.1))!, mime: "image/png", name: "replacement.png")
+        check(crossedPaste == nil && !exists(liveItem.appendingPathComponent("media")), "pasted media refuses a replacement item folder")
         try? FileManager.default.removeItem(at: liveItem)
         try? FileManager.default.moveItem(at: heldItem, to: liveItem)
 

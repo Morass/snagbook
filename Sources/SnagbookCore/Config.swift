@@ -159,6 +159,7 @@ public enum SnagError: Error, LocalizedError, Equatable {
     case notASession(String)
     case noSuchItem(Int)
     case badName(String)
+    case mediaChanged(String)
 
     public var errorDescription: String? {
         switch self {
@@ -167,6 +168,7 @@ public enum SnagError: Error, LocalizedError, Equatable {
         case .notASession(let s): return "\(s) is not a Snagbook session (no session.json)."
         case .noSuchItem(let id): return "Item \(id) does not exist."
         case .badName(let s): return "“\(s)” cannot be used as a name."
+        case .mediaChanged(let s): return "\(s) changed before Snagbook could save into it."
         }
     }
 }

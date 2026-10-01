@@ -427,11 +427,19 @@ final class AppModel: ObservableObject {
 
     // MARK: - media
 
+    private func liveEditorDestination() throws -> (session: Session, item: Int) {
+        let id = try ensureItem()
+        guard let session, editor.shownItem == id, let editorItemIdentity else { throw SnagError.noSuchItem(id) }
+        let live = try session.reopenedMatchingItem(id, identity: editorItemIdentity, fallbackHeader: config.header)
+        self.session = live
+        items = live.manifest.items
+        return (live, id)
+    }
+
     /// Bytes pasted or dropped into the editor. Returns the note-relative path.
     func savePasted(data: Data, mime: String, name: String) -> String? {
         do {
-            let id = try ensureItem()
-            guard let session else { return nil }
+            let (session, id) = try liveEditorDestination()
             if mime.hasPrefix("video/") {
                 let ext = (name as NSString).pathExtension.isEmpty ? "mp4" : (name as NSString).pathExtension
                 return try session.saveMedia(id, data: data, prefix: "clip", ext: ext)
@@ -452,16 +460,14 @@ final class AppModel: ObservableObject {
 
     func importFile(_ url: URL) {
         do {
-            let id = try ensureItem()
-            guard let session else { return }
             switch MediaKind.of(url) {
             case .image:
                 let data = try Data(contentsOf: url)
                 insertImageData(url.pathExtension.lowercased() == "png" ? data : (ImageFile.load(data).flatMap(ImageFile.pngData) ?? data))
             case .video:
+                let (session, id) = try liveEditorDestination()
                 let target = try session.reserveMediaName(id, prefix: "clip", ext: url.pathExtension.isEmpty ? "mp4" : url.pathExtension)
-                try FileManager.default.removeItem(at: target.url)
-                try FileManager.default.copyItem(at: url, to: target.url)
+                try session.fill(target, from: url)
                 editor.insertMedia(kind: "video", src: target.relative, label: url.lastPathComponent)
             case nil:
                 break

@@ -297,16 +297,16 @@ final class CaptureController: ObservableObject {
         let info = try await VideoStills.write(for: named, fps: settings.fps, maxStills: settings.maxStills, source: t.summary, app: t.appName)
         let n = VideoStills.names(for: name)
         let media = reserved.url.deletingLastPathComponent()
-        var moves = [(named, reserved.url), (work.appendingPathComponent(n.json), media.appendingPathComponent(n.json)),
-                     (work.appendingPathComponent(n.frames), media.appendingPathComponent(n.frames))]
-        if info.contactSheet != nil { moves.append((work.appendingPathComponent(n.sheet), media.appendingPathComponent(n.sheet))) }
+        var copies = [(work.appendingPathComponent(n.json), media.appendingPathComponent(n.json)),
+                      (work.appendingPathComponent(n.frames), media.appendingPathComponent(n.frames))]
+        if info.contactSheet != nil { copies.append((work.appendingPathComponent(n.sheet), media.appendingPathComponent(n.sheet))) }
         current = try liveSession(for: session, item: item, identity: itemIdentity)
         let liveMedia = try current.mediaURL(item)
-        for (from, to) in moves {
+        try current.fill(reserved, from: named)
+        for (from, to) in copies {
             guard current.matchesDiskIdentity else { throw SnagError.notASession(current.displayPath) }
             let liveTarget = liveMedia.appendingPathComponent(to.lastPathComponent)
-            try? FileManager.default.removeItem(at: liveTarget)
-            try FileManager.default.moveItem(at: from, to: liveTarget)
+            try FileManager.default.copyItem(at: from, to: liveTarget)
         }
         return (current, reserved.relative)
     }

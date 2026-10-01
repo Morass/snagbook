@@ -365,8 +365,14 @@ public final class Session {
         return Self.mediaName + "/" + name
     }
 
+    public struct MediaReservation {
+        public let relative: String
+        public let url: URL
+        fileprivate let identity: String
+    }
+
     /// Hold a free name in the item's media folder for a file that will be written later.
-    public func reserveMediaName(_ id: Int, prefix: String, ext: String) throws -> (relative: String, url: URL) {
+    public func reserveMediaName(_ id: Int, prefix: String, ext: String) throws -> MediaReservation {
         try requireExists()
         let media = try mediaURL(id)
         try ensureDirectory(media)
@@ -375,11 +381,28 @@ public final class Session {
             let url = media.appendingPathComponent(name)
             do {
                 try Data().write(to: url, options: .withoutOverwriting)
-                return (Self.mediaName + "/" + name, url)
+                guard let identity = Self.identity(of: url) else { throw SnagError.noSuchItem(id) }
+                return MediaReservation(relative: Self.mediaName + "/" + name, url: url, identity: identity)
             } catch let e as CocoaError where e.code == .fileWriteFileExists {
                 continue
             }
         }
+    }
+
+    /// Fill the exact placeholder created by `reserveMediaName`; a same-path replacement is
+    /// never overwritten or removed.
+    public func fill(_ reservation: MediaReservation, from source: URL) throws {
+        try requireExists()
+        guard Self.identity(of: reservation.url) == reservation.identity else { throw SnagError.mediaChanged(reservation.url.lastPathComponent) }
+        let output = try FileHandle(forWritingTo: reservation.url)
+        defer { try? output.close() }
+        guard Self.identity(of: reservation.url) == reservation.identity else { throw SnagError.mediaChanged(reservation.url.lastPathComponent) }
+        try output.truncate(atOffset: 0)
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+        while let chunk = try input.read(upToCount: 1_048_576), !chunk.isEmpty { try output.write(contentsOf: chunk) }
+        try output.synchronize()
+        guard Self.identity(of: reservation.url) == reservation.identity else { throw SnagError.mediaChanged(reservation.url.lastPathComponent) }
     }
 
     public struct MediaCount: Equatable {
