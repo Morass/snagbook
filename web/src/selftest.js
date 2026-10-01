@@ -40,6 +40,7 @@ export async function runSelfTest(shell, invoke) {
   const $ = (id) => document.getElementById(id);
   const snag = () => window.snag;
   const items = () => shell.view()?.session?.items || [];
+  const sessionArgs = (id) => ({ sessionId: shell.view().session.id, openToken: shell.view().session.openToken, id });
 
   try {
     // SNAGBOOK_SELFTEST=fail: one check that must fail, to prove a failure reaches the exit status.
@@ -70,7 +71,7 @@ export async function runSelfTest(shell, invoke) {
     check((await invoke("read_note", { id: 1 })).includes("**Bug:**"), "the Bug template inserts **Bug:**");
 
     // 5. a pasted picture is saved and shown through the snagbook: scheme
-    const rel1 = await invoke("save_media", { id: 1, base64: RED, mime: "image/png", name: "" });
+    const rel1 = await invoke("save_media", { ...sessionArgs(1), base64: RED, mime: "image/png", name: "" });
     check(rel1 === "media/image-001.png", "a pasted picture is saved as media/image-001.png: " + rel1);
     snag().insertMedia({ kind: "image", src: rel1 });
     await shell.flush();
@@ -85,7 +86,7 @@ export async function runSelfTest(shell, invoke) {
     // 6. New Item, and two items whose pictures share a name show their own
     $("new-item").click();
     check(await until(() => items().length === 2 && shell.selected() === 2), "New Item adds item 2 and selects it");
-    const rel2 = await invoke("save_media", { id: 2, base64: GREEN, mime: "image/png", name: "" });
+    const rel2 = await invoke("save_media", { ...sessionArgs(2), base64: GREEN, mime: "image/png", name: "" });
     snag().insertMedia({ kind: "image", src: rel2 });
     await shell.flush();
     check(rel2 === rel1, "both items call their picture " + rel2);
@@ -250,7 +251,7 @@ export async function runSelfTest(shell, invoke) {
     await invoke("finish_screenshot", { rect: { x: 0.2, y: 0.2, w: 0.4, h: 0.3 } });
     check(await until(async () => (await invoke("recording_started")) != null), "recording starts when the area is chosen");
     check(await until(() => $("rec").textContent === "Stop"), "the Record button turns into Stop");
-    const pasted = await invoke("save_media", { id: 1, base64: "AAAA", mime: "video/mp4", name: "" });
+    const pasted = await invoke("save_media", { ...sessionArgs(1), base64: "AAAA", mime: "video/mp4", name: "" });
     check(pasted === "media/clip-002.mp4", "a video pasted during the recording gets its own name: " + pasted);
     // Renaming the item while it records: its folder keeps its name until the recording ends.
     const folderBefore = items().find((i) => i.id === 1)?.folder;
@@ -295,7 +296,7 @@ export async function runSelfTest(shell, invoke) {
     await until(() => invoke("capture_open"));
     await invoke("finish_screenshot", { rect: { x: 0.2, y: 0.2, w: 0.3, h: 0.3 } });
     check(await until(async () => (await invoke("recording_started")) != null), "a second recording starts");
-    const refused = await invoke("delete_item", { id: 1, permanently: true }).then(() => "deleted", (e) => String(e));
+    const refused = await invoke("delete_item", { ...sessionArgs(1), permanently: true }).then(() => "deleted", (e) => String(e));
     check(/still being saved/.test(refused), "an item being recorded is not deleted: " + refused);
     await sleep(1500);
     await shell.newSession();
