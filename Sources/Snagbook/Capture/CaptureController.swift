@@ -21,6 +21,7 @@ final class CaptureController: ObservableObject {
     private var recorder: Recorder?
     private var recordingFile: URL?
     private var recordingItem: Int?
+    private var recordingSession: Session?
     /// The notebook stepped aside for this capture and comes back when it is filed.
     private var restoreNotebook = false
 
@@ -86,8 +87,19 @@ final class CaptureController: ObservableObject {
         case .shoot:
             phase = .saving
             overlay.hideAll()
+            let destination: (Session, Int)
+            do {
+                let id = try model.ensureItem()
+                guard let session = model.session else { throw SnagError.noSuchItem(id) }
+                destination = (session, id)
+            } catch {
+                phase = .idle
+                target = nil
+                bringNotebookBack()
+                return model.show(error)
+            }
             // Let the overlay leave the screen before the picture is taken.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.shoot(t, finishesStandaloneCapture: true) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.shoot(t, destination: destination, finishesStandaloneCapture: true) }
         }
     }
 
@@ -115,7 +127,23 @@ final class CaptureController: ObservableObject {
 
     // MARK: - screenshot
 
-    func shoot(_ t: CaptureTarget, finishesStandaloneCapture: Bool = false) {
+    func shoot(_ t: CaptureTarget, destination supplied: (Session, Int)? = nil, finishesStandaloneCapture: Bool = false) {
+        let destination: (Session, Int)
+        do {
+            if let supplied {
+                destination = supplied
+            } else if phase == .recording, let recordingSession, let recordingItem {
+                destination = (recordingSession, recordingItem)
+            } else {
+                let id = try model.ensureItem()
+                guard let session = model.session else { throw SnagError.noSuchItem(id) }
+                destination = (session, id)
+            }
+        } catch {
+            if finishesStandaloneCapture { phase = .idle; target = nil }
+            bringNotebookBack()
+            return model.show(error)
+        }
         Task {
             defer {
                 if finishesStandaloneCapture {
@@ -125,8 +153,8 @@ final class CaptureController: ObservableObject {
             }
             do {
                 let image = try await ScreenGrabber.screenshot(t)
-                model.screenshotTaken(image, source: t.summary)
-                if !model.config.capture.annotateScreenshots { bringNotebookBack() }
+                let waitsForAnnotator = model.screenshotTaken(image, source: t.summary, session: destination.0, item: destination.1)
+                if !waitsForAnnotator { bringNotebookBack() }
             } catch {
                 bringNotebookBack()
                 model.show(error)
@@ -144,6 +172,7 @@ final class CaptureController: ObservableObject {
             bringNotebookBack()
             return model.show(error)
         }
+        guard let session = model.session else { return }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Snagbook-recording-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("recording.mp4")
@@ -158,6 +187,7 @@ final class CaptureController: ObservableObject {
         recorder = rec
         recordingFile = file
         recordingItem = id
+        recordingSession = session
         phase = .recording
         recordingStarted = Date()
         overlay.showRecording(t)
@@ -166,6 +196,7 @@ final class CaptureController: ObservableObject {
                 try await rec.start(t, settings: model.config.capture, to: file)
             } catch {
                 recorder = nil
+                recordingSession = nil
                 phase = .idle
                 recordingStarted = nil
                 target = nil
@@ -178,7 +209,7 @@ final class CaptureController: ObservableObject {
     }
 
     func stopRecording() {
-        guard phase == .recording, let rec = recorder, let file = recordingFile, let item = recordingItem, let t = target else { return }
+        guard phase == .recording, let rec = recorder, let file = recordingFile, let item = recordingItem, let session = recordingSession, let t = target else { return }
         phase = .saving
         overlay.showSaving()
         let settings = model.config.capture
@@ -186,12 +217,13 @@ final class CaptureController: ObservableObject {
             defer {
                 recorder = nil
                 recordingStarted = nil
+                recordingSession = nil
                 try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
             }
             do {
                 let duration = try await rec.stop()
-                let saved = try await fileRecording(file, into: item, target: t, settings: settings, duration: duration)
-                model.recordingSaved(item: item, relative: saved, duration: duration)
+                let saved = try await fileRecording(file, into: item, session: session, target: t, settings: settings, duration: duration)
+                model.recordingSaved(session: session, item: item, relative: saved, duration: duration)
             } catch {
                 model.show(error)
             }
@@ -203,8 +235,7 @@ final class CaptureController: ObservableObject {
     }
 
     /// Name the recording, write its stills beside it, and move all of it into the item.
-    func fileRecording(_ recording: URL, into item: Int, target t: CaptureTarget, settings: CaptureSettings, duration: Double) async throws -> String {
-        guard let session = model.session else { throw SnagError.noSuchItem(item) }
+    func fileRecording(_ recording: URL, into item: Int, session: Session, target t: CaptureTarget, settings: CaptureSettings, duration: Double) async throws -> String {
         let reserved = try session.reserveMediaName(item, prefix: "clip", ext: "mp4")
         let name = reserved.url.lastPathComponent
         let work = recording.deletingLastPathComponent()
@@ -217,6 +248,7 @@ final class CaptureController: ObservableObject {
                      (work.appendingPathComponent(n.frames), media.appendingPathComponent(n.frames))]
         if info.contactSheet != nil { moves.append((work.appendingPathComponent(n.sheet), media.appendingPathComponent(n.sheet))) }
         for (from, to) in moves {
+            guard session.matchesDiskIdentity else { throw SnagError.notASession(session.displayPath) }
             try? FileManager.default.removeItem(at: to)
             try FileManager.default.moveItem(at: from, to: to)
         }

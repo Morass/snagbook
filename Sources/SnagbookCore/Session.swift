@@ -35,6 +35,7 @@ public final class Session {
     /// How to spell the folder for people and other programs ("~/…").
     public let displayPath: String
     public private(set) var manifest: Manifest
+    private let fileIdentity: String?
     /// The header used when the session has none of its own (the app's global setting).
     public var fallbackHeader: String = Config.defaultHeader {
         didSet { if manifest.header == nil, oldValue != fallbackHeader { try? writeReadme() } }
@@ -51,6 +52,7 @@ public final class Session {
         self.url = url
         self.displayPath = displayPath
         self.manifest = manifest
+        self.fileIdentity = Self.identity(of: url)
     }
 
     // MARK: - create / open / list
@@ -119,7 +121,9 @@ public final class Session {
     public var matchesDiskIdentity: Bool {
         guard let data = try? Data(contentsOf: url.appendingPathComponent(Self.manifestName)),
               let disk = try? Self.decoder.decode(Manifest.self, from: data) else { return false }
-        return disk.id == manifest.id
+        guard disk.id == manifest.id else { return false }
+        guard let fileIdentity else { return true }
+        return Self.identity(of: url) == fileIdentity
     }
 
     /// Folders may have been renamed or removed by hand: drop records whose folder is gone,
@@ -190,6 +194,7 @@ public final class Session {
     /// Rename an item: its title, its note's front matter and its folder name.
     @discardableResult
     public func renameItem(_ id: Int, to title: String) throws -> ItemRecord {
+        try requireExists()
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { throw SnagError.badName(title) }
         guard let i = manifest.items.firstIndex(where: { $0.id == id }) else { throw SnagError.noSuchItem(id) }
@@ -217,6 +222,7 @@ public final class Session {
     /// Remove an item. `discard` decides what happens to the folder (the app moves it to
     /// the Trash); the default deletes it.
     public func deleteItem(_ id: Int, discard: ((URL) throws -> Void)? = nil) throws {
+        try requireExists()
         let dir = try itemURL(id)
         if let discard { try discard(dir) } else { try fm.removeItem(at: dir) }
         manifest.items.removeAll { $0.id == id }
@@ -247,6 +253,7 @@ public final class Session {
     }
 
     public func moveItem(_ id: Int, to index: Int) throws {
+        try requireExists()
         guard let from = manifest.items.firstIndex(where: { $0.id == id }) else { throw SnagError.noSuchItem(id) }
         let rec = manifest.items.remove(at: from)
         manifest.items.insert(rec, at: max(0, min(index, manifest.items.count)))
@@ -266,12 +273,14 @@ public final class Session {
 
     /// Name the session; an empty name goes back to the date.
     public func setTitle(_ title: String) throws {
+        try requireExists()
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         manifest.title = t.isEmpty ? nil : t
         try save()
     }
 
     public func setHeader(_ header: String?) throws {
+        try requireExists()
         manifest.header = header
         try save()
     }
@@ -288,6 +297,7 @@ public final class Session {
     /// already held exactly this.
     @discardableResult
     public func writeNote(_ id: Int, body: String) throws -> Bool {
+        try requireExists()
         let u = try noteURL(id)
         let old = (try? String(contentsOf: u, encoding: .utf8)) ?? ""
         let parts = FrontMatter.split(old)
@@ -365,6 +375,7 @@ public final class Session {
     }
 
     public func writeReadme() throws {
+        try requireExists()
         let u = url.appendingPathComponent(Self.readmeName)
         let text = readmeText()
         if (try? String(contentsOf: u, encoding: .utf8)) == text { return }
@@ -404,6 +415,13 @@ public final class Session {
 
     private func requireExists() throws {
         guard exists else { throw SnagError.notASession(displayPath) }
+    }
+
+    private static func identity(of url: URL) -> String? {
+        guard let a = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let volume = a[.systemNumber] as? NSNumber,
+              let file = a[.systemFileNumber] as? NSNumber else { return nil }
+        return "\(volume.uint64Value):\(file.uint64Value)"
     }
 
     private func ensureDirectory(_ directory: URL) throws {

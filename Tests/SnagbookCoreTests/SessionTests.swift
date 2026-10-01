@@ -101,6 +101,19 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try Session.open(s.url.path).manifest.id, "replacement")
     }
 
+    func testACopiedReplacementWithTheSameManifestIDIsRejected() throws {
+        let s = try Session.create(root: root, config: Config(), hash: "same-id")
+        try s.addItem()
+        let old = s.url.deletingLastPathComponent().appendingPathComponent("old-copy-source")
+        try FileManager.default.moveItem(at: s.url, to: old)
+        try FileManager.default.copyItem(at: old, to: s.url)
+
+        XCTAssertFalse(s.matchesDiskIdentity)
+        XCTAssertThrowsError(try s.writeNote(1, body: "must not reach the copy"))
+        XCTAssertThrowsError(try s.delete { try FileManager.default.removeItem(at: $0) })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: s.url.appendingPathComponent("session.json").path))
+    }
+
     func testDeletingASessionDiscardsTheWholeFolder() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem()

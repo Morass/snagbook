@@ -155,8 +155,8 @@ enum SelfTest {
             }
             let duration = try await w.finish()
             let target = CaptureTarget(rect: CGRect(x: 0, y: 0, width: 320, height: 180), displayID: CGMainDisplayID(), screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), scale: 2, kind: "region")
-            let rel = try await model.capture.fileRecording(file, into: first, target: target, settings: model.config.capture, duration: duration)
-            model.recordingSaved(item: first, relative: rel, duration: duration)
+            let rel = try await model.capture.fileRecording(file, into: first, session: session, target: target, settings: model.config.capture, duration: duration)
+            model.recordingSaved(session: session, item: first, relative: rel, duration: duration)
             try? FileManager.default.removeItem(at: work)
             await settle()
             await model.editor.flush()

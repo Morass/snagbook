@@ -77,9 +77,6 @@ final class AppModel: ObservableObject {
     func newSession() {
         Task {
             await editor.flush()
-            guard self.session === session, capture.phase == .idle else {
-                return flash("The session changed or a capture started, so it was not deleted")
-            }
             do {
                 let s = try Session.create(root: config.sessionsFolder, config: config)
                 use(s)
@@ -154,6 +151,9 @@ final class AppModel: ObservableObject {
         }
         Task {
             await editor.flush()
+            guard self.session === session, capture.phase == .idle else {
+                return flash("The session changed or a capture started, so it was not deleted")
+            }
             do {
                 try session.delete(discard: Session.trashOrDelete(
                     trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
@@ -165,7 +165,7 @@ final class AppModel: ObservableObject {
                         a.addButton(withTitle: "Delete Permanently")
                         a.addButton(withTitle: "Cancel")
                         a.buttons.first?.hasDestructiveAction = true
-                        return a.runModal() == .alertFirstButtonReturn
+                        return a.runModal() == .alertFirstButtonReturn && session.matchesDiskIdentity
                     }))
                 closeSession()
             } catch let e as CocoaError where e.code == .userCancelled {
@@ -410,31 +410,41 @@ final class AppModel: ObservableObject {
     }
 
     /// A finished screenshot: into the selected item, marked up first if that is on.
-    func screenshotTaken(_ image: CGImage, source: String) {
+    @discardableResult
+    func screenshotTaken(_ image: CGImage, source: String, session sourceSession: Session? = nil, item sourceItem: Int? = nil) -> Bool {
         do {
-            let id = try ensureItem()
-            guard let session, let png = ImageFile.pngData(image) else { return }
+            let id = try sourceItem ?? ensureItem()
+            guard let session = sourceSession ?? session, let png = ImageFile.pngData(image) else { return false }
             let rel = try session.saveMedia(id, data: png, prefix: "shot", ext: "png")
-            if config.capture.annotateScreenshots {
+            if config.capture.annotateScreenshots, self.session === session {
                 Annotator.open(item: id, relative: rel, isNew: true, model: self)
-            } else {
+                return true
+            } else if self.session === session {
                 editor.insertMedia(kind: "image", src: rel, label: "")
                 flash("Screenshot saved to \(itemTitle(id))")
+            } else {
+                try appendMedia("![](\(rel))", to: session, item: id)
             }
+            return false
         } catch {
             show(error)
+            return false
         }
     }
 
     /// The mark-up window finished with a picture.
-    func annotationFinished(item id: Int, relative: String, isNew: Bool, kept: Bool) {
+    func annotationFinished(session sourceSession: Session, item id: Int, relative: String, isNew: Bool, kept: Bool) {
         if isNew {
             if kept {
-                select(id)
-                editor.insertMedia(kind: "image", src: relative, label: "")
-                flash("Screenshot saved to \(itemTitle(id))")
+                if session === sourceSession {
+                    select(id)
+                    editor.insertMedia(kind: "image", src: relative, label: "")
+                    flash("Screenshot saved to \(itemTitle(id))")
+                } else {
+                    try? appendMedia("![](\(relative))", to: sourceSession, item: id)
+                }
             }
-        } else {
+        } else if session === sourceSession {
             editor.refreshMedia(relative)
         }
     }
@@ -445,10 +455,20 @@ final class AppModel: ObservableObject {
     }
 
     /// A finished recording, already in the item's media folder.
-    func recordingSaved(item id: Int, relative: String, duration: Double) {
-        if selectedID != id { select(id) }
-        editor.insertMedia(kind: "video", src: relative, label: "Video \(CaptureMath.duration(duration))")
-        flash("Recording (\(CaptureMath.duration(duration))) saved to \(itemTitle(id))")
+    func recordingSaved(session sourceSession: Session, item id: Int, relative: String, duration: Double) {
+        let label = "Video \(CaptureMath.duration(duration))"
+        if session === sourceSession {
+            if selectedID != id { select(id) }
+            editor.insertMedia(kind: "video", src: relative, label: label)
+            flash("Recording (\(CaptureMath.duration(duration))) saved to \(itemTitle(id))")
+        } else {
+            try? appendMedia("[\(label)](\(relative))", to: sourceSession, item: id)
+        }
+    }
+
+    private func appendMedia(_ markdown: String, to session: Session, item id: Int) throws {
+        let old = try session.readNote(id).trimmingCharacters(in: .whitespacesAndNewlines)
+        try session.writeNote(id, body: old.isEmpty ? markdown + "\n" : old + "\n\n" + markdown + "\n")
     }
 
     func itemTitle(_ id: Int) -> String { items.first { $0.id == id }?.title ?? "Item \(id)" }
