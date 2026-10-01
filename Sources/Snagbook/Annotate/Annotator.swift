@@ -224,7 +224,12 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                         nextMarksBinding = nil
                     } catch {
                         try? Session.write(previousPicture, to: pictureBinding)
-                        if removedMarks, let previousMarks { try? previousMarks.write(to: marksURL, options: .withoutOverwriting) }
+                        if removedMarks, let previousMarks {
+                            self.marksBinding = nil
+                            if (try? previousMarks.write(to: marksURL, options: .withoutOverwriting)) != nil {
+                                self.marksBinding = try? Session.bindFile(marksURL)
+                            }
+                        }
                         throw error
                     }
                 } else if let marksBinding {
@@ -276,8 +281,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     /// New screenshot: keep it without marks. Existing picture: leave it as it was.
     func skip() {
         do {
-            if isNew { try model.annotationFinished(session: try liveSession(), item: item, relative: relative, isNew: true, kept: true) }
-            finished = true
+            try keepUnchanged()
             close()
         } catch {
             model.show(error)
@@ -309,8 +313,23 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
         window?.close()
     }
 
+    private func keepUnchanged() throws {
+        if isNew { try model.annotationFinished(session: try liveSession(), item: item, relative: relative, isNew: true, kept: true) }
+        finished = true
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard !finished else { return true }
+        do {
+            try keepUnchanged()
+            return true
+        } catch {
+            model.show(error)
+            return false
+        }
+    }
+
     func windowWillClose(_ notification: Notification) {
-        if !finished { skip() }
         Annotator.open.removeAll { $0 === self }
         if model.capture.takeRestoreNotebook() {
             WindowPlacement.show()

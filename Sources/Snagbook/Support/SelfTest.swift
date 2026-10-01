@@ -432,6 +432,7 @@ enum SelfTest {
             let note = try! session.noteURL(id)
             let heldNote = note.deletingLastPathComponent().appendingPathComponent(".attachment.selftest.md")
             try? FileManager.default.moveItem(at: note, to: heldNote)
+            check(retry.windowShouldClose(retry.canvas!.window!) == false && Annotator.open.contains(where: { $0 === retry }), "closing keeps a failed screenshot attachment available to retry")
             retry.done()
             check(Annotator.open.contains(where: { $0 === retry }), "a failed screenshot attachment keeps the picture open")
             try? FileManager.default.moveItem(at: heldNote, to: note)
@@ -441,6 +442,24 @@ enum SelfTest {
             if let elsewhere { model.delete(elsewhere, confirm: false); await settle() }
         } else {
             check(false, "the attachment-retry mark-up window opens")
+        }
+
+
+        Annotator.open(item: id, relative: rel, isNew: false, model: model)
+        await settle()
+        if let rollback = Annotator.open.last {
+            rollback.commit { $0.marks.removeAll() }
+            let currentMedia = try! model.session!.mediaURL(id)
+            let pristine = currentMedia.appendingPathComponent(stem + ".orig.png")
+            try? FileManager.default.setAttributes([.immutable: true], ofItemAtPath: pristine.path)
+            rollback.done()
+            check(Annotator.open.contains(where: { $0 === rollback }), "a failed companion removal keeps the picture open")
+            try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: pristine.path)
+            rollback.done()
+            await settle()
+            check(!Annotator.open.contains(where: { $0 === rollback }), "companion removal retries after its original is writable")
+        } else {
+            check(false, "the companion-removal retry window opens")
         }
 
         let failedRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.7))!, prefix: "shot", ext: "png")) ?? ""
