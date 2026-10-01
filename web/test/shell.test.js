@@ -853,6 +853,16 @@ test("a pasted-media save response cannot cross an item switch", async () => {
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "media-1", inserted: false }]);
 });
 
+test("pasted bytes finishing conversion after an item switch stay with their source item", async () => {
+  const t = await setup({ session: true });
+  const source = t.shell.view().session;
+  await t.shell.newItem();
+  await t.shell.onEditorMessage({ type: "media", reqId: 17, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "save_media").at(-1)[1].id, 1);
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "capture_filed").at(-1)[1], { ack: "media-1", inserted: false });
+  assert.match(t.app.notes.get(1), /!\[\]\(media\/image-001\.png\)/);
+});
+
 test("a paste reply cannot enter an old editor after the backend switched sessions", async () => {
   const t = await setup({ session: true, slowMedia: true });
   let pending = null;

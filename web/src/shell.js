@@ -256,6 +256,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     if (turn !== showing || selected !== id) return;
     ed.open({ id, markdown: md, base: mediaBase(platform(), id, epoch), sessionId: view.session.id, openToken: view.session.openToken, focus });
     editorItem = id;
+    lockPendingOriginEditors();
   }
 
   async function newItem() {
@@ -431,6 +432,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     return serializeOrigin(async () => {
     if (ack) {
       const pending = { ...origin, filed: false, unlock: null };
+      pendingOriginAcks.set(ack, pending);
       const isOpen = originIsOpen(pending);
       if (isOpen) pending.unlock = lockEditor();
       try {
@@ -439,8 +441,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         pending.filed = true;
         if (originIsOpen(pending)) await reloadOriginItem(pending);
         pending.unlock?.();
+        pendingOriginAcks.delete(ack);
       } catch {
-        pendingOriginAcks.set(ack, pending);
         if (!pending.filed || !originIsOpen(pending)) {
           pending.unlock?.();
           pending.unlock = null;
@@ -480,6 +482,12 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     return !!origin && selected === origin.id && editorItem === origin.id
       && view?.session?.id === origin.sessionId
       && (origin.path ? view.session.path === origin.path : view.session.openToken === origin.openToken);
+  }
+
+  function lockPendingOriginEditors() {
+    for (const origin of pendingOriginAcks.values()) {
+      if (originIsOpen(origin) && !origin.unlock) origin.unlock = lockEditor();
+    }
   }
 
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
@@ -941,7 +949,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       case "media": {
         const id = msg.itemId;
         try {
-          if (id == null || selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken) throw new Error("the destination changed");
+          if (id == null || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken) throw new Error("the destination changed");
           const sessionPath = view.session.path;
           const saved = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
           const canInsert = await call("capture_can_insert", { ack: saved.ack }).catch(() => false);
