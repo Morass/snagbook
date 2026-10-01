@@ -361,10 +361,7 @@ fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String,
     let mut a = st.lock().unwrap();
     a.remember_current();
     let origin = a.origins.get(&open_token).cloned().filter(|o| o.session_id == session_id).ok_or("The picture's source session is no longer known.")?;
-    let mut source = Session::open(&origin.session.to_string_lossy(), &a.store.config.header).map_err(err)?;
-    if !source.matches_folder_identity(&origin.session_identity) || source.manifest.id != session_id {
-        return Err("The picture's source session is gone or was replaced.".into());
-    }
+    let mut source = Session::reopen_matching(&origin.session, &origin.display_path, &origin.session_identity, &session_id, &a.store.config.header).map_err(err)?;
     let item_identity = a.item_origins.iter().find_map(|(identity, token)| (token == &item_token).then(|| identity.clone())).ok_or("The picture's source item is no longer known.")?;
     if !source.matches_item_identity(id, &item_identity) {
         return Err("The picture's source item is gone or was replaced.".into());
@@ -376,6 +373,7 @@ fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String,
     let link = if kind == "video" { format!("[Video]({rel})") } else { format!("![]({rel})") };
     let pending = PendingCapture {
         session: s.dir.clone(),
+        display_path: origin.display_path.clone(),
         session_identity: s.folder_identity(),
         session_id: s.manifest.id.clone(),
         item: id,
@@ -565,6 +563,7 @@ struct Active {
     /// The session the recording goes into (its folder), which may no longer be the open one
     /// when it ends.
     session: PathBuf,
+    session_id: String,
     session_identity: FolderIdentity,
     item_identity: FolderIdentity,
     session_name: String,
@@ -589,6 +588,7 @@ struct SessionDeleteFallback(Mutex<std::collections::HashSet<(String, String)>>)
 #[derive(Clone)]
 struct PendingCapture {
     session: PathBuf,
+    display_path: String,
     session_identity: FolderIdentity,
     session_id: String,
     item: i64,
@@ -668,9 +668,9 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
     let id = target_item(&mut a)?;
     let cap = a.store.config.capture.clone();
     let path = hold_clip_name(a.session()?, id)?;
-    let (session, session_identity, item_identity, session_name) = {
+    let (session, session_id, session_identity, item_identity, session_name) = {
         let s = a.session()?;
-        (s.dir.clone(), s.folder_identity(), s.item_identity(id).map_err(err)?, s.display_path.clone())
+        (s.dir.clone(), s.manifest.id.clone(), s.folder_identity(), s.item_identity(id).map_err(err)?, s.display_path.clone())
     };
     app.state::<Busy>().add(&session, id);
     drop(a);
@@ -703,7 +703,7 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
     });
     let started_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let ack = uuid::Uuid::new_v4().to_string();
-    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, session, session_identity, item_identity, session_name, stem, started_ms, ack });
+    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, session, session_id, session_identity, item_identity, session_name, stem, started_ms, ack });
     open_recbar(app, rect, monitor);
     let _ = app.emit_to("main", "recording", true);
     Ok(())
@@ -768,12 +768,12 @@ fn stop_recording_now(app: &AppHandle) {
     app.state::<Finishing>().0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let app = app.clone();
     std::thread::spawn(move || {
-        let Active { handle, id, session, session_identity, item_identity, session_name, stem, ack, .. } = active;
+        let Active { handle, id, session, session_id, session_identity, item_identity, session_name, stem, ack, .. } = active;
         let result = handle.join().unwrap_or_else(|_| Err("the recording stopped unexpectedly".into()));
         // Another recording may have started meanwhile: the button shows whichever is true now.
         let now = app.state::<Recorder>().0.lock().unwrap().is_some();
         let _ = app.emit_to("main", "recording", now);
-        finish_recording(&app, Done { id, session, session_identity, item_identity, session_name, stem, ack }, result);
+        finish_recording(&app, Done { id, session, session_id, session_identity, item_identity, session_name, stem, ack }, result);
         let left = app.state::<Finishing>().0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
         // The windows were closed while it finished: quit now, as closing them would have.
         if left == 0 && app.webview_windows().is_empty() {
@@ -786,6 +786,7 @@ fn stop_recording_now(app: &AppHandle) {
 struct Done {
     id: i64,
     session: PathBuf,
+    session_id: String,
     session_identity: FolderIdentity,
     item_identity: FolderIdentity,
     session_name: String,
@@ -801,13 +802,11 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     });
     let st = app.state::<Mutex<App>>();
     let mut a = st.lock().unwrap();
-    let open_here = a.session.as_ref().is_some_and(|s| s.dir == active.session && s.matches_folder_identity(&active.session_identity));
+    let open_here = a.session.as_ref().is_some_and(|s| s.manifest.id == active.session_id && s.dir == active.session && s.matches_folder_identity(&active.session_identity));
     // The session the recording went into: the open one, or its folder opened again.
     let mut other = None;
     if !open_here {
-        other = Session::open(&active.session.to_string_lossy(), &a.store.config.header)
-            .ok()
-            .filter(|s| s.matches_folder_identity(&active.session_identity));
+        other = Session::reopen_matching(&active.session, &active.session_name, &active.session_identity, &active.session_id, &a.store.config.header).ok();
     }
     let s = if open_here { a.session.as_mut() } else { other.as_mut() };
     let Some(s) = s.filter(|s| s.matches_item_identity(active.id, &active.item_identity)) else {
@@ -833,7 +832,7 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     // Shown in the notebook: its editor adds the link where the note is being written.
     if open_here && app.get_webview_window("main").is_some() {
         app.state::<CaptureAcks>().0.lock().unwrap().insert(active.ack.clone(), PendingCapture {
-            session: active.session.clone(), session_identity: active.session_identity.clone(), session_id: s.manifest.id.clone(), item: active.id, item_identity: active.item_identity.clone(), link,
+            session: active.session.clone(), display_path: active.session_name.clone(), session_identity: active.session_identity.clone(), session_id: s.manifest.id.clone(), item: active.id, item_identity: active.item_identity.clone(), link,
         });
         let session_id = s.manifest.id.clone();
         drop(a);
@@ -892,10 +891,7 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
 }
 
 fn file_pending_capture(pending: &PendingCapture, fallback_header: &str) -> Res<()> {
-    let mut s = Session::open(&pending.session.to_string_lossy(), fallback_header).map_err(err)?;
-    if !s.matches_folder_identity(&pending.session_identity) || s.manifest.id != pending.session_id {
-        return Err("The capture's session is gone or was replaced.".into());
-    }
+    let mut s = Session::reopen_matching(&pending.session, &pending.display_path, &pending.session_identity, &pending.session_id, fallback_header).map_err(err)?;
     if !s.matches_item_identity(pending.item, &pending.item_identity) {
         return Err("The capture's item is gone or was replaced.".into());
     }
@@ -971,6 +967,7 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
     app.state::<Busy>().add(&session_dir, id);
     app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), PendingCapture {
         session: session_dir,
+        display_path: session_path.clone(),
         session_identity,
         session_id: session_id.clone(),
         item: id,
@@ -1021,10 +1018,7 @@ struct Marked {
 }
 
 fn markup_files(p: &markup::Pending) -> Res<markup::Files> {
-    let session = Session::open(&p.session_dir.to_string_lossy(), "").map_err(err)?;
-    if session.manifest.id != p.session_id || !session.matches_folder_identity(&p.session_identity) {
-        return Err("The session containing this picture is gone or was replaced.".into());
-    }
+    let session = Session::reopen_matching(&p.session_dir, &p.session_path, &p.session_identity, &p.session_id, "").map_err(err)?;
     if !session.matches_item_identity(p.id, &p.item_identity) {
         return Err("The item containing this picture is gone or was replaced.".into());
     }
@@ -1116,11 +1110,9 @@ fn finish_markup(app: &AppHandle, kept: bool, changed: bool) -> Res<()> {
     });
     let mut other = None;
     if !open_here {
-        other = Session::open(&p.session_dir.to_string_lossy(), &p.fallback_header)
+        other = Session::reopen_matching(&p.session_dir, &p.session_path, &p.session_identity, &p.session_id, &p.fallback_header)
             .ok()
-            .filter(|s| s.manifest.id == p.session_id
-                && s.matches_folder_identity(&p.session_identity)
-                && s.matches_item_identity(p.id, &p.item_identity));
+            .filter(|s| s.matches_item_identity(p.id, &p.item_identity));
     }
     let file_without_notebook = p.is_new && kept && app.get_webview_window("main").is_none();
     let mut event_ack = p.ack.clone();
@@ -1554,6 +1546,54 @@ mod tests {
     }
 
     #[test]
+    fn fallback_filing_keeps_the_source_display_path() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        let id = s.add_item(None, Utc::now()).unwrap().id;
+        let pending = PendingCapture {
+            session: s.dir.clone(),
+            display_path: "~/shared-session-link".into(),
+            session_identity: s.folder_identity(),
+            session_id: s.manifest.id.clone(),
+            item: id,
+            item_identity: s.item_identity(id).unwrap(),
+            link: "![](media/image-001.png)".into(),
+        };
+
+        file_pending_capture(&pending, "Review {session}").unwrap();
+
+        assert!(std::fs::read_to_string(s.dir.join("README.md")).unwrap().starts_with("Review ~/shared-session-link\n"));
+    }
+
+    #[test]
+    fn fallback_filing_does_not_repair_a_replacement_session() {
+        let d = tempfile::tempdir().unwrap();
+        let mut original = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        let id = original.add_item(None, Utc::now()).unwrap().id;
+        let pending = PendingCapture {
+            session: original.dir.clone(),
+            display_path: original.display_path.clone(),
+            session_identity: original.folder_identity(),
+            session_id: original.manifest.id.clone(),
+            item: id,
+            item_identity: original.item_identity(id).unwrap(),
+            link: "![](media/image-001.png)".into(),
+        };
+        let held = original.dir.with_file_name("held-original-fallback");
+        std::fs::rename(&original.dir, held).unwrap();
+        let mut replacement = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        let replacement_item = replacement.add_item(None, Utc::now()).unwrap();
+        std::fs::remove_dir_all(replacement.item_dir(replacement_item.id).unwrap()).unwrap();
+        std::fs::rename(&replacement.dir, &original.dir).unwrap();
+        let manifest = std::fs::read(original.dir.join("session.json")).unwrap();
+        let readme = std::fs::read(original.dir.join("README.md")).unwrap();
+
+        assert!(file_pending_capture(&pending, "replacement must not be rewritten").is_err());
+        assert_eq!(std::fs::read(original.dir.join("session.json")).unwrap(), manifest);
+        assert_eq!(std::fs::read(original.dir.join("README.md")).unwrap(), readme);
+    }
+
+    #[test]
     fn pending_capture_and_markup_refuse_a_replacement_item_folder() {
         let d = tempfile::tempdir().unwrap();
         let mut s = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
@@ -1563,6 +1603,7 @@ mod tests {
         let item_identity = s.item_identity(id).unwrap();
         let capture = PendingCapture {
             session: s.dir.clone(),
+            display_path: s.display_path.clone(),
             session_identity: s.folder_identity(),
             session_id: s.manifest.id.clone(),
             item: id,

@@ -162,6 +162,32 @@ impl Session {
         Ok(s)
     }
 
+    pub fn reopen_matching(path: &Path, display_path: &str, expected_identity: &FolderIdentity, expected_id: &str, fallback_header: &str) -> Result<Session> {
+        let dir = fs::canonicalize(path).map_err(|_| SnagError::NotASession(display_path.into()))?;
+        let folder_identity = FolderIdentity(Arc::new(same_file::Handle::from_path(&dir)?));
+        if &folder_identity != expected_identity {
+            return Err(SnagError::Io(format!("The session folder {display_path} is gone or was replaced.")));
+        }
+        let data = fs::read(dir.join(MANIFEST_NAME)).map_err(|_| SnagError::NotASession(display_path.into()))?;
+        let manifest: Manifest = serde_json::from_slice(&data).map_err(|e| SnagError::Io(format!("{display_path}: {e}")))?;
+        if manifest.id != expected_id {
+            return Err(SnagError::Io(format!("The session folder {display_path} is gone or was replaced.")));
+        }
+        let mut s = Session {
+            dir,
+            display_path: display_path.into(),
+            manifest,
+            open_token: uuid::Uuid::new_v4().to_string(),
+            fallback_header: fallback_header.into(),
+            folder_identity,
+        };
+        s.repair();
+        if !s.matches_folder_identity(expected_identity) {
+            return Err(SnagError::Io(format!("The session folder {display_path} is gone or was replaced.")));
+        }
+        Ok(s)
+    }
+
     /// Sessions under `root`, newest first. Folders without a session.json are ignored.
     pub fn list(root: &str) -> Vec<Summary> {
         let root_dir = Paths::path(root);

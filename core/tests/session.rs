@@ -311,6 +311,44 @@ fn a_replacement_at_the_same_path_is_neither_written_nor_deleted() {
 }
 
 #[test]
+fn a_bound_reopen_rejects_a_replacement_before_repairing_it() {
+    let e = env();
+    let mut original = Session::create(&e.root, &Config::default(), date("2026-09-25T10:00:00Z"), "original-bound").unwrap();
+    original.add_item(None, Utc::now()).unwrap();
+    let original_dir = original.dir.clone();
+    let original_identity = original.folder_identity();
+    let original_id = original.manifest.id.clone();
+    fs::rename(&original_dir, original_dir.with_file_name("held-original-bound")).unwrap();
+
+    let mut replacement = Session::create(&e.root, &Config::default(), date("2026-09-25T10:00:00Z"), "replacement-bound").unwrap();
+    let item = replacement.add_item(None, Utc::now()).unwrap();
+    fs::remove_dir_all(replacement.item_dir(item.id).unwrap()).unwrap();
+    fs::rename(&replacement.dir, &original_dir).unwrap();
+    let manifest = fs::read(original_dir.join("session.json")).unwrap();
+    let readme = fs::read(original_dir.join("README.md")).unwrap();
+
+    assert!(Session::reopen_matching(&original_dir, &original.display_path, &original_identity, &original_id, "replacement must not be rewritten").is_err());
+    assert_eq!(fs::read(original_dir.join("session.json")).unwrap(), manifest);
+    assert_eq!(fs::read(original_dir.join("README.md")).unwrap(), readme);
+}
+
+#[test]
+fn a_bound_reopen_keeps_the_original_display_path() {
+    let e = env();
+    let mut s = Session::create(&e.root, &Config::default(), date("2026-09-25T10:00:00Z"), "display-bound").unwrap();
+    let item = s.add_item(None, Utc::now()).unwrap();
+    let identity = s.folder_identity();
+    let id = s.manifest.id.clone();
+    let display = "~/shared-session-link";
+
+    let mut reopened = Session::reopen_matching(&s.dir, display, &identity, &id, "Review {session}").unwrap();
+    reopened.write_note(item.id, "changed through the saved spelling\n").unwrap();
+
+    assert_eq!(reopened.display_path, display);
+    assert!(fs::read_to_string(s.dir.join("README.md")).unwrap().starts_with("Review ~/shared-session-link\n"));
+}
+
+#[test]
 fn a_copied_replacement_with_the_same_manifest_id_is_rejected() {
     let e = env();
     let mut original = Session::create(&e.root, &Config::default(), date("2026-09-25T10:00:00Z"), "same-id").unwrap();
