@@ -177,6 +177,8 @@ struct SessionMenu: View {
                 Button("All Sessions…") { model.showingSessions = true }
                 Button("Open Another Folder…") { model.chooseSessionFolder() }
                 Button("Show in Finder") { model.revealSession() }
+                Divider()
+                Button("Delete This Session…", role: .destructive) { model.deleteSession() }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "books.vertical")

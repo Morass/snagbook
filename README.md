@@ -51,7 +51,7 @@ The first screenshot or recording asks for the **Screen Recording** permission (
 
 ### Sessions and items
 
-A session is one sitting of testing. The name at the top of the sidebar switches between recent sessions, starts a new one, renames this one, edits its header, opens a session folder from anywhere else (one a colleague shared, say) or shows it in the Finder. A session is named after the time it started until you give it a name.
+A session is one sitting of testing. The name at the top of the sidebar switches between recent sessions, starts a new one, renames or deletes this one, edits its header, opens a session folder from anywhere else (one a colleague shared, say) or shows it in the Finder. The recent list is read from disk each time you open it, so sessions removed elsewhere disappear. A session is named after the time it started until you give it a name. Deleting a session moves its whole folder to the Trash; on a drive without a Trash, Snagbook asks before deleting it for good.
 
 Each finding is an item, numbered in order. Click an item or use the arrow keys; drag to reorder; right-click to rename, show in the Finder or delete. **⌘[** and **⌘]** go back and forward through the items you looked at. Deleting moves the item's folder to the Trash; on a drive without a Trash (a network share, for example) Snagbook asks before deleting it for good. After the last items are deleted, the next new one takes their number again.
 
@@ -160,7 +160,7 @@ The settings are a JSON file you can also edit by hand: `~/Library/Application S
 
   Folders renamed or removed by hand are noticed the next time the session opens.
 - **Its settings file** (above).
-- **The Trash**, when you delete an item.
+- **The Trash**, when you delete an item or a session.
 - **The clipboard**, only when you copy the hand-off.
 - **The screen**, only while you take a screenshot or record, and only the area you choose; the Mac's sound only if you turn it on in Settings › Capture.
 
@@ -169,7 +169,7 @@ Snagbook makes no network connections. Links in notes open in your browser when 
 ## Limits
 
 - Recordings are of a rectangle you drag, not of a single window that moves.
-- A session open in Snagbook whose folder is deleted in the Finder is not closed: carry on and its folder comes back with what you add next.
+- If an open session's folder is deleted elsewhere, Snagbook closes it when you return to the app and never recreates it.
 
 ## Linux and Windows
 

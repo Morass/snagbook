@@ -56,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        MainActor.assumeIsolated { AppModel.shared.refreshSessionFromDisk() }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         MainActor.assumeIsolated {
             let model = AppModel.shared

@@ -351,6 +351,12 @@ enum SelfTest {
         WindowPlacement.show()
         await settle(600)
         check(WindowPlacement.notebook?.isVisible == true, "the notebook comes back after its window was closed")
+
+        // A session removed elsewhere closes instead of being recreated by the next write.
+        let deletedPath = session.displayPath
+        try? FileManager.default.removeItem(at: session.url)
+        model.refreshSessionFromDisk()
+        check(model.session == nil && !exists(session.url), "an open session deleted outside Snagbook is closed and stays deleted: \(deletedPath)")
     }
 
     /// Run an async function body in the page and return its value.

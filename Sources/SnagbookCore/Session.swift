@@ -217,6 +217,12 @@ public final class Session {
         try save()
     }
 
+    /// Remove the whole session. The app supplies a discard that moves the folder to the
+    /// Trash; keeping that policy outside the core also makes other front ends portable.
+    public func delete(discard: (URL) throws -> Void) throws {
+        try discard(url)
+    }
+
     /// A `discard` for deleteItem: move the folder to the Trash, and when its volume has none
     /// (a network share) delete it outright only if `deletePermanently` agrees. Declining throws
     /// CocoaError(.userCancelled), so the item stays.

@@ -88,6 +88,18 @@ final class SessionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: s.url.path))
     }
 
+    func testDeletingASessionDiscardsTheWholeFolder() throws {
+        let s = try Session.create(root: root, config: Config())
+        try s.addItem()
+        var discarded: URL?
+
+        try s.delete { discarded = $0; try FileManager.default.removeItem(at: $0) }
+
+        XCTAssertEqual(discarded, s.url)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: s.url.path))
+        XCTAssertFalse(Session.list(root: root).contains { $0.path == s.displayPath })
+    }
+
     func testANumberedFolderLeftOnDiskKeepsItsNumber() throws {
         let s = try Session.create(root: root, config: Config())
         for _ in 1...2 { try s.addItem() }

@@ -117,6 +117,61 @@ final class AppModel: ObservableObject {
         if let first = items.last { show(first.id, record: false) } else { titleDraft = "" }
     }
 
+    func refreshSessionFromDisk() {
+        guard let s = session, !s.exists else { return }
+        closeSession()
+        alert = AlertInfo(title: "Session closed", message: "The session folder \(s.displayPath) was deleted outside Snagbook.")
+    }
+
+    private func closeSession() {
+        session = nil
+        items = []
+        selectedID = nil
+        titleDraft = ""
+        back.removeAll()
+        forward.removeAll()
+        updateNav()
+        editor.sessionChanged()
+        updateConfig { $0.lastSession = nil }
+    }
+
+    func deleteSession(confirm: Bool = true) {
+        guard let session else { return }
+        if capture.phase != .idle {
+            return flash("Finish or cancel the capture before deleting this session")
+        }
+        if confirm {
+            let a = NSAlert()
+            a.messageText = "Delete “\(session.title)”?"
+            a.informativeText = "The whole session folder, with every item, note, picture and video, goes to the Trash."
+            a.addButton(withTitle: "Move to Trash")
+            a.addButton(withTitle: "Cancel")
+            a.buttons.first?.hasDestructiveAction = true
+            guard a.runModal() == .alertFirstButtonReturn else { return }
+        }
+        Task {
+            await editor.flush()
+            do {
+                try session.delete(discard: Session.trashOrDelete(
+                    trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
+                    deletePermanently: { _ in
+                        guard confirm else { return true }
+                        let a = NSAlert()
+                        a.messageText = "Delete “\(session.title)” permanently?"
+                        a.informativeText = "This session is on a drive without a Trash, so its whole folder would be deleted for good."
+                        a.addButton(withTitle: "Delete Permanently")
+                        a.addButton(withTitle: "Cancel")
+                        a.buttons.first?.hasDestructiveAction = true
+                        return a.runModal() == .alertFirstButtonReturn
+                    }))
+                closeSession()
+            } catch let e as CocoaError where e.code == .userCancelled {
+            } catch {
+                show(error)
+            }
+        }
+    }
+
     /// Make sure there is somewhere to put a capture: a session and an item.
     func ensureItem() throws -> Int {
         if session == nil {
