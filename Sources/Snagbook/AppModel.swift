@@ -357,8 +357,10 @@ final class AppModel: ObservableObject {
                   !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: live) }) else {
                 return flash("The item changed or a capture started, so it was not deleted")
             }
+            var current: Session?
             do {
-                let current = try live.reopenedMatchingItem(id, identity: itemIdentity, fallbackHeader: config.header)
+                current = try live.reopenedMatchingItem(id, identity: itemIdentity, fallbackHeader: config.header)
+                guard let current else { return }
                 try current.deleteItem(id, expectedIdentity: itemIdentity, discard: Session.trashOrDelete(
                     trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
                     deletePermanently: { _ in
@@ -375,20 +377,31 @@ final class AppModel: ObservableObject {
                             && !self.capture.isUsing(current, item: id)
                             && !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: current) })
                     }))
-                self.session = current
-                editor.forget(item: id)
-                itemIdentities[id] = nil
-                items = current.manifest.items
-                if selectedID == id {
-                    selectedID = nil
-                    if let prev = back.last(where: { b in items.contains { $0.id == b } }) ?? items.last?.id { show(prev, record: false) } else { titleDraft = "" }
-                }
-                updateNav()
+                applyDeletedItem(id, from: current)
             } catch let e as CocoaError where e.code == .userCancelled {
             } catch {
+                if let current, !current.isSameItem(id, identity: itemIdentity) {
+                    applyDeletedItem(id, from: current)
+                }
                 show(error)
             }
         }
+    }
+
+    private func applyDeletedItem(_ id: Int, from current: Session) {
+        session = current
+        editor.forget(item: id)
+        itemIdentities[id] = nil
+        items = current.manifest.items
+        if selectedID == id {
+            selectedID = nil
+            if let prev = back.last(where: { b in items.contains { $0.id == b } }) ?? items.last?.id {
+                show(prev, record: false)
+            } else {
+                titleDraft = ""
+            }
+        }
+        updateNav()
     }
 
     func move(from offsets: IndexSet, to dest: Int) {

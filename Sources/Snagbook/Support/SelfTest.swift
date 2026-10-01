@@ -682,6 +682,31 @@ enum SelfTest {
         try? FileManager.default.moveItem(at: heldItem, to: liveItem)
         if let moveSentinel { model.delete(moveSentinel, confirm: false); await settle() }
 
+        let readmeDeleteVictim = try? model.addItem(title: "README failure delete", focusTitle: false)
+        if let victim = readmeDeleteVictim,
+           let victimFolder = try? model.session?.itemURL(victim),
+           let activeSession = model.session {
+            model.select(victim)
+            await settle()
+            let readme = activeSession.url.appendingPathComponent(Session.readmeName)
+            let heldReadme = activeSession.url.appendingPathComponent(".delete-readme.selftest.md")
+            try? FileManager.default.moveItem(at: readme, to: heldReadme)
+            try? FileManager.default.createDirectory(at: readme, withIntermediateDirectories: false)
+            model.delete(victim, confirm: false)
+            for _ in 0..<50 where exists(victimFolder) { await settle(100) }
+            check(!model.items.contains(where: { $0.id == victim })
+                    && model.selectedID != victim
+                    && model.editor.shownItem != victim,
+                  "a committed deletion leaves no stale editor when README refresh fails")
+            try? FileManager.default.removeItem(at: readme)
+            try? FileManager.default.moveItem(at: heldReadme, to: readme)
+            try? model.session?.writeReadme()
+            model.select(id)
+            await settle()
+        } else {
+            check(false, "the README-failure deletion gets a disposable item")
+        }
+
         // Closing the notebook window and showing it again brings it back.
         WindowPlacement.notebook?.performClose(nil)
         await settle()
