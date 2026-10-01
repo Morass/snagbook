@@ -119,11 +119,14 @@ final class SessionTests: XCTestCase {
         try FileManager.default.moveItem(at: s.url, to: old)
         let replacement = try Session.create(root: root, config: Config(), hash: "replacement")
         try FileManager.default.moveItem(at: replacement.url, to: s.url)
+        let replacementReadme = try String(contentsOf: s.url.appendingPathComponent(Session.readmeName), encoding: .utf8)
 
         XCTAssertFalse(s.matchesDiskIdentity)
         XCTAssertThrowsError(try s.addItem())
         XCTAssertThrowsError(try s.delete { try FileManager.default.removeItem(at: $0) })
+        XCTAssertThrowsError(try s.reopenedMatchingItem(1, identity: "not-the-item", fallbackHeader: "replacement must not be rewritten"))
         XCTAssertEqual(try Session.open(s.url.path).manifest.id, "replacement")
+        XCTAssertEqual(try String(contentsOf: s.url.appendingPathComponent(Session.readmeName), encoding: .utf8), replacementReadme)
     }
 
     func testACopiedReplacementWithTheSameManifestIDIsRejected() throws {

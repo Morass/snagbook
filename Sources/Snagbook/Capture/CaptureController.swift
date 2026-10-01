@@ -99,11 +99,13 @@ final class CaptureController: ObservableObject {
             saveFailed = false
             phase = .saving
             overlay.hideAll()
-            let destination: (Session, Int)
+            let destination: (Session, Int, String)
             do {
                 let id = try model.ensureItem()
-                guard let session = model.session else { throw SnagError.noSuchItem(id) }
-                destination = (session, id)
+                guard let source = model.session else { throw SnagError.noSuchItem(id) }
+                let session = try liveSession(for: source, item: id, identity: nil)
+                guard let identity = try session.itemIdentity(id) else { throw SnagError.noSuchItem(id) }
+                destination = (session, id, identity)
             } catch {
                 phase = .idle
                 target = nil
@@ -145,13 +147,11 @@ final class CaptureController: ObservableObject {
 
     // MARK: - screenshot
 
-    func shoot(_ t: CaptureTarget, destination supplied: (Session, Int)? = nil, finishesStandaloneCapture: Bool = false) {
+    func shoot(_ t: CaptureTarget, destination supplied: (Session, Int, String)? = nil, finishesStandaloneCapture: Bool = false) {
         let destination: (Session, Int, String)
         do {
             if let supplied {
-                let session = try liveSession(for: supplied.0, item: supplied.1, identity: nil)
-                guard let identity = try session.itemIdentity(supplied.1) else { throw SnagError.noSuchItem(supplied.1) }
-                destination = (session, supplied.1, identity)
+                destination = supplied
             } else if phase == .recording, let recordingSession, let recordingItem, let recordingItemIdentity {
                 destination = (recordingSession, recordingItem, recordingItemIdentity)
             } else {
@@ -181,7 +181,7 @@ final class CaptureController: ObservableObject {
             do {
                 let image = try await ScreenGrabber.screenshot(t)
                 let live = try liveSession(for: destination.0, item: destination.1, identity: destination.2)
-                let waitsForAnnotator = model.screenshotTaken(image, source: t.summary, session: live, item: destination.1)
+                let waitsForAnnotator = try model.screenshotTaken(image, source: t.summary, session: live, item: destination.1)
                 if !waitsForAnnotator { bringNotebookBack() }
             } catch {
                 saveFailed = true

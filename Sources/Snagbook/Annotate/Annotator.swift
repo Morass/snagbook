@@ -202,10 +202,10 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
             finished = true
             model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
             try? live.writeReadme()
+            close()
         } catch {
             model.show(error)
         }
-        close()
     }
 
     /// New screenshot: keep it without marks. Existing picture: leave it as it was.

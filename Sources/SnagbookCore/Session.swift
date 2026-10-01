@@ -48,10 +48,11 @@ public final class Session {
 
     private let fm = FileManager.default
 
-    init(url: URL, displayPath: String, manifest: Manifest) {
+    init(url: URL, displayPath: String, manifest: Manifest, fallbackHeader: String = Config.defaultHeader) {
         self.url = url
         self.displayPath = displayPath
         self.manifest = manifest
+        self.fallbackHeader = fallbackHeader
         self.fileIdentity = Self.identity(of: url)
     }
 
@@ -83,8 +84,7 @@ public final class Session {
         let data: Data
         do { data = try Data(contentsOf: url.appendingPathComponent(manifestName)) } catch { throw SnagError.notASession(path) }
         let manifest = try decoder.decode(Manifest.self, from: data)
-        let s = Session(url: url, displayPath: Paths.abbreviate(Paths.expand(path)), manifest: manifest)
-        s.fallbackHeader = fallbackHeader
+        let s = Session(url: url, displayPath: Paths.abbreviate(Paths.expand(path)), manifest: manifest, fallbackHeader: fallbackHeader)
         s.repair()
         return s
     }
@@ -191,11 +191,19 @@ public final class Session {
     }
 
     public func reopenedMatchingItem(_ id: Int, identity: String, fallbackHeader: String) throws -> Session {
-        let current = try Session.open(url.path, fallbackHeader: fallbackHeader)
-        guard current.isSameSession(as: self), current.isSameItem(id, identity: identity) else {
-            throw SnagError.noSuchItem(id)
-        }
+        let current = try Session.loadWithoutRepair(url.path, fallbackHeader: fallbackHeader)
+        guard current.isSameSession(as: self) else { throw SnagError.notASession(displayPath) }
+        current.repair()
+        guard current.isSameItem(id, identity: identity) else { throw SnagError.noSuchItem(id) }
         return current
+    }
+
+    private static func loadWithoutRepair(_ path: String, fallbackHeader: String) throws -> Session {
+        let url = Paths.url(path).resolvingSymlinksInPath()
+        let data: Data
+        do { data = try Data(contentsOf: url.appendingPathComponent(manifestName)) } catch { throw SnagError.notASession(path) }
+        let manifest = try decoder.decode(Manifest.self, from: data)
+        return Session(url: url, displayPath: Paths.abbreviate(Paths.expand(path)), manifest: manifest, fallbackHeader: fallbackHeader)
     }
 
     /// Add an item after the others. With no title it is "Item N".

@@ -111,7 +111,7 @@ enum SelfTest {
         check(loaded.hasSuffix(",-1,-1"), "media URLs refuse paths outside the item and unknown items")
 
         // 7. A screenshot goes through the mark-up window and keeps its original.
-        model.screenshotTaken(testImage(400, 240, hue: 0.1), source: "selftest")
+        _ = try? model.screenshotTaken(testImage(400, 240, hue: 0.1), source: "selftest")
         await settle()
         if let a = Annotator.open.last {
             a.commit { $0.marks.append(Mark(tool: .ellipse, points: [Pt(40, 40), Pt(200, 160)], color: "#ff3b30", width: 6)) }
@@ -191,6 +191,7 @@ enum SelfTest {
         model.newItemFromMenu()
         for _ in 0..<30 where model.items.count == itemCount { await settle(100) }
         let second = model.selectedID ?? -1
+        if let current = model.session { session = current }
         check(second != first, "New Item selects the new item")
         _ = await js(model, "snag.focus(); snag.typeText('Second item text')")
         await model.editor.flush()
@@ -377,6 +378,24 @@ enum SelfTest {
         let name = (rel as NSString).lastPathComponent
         let stem = (name as NSString).deletingPathExtension
         check(exists(media.appendingPathComponent(stem + ".marks.json")), "Return saves the marks")
+
+        let failedRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.7))!, prefix: "shot", ext: "png")) ?? ""
+        Annotator.open(item: id, relative: failedRel, isNew: true, model: model)
+        await settle()
+        if let failed = Annotator.open.last {
+            let failedURL = try! session.itemURL(id).appendingPathComponent(failedRel)
+            try? FileManager.default.removeItem(at: failedURL)
+            try? FileManager.default.createDirectory(at: failedURL, withIntermediateDirectories: false)
+            failed.commit { $0.marks.append(Mark(tool: .ellipse, points: [Pt(10, 10), Pt(80, 60)], color: "#ff3b30", width: 4)) }
+            failed.done()
+            check(Annotator.open.contains(where: { $0 === failed }), "a failed mark-up save keeps the picture open")
+            try? FileManager.default.removeItem(at: failedURL)
+            try? ImageFile.pngData(failed.original)?.write(to: failedURL)
+            failed.skip()
+            await settle()
+        } else {
+            check(false, "the failure-path mark-up window opens")
+        }
 
         // Closing the notebook window and showing it again brings it back.
         WindowPlacement.notebook?.performClose(nil)

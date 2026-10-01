@@ -444,26 +444,22 @@ final class AppModel: ObservableObject {
 
     /// A finished screenshot: into the selected item, marked up first if that is on.
     @discardableResult
-    func screenshotTaken(_ image: CGImage, source: String, session sourceSession: Session? = nil, item sourceItem: Int? = nil) -> Bool {
-        do {
-            let id = try sourceItem ?? ensureItem()
-            guard let session = sourceSession ?? session, let png = ImageFile.pngData(image) else { return false }
-            let rel = try session.saveMedia(id, data: png, prefix: "shot", ext: "png")
-            let isOpen = adoptIfOpen(session)
-            if config.capture.annotateScreenshots, isOpen, selectedID == id {
-                Annotator.open(item: id, relative: rel, isNew: true, model: self)
-                return true
-            } else if isOpen, selectedID == id {
-                editor.insertMedia(kind: "image", src: rel, label: "")
-                flash("Screenshot saved to \(itemTitle(id))")
-            } else {
-                try appendMedia("![](\(rel))", to: session, item: id)
-            }
-            return false
-        } catch {
-            show(error)
-            return false
+    func screenshotTaken(_ image: CGImage, source: String, session sourceSession: Session? = nil, item sourceItem: Int? = nil) throws -> Bool {
+        let id = try sourceItem ?? ensureItem()
+        guard let session = sourceSession ?? session else { throw SnagError.noSuchItem(id) }
+        guard let png = ImageFile.pngData(image) else { throw VideoErrorLike("encode") }
+        let rel = try session.saveMedia(id, data: png, prefix: "shot", ext: "png")
+        let isOpen = adoptIfOpen(session)
+        if config.capture.annotateScreenshots, isOpen, selectedID == id {
+            Annotator.open(item: id, relative: rel, isNew: true, model: self)
+            return true
+        } else if isOpen, selectedID == id {
+            editor.insertMedia(kind: "image", src: rel, label: "")
+            flash("Screenshot saved to \(itemTitle(id))")
+        } else {
+            try appendMedia("![](\(rel))", to: session, item: id)
         }
+        return false
     }
 
     /// The mark-up window finished with a picture.
