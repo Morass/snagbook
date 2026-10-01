@@ -8,7 +8,7 @@ import { rectFraction, formatElapsed } from "../src/rect.js";
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
 /// An in-memory stand-in for the app's commands.
-function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowCaptureFiling = false, slowMedia = false, slowWrite = false, slowDelete = false, failCaptureFiling = false } = {}) {
+function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowCaptureFiling = false, slowFiledReply = false, slowMedia = false, slowWrite = false, slowDelete = false, failCaptureFiling = false } = {}) {
   const calls = [];
   const notes = new Map();
   let slowNote = null;
@@ -120,7 +120,12 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       session.items.splice(index, 0, it);
       return view();
     },
-    read_note: async ({ id }) => {
+    read_note: async ({ sessionId, openToken, itemToken, id }) => {
+      const validate = () => {
+        if (sessionId != null && (session?.id !== sessionId || session?.openToken !== openToken)) throw "The open session changed while the note was being read.";
+        if (itemToken != null && session?.items.find((item) => item.id === id)?.itemToken !== itemToken) throw "The note's item is gone or was replaced.";
+      };
+      validate();
       if (noteReadFailures > 0) {
         noteReadFailures--;
         throw "The note could not be read.";
@@ -129,12 +134,14 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
         heldNote = null;
         const heldValue = notes.get(id) ?? "";
         await noteGate;
+        validate();
         if (staleHeldNote) {
           staleHeldNote = false;
           return heldValue;
         }
       }
       if (slowNote === id) await new Promise((resolve) => setTimeout(resolve, 30));
+      validate();
       return notes.get(id) ?? "";
     },
     write_note: async ({ sessionId, openToken, itemToken, id, markdown }) => {
@@ -151,7 +158,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     start_screenshot: () => null,
     capture_filed: async ({ ack, inserted }) => {
       if (captureFilingBlocked) throw "The capture could not be filed.";
-      if (captureFilingGate) {
+      if (captureFilingGate && !slowFiledReply) {
         if (captureFilingUsed) throw "That capture is not waiting to be filed.";
         captureFilingUsed = true;
         await captureFilingGate;
@@ -161,6 +168,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
         const body = notes.get(origin.id) || "";
         notes.set(origin.id, `${body.trimEnd()}${body.trim() ? "\n\n" : ""}![](${origin.rel})\n`);
       }
+      if (captureFilingGate && slowFiledReply) await captureFilingGate;
       captureOrigins.delete(ack);
       return null;
     },
@@ -1225,6 +1233,31 @@ test("a pending note read through another path retries after fallback filing", a
   assert.match(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, /!\[\]\(media\/image-001\.png\)/);
 });
 
+test("an alias note loading while filed fallback waits for the final reload", async () => {
+  const t = await setup({ session: true, slowMedia: true, slowCaptureFiling: true, slowFiledReply: true });
+  t.editor.mediaSaved = () => false;
+  t.app.notes.set(1, "original\n");
+  const source = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 19, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  t.app.list.push({ id: source.id, path: "~/third-alias-to-the-source", folderToken: source.folderToken, title: "Same session", items: 1 });
+  await t.shell.openSession("~/third-alias-to-the-source");
+  await t.shell.newItem();
+  t.app.holdStaleNoteFor(1);
+  const returning = t.shell.show(1);
+  await t.settle();
+  t.app.releaseMedia();
+  await t.settle();
+  t.app.releaseNote();
+  await returning;
+  t.app.releaseCaptureFiling();
+  await saving;
+
+  const opens = t.editor.log.filter(([kind, value]) => kind === "open" && value.id === 1);
+  assert.match(opens.at(-1)[1].markdown, /!\[\]\(media\/image-001\.png\)/);
+  assert.equal(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1)[1], false);
+});
+
 test("a capture finishing while the editor is locked is filed by the backend", async () => {
   const t = await setup({ session: true });
   const source = t.shell.view().session;
@@ -1350,6 +1383,24 @@ test("a slow note of an item left behind does not open over the one chosen next"
   const opened = editor.log.filter((e) => e[0] === "open").map((e) => e[1].id);
   assert.deepEqual(opened, [2], "only item 2 is opened: " + JSON.stringify(opened));
   assert.equal(shell.selected(), 2, "and item 2 stays selected");
+});
+
+test("a delayed note read cannot acquire a replacement item's token", async () => {
+  const t = await setup({ session: true });
+  t.app.notes.set(1, "original\n");
+  await t.shell.newItem();
+  t.app.holdStaleNoteFor(1);
+  const showing = t.shell.show(1);
+  await t.settle();
+  t.app.notes.set(1, "replacement\n");
+  t.app.replaceItem(1);
+  await t.shell.refresh();
+  t.app.releaseNote();
+  await showing;
+
+  const opened = t.editor.log.filter(([kind, value]) => kind === "open" && value.id === 1).at(-1)[1];
+  assert.equal(opened.markdown, "replacement\n");
+  assert.equal(opened.itemToken, t.shell.view().session.items.find((item) => item.id === 1).itemToken);
 });
 
 test("Copy Hand-off says so in green, and the next plain message is not green", async () => {

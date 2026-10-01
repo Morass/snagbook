@@ -333,9 +333,20 @@ fn move_item(st: St, id: i64, index: usize) -> Res<View> {
 }
 
 #[tauri::command]
-fn read_note(st: St, id: i64) -> Res<String> {
+fn read_note(st: St, session_id: String, open_token: String, item_token: String, id: i64) -> Res<String> {
     let mut a = st.lock().unwrap();
-    a.session()?.read_note(id).map_err(err)
+    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
+        return Err("The open session changed while the note was being read.".into());
+    }
+    let item_identity = a.item_origins.iter().find_map(|(identity, token)| (token == &item_token).then(|| identity.clone())).ok_or("The note's item is no longer known.")?;
+    if a.session.as_ref().is_none_or(|s| !s.matches_item_identity(id, &item_identity)) {
+        return Err("The note's item is gone or was replaced.".into());
+    }
+    let note = a.session()?.read_note(id).map_err(err)?;
+    if a.session.as_ref().is_none_or(|s| !s.matches_item_identity(id, &item_identity)) {
+        return Err("The note's item changed while it was being read.".into());
+    }
+    Ok(note)
 }
 
 #[tauri::command]

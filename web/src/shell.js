@@ -219,10 +219,12 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function reloadOriginItem(origin) {
     if (!originIsOpen(origin)) return;
     const openToken = view.session.openToken;
-    const md = await call("read_note", { id: origin.id });
+    const itemToken = items().find((item) => item.id === origin.id)?.itemToken;
+    if (!itemToken) return;
+    const md = await call("read_note", { sessionId: origin.sessionId, openToken, itemToken, id: origin.id });
     if (!originIsOpen(origin)) return;
     if (view.session.openToken !== openToken) throw new Error("The source session changed while its note was reloading.");
-    const itemToken = items().find((item) => item.id === origin.id)?.itemToken;
+    if (items().find((item) => item.id === origin.id)?.itemToken !== itemToken) throw new Error("The source item changed while its note was reloading.");
     snag()?.open({ id: origin.id, itemToken, markdown: md, base: mediaBase(platform(), origin.id, epoch), sessionId: origin.sessionId, openToken, focus: false });
     editorItem = origin.id;
   }
@@ -250,20 +252,31 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return;
     }
     let md = "";
-    const revisionKey = originRevisionKey({ path: view.session.path, sessionId: view.session.id, id });
+    const sessionId = view.session.id;
+    const openToken = view.session.openToken;
+    const itemToken = items().find((item) => item.id === id)?.itemToken;
+    if (!itemToken) return;
+    const revisionKey = originRevisionKey({ sessionId, id });
     let revision = originRevisions.get(revisionKey) || 0;
     try {
       while (true) {
-        md = await call("read_note", { id });
+        md = await call("read_note", { sessionId, openToken, itemToken, id });
         const current = originRevisions.get(revisionKey) || 0;
         if (current === revision) break;
         revision = current;
       }
     } catch {
-      return refresh();
+      await refresh();
+      if (turn === showing && selected === id && items().find((item) => item.id === id)?.itemToken !== itemToken) {
+        return show(id, { focus });
+      }
+      return;
     }
     if (turn !== showing || selected !== id) return;
-    ed.open({ id, itemToken: items().find((item) => item.id === id)?.itemToken, markdown: md, base: mediaBase(platform(), id, epoch), sessionId: view.session.id, openToken: view.session.openToken, focus });
+    if (view.session?.id !== sessionId || view.session?.openToken !== openToken || items().find((item) => item.id === id)?.itemToken !== itemToken) {
+      return show(id, { focus });
+    }
+    ed.open({ id, itemToken, markdown: md, base: mediaBase(platform(), id, epoch), sessionId, openToken, focus });
     editorItem = id;
     lockPendingOriginEditors();
   }
@@ -491,19 +504,19 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   function originIsOpen(origin) {
-    return !!origin && editorItem === origin.id
+    return !!origin && (editorItem === origin.id || selected === origin.id)
       && view?.session?.id === origin.sessionId
       && (origin.path ? view.session.path === origin.path : view.session.openToken === origin.openToken);
   }
 
   async function bindOpenOrigin(ack, origin) {
-    if (!ack || !origin || editorItem !== origin.id || view?.session?.id !== origin.sessionId) return false;
+    if (!ack || !origin || view?.session?.id !== origin.sessionId) return false;
     const openToken = view.session.openToken;
     const matches = await call("capture_can_insert", { ack }).catch(() => false);
-    if (!matches || view?.session?.openToken !== openToken || editorItem !== origin.id) return false;
+    if (!matches || view?.session?.openToken !== openToken) return false;
     origin.openToken = openToken;
     origin.path = view.session.path;
-    return true;
+    return originIsOpen(origin);
   }
 
   function lockPendingOriginEditors() {
