@@ -309,13 +309,25 @@ export async function runSelfTest(shell, invoke) {
     check(/\]\(media\/clip-003\.(mp4|webm)\)|clip-003-contact/.test(back), "the recording is at the end of its own item's note: " + JSON.stringify(back.slice(-50)));
     check(other !== path, "(two sessions were used)");
 
-    // 12. a session deleted from outside is closed, not written back
+    // 12. the session menu deletes the whole folder, then an outside deletion is noticed too
+    await shell.openSession(path);
+    const deleting = shell.deleteSession();
+    check(await until(() => !$('modal').hidden), "deleting a session asks first");
+    $('modal').querySelector('button[data-value="true"]')?.click();
+    await until(() => shell.view().session === null || !$('modal').hidden);
+    if (!$('modal').hidden) $('modal').querySelector('button[data-value="true"]')?.click();
+    await deleting;
+    check(shell.view().session === null, "deleting a session returns to the start screen");
+    check(!(await invoke("list_sessions")).some((s) => s.path === path), "the deleted session is gone from the session list");
+
+    await shell.newSession();
+    const outside = shell.view().session.path;
     await invoke("selftest_delete_session");
     await shell.refresh();
     check(shell.view().session === null, "a session deleted from outside is closed");
     check(!$("empty").hidden, "the start screen is shown");
     const list = await invoke("list_sessions");
-    check(!list.some((s) => s.path === path), "and it is gone from the session list");
+    check(!list.some((s) => s.path === outside), "and it is gone from the session list");
   } catch (e) {
     check(false, "self-test threw: " + (e?.message || e));
   }
