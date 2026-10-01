@@ -164,3 +164,17 @@ test("moving to another item with the same picture name shows that item's pictur
   api.open({ id: "21", markdown: md, base: "snagbook://item/21/", focus: false });
   assert.match(img().src, /item\/21\/media\/shot-001\.png/, "coming back shows the first item's picture again");
 });
+
+test("the mounted toolbar cannot edit while the app has locked the editor", async () => {
+  document.body.insertAdjacentHTML("beforeend", '<div id="toolbar"></div><div id="editor"></div>');
+  await import(`../src/editor/main.js?readonly-toolbar=${Date.now()}`);
+  if (!window.snag) {
+    document.dispatchEvent(new window.Event("DOMContentLoaded"));
+  }
+  window.snag.open({ id: "toolbar-locked", markdown: "plain\n", focus: false });
+  window.snag.selectAll();
+  window.snag.setReadOnly(true);
+  document.querySelector('#toolbar button[title^="Bold"]').click();
+  assert.equal(window.snag.markdown(), "plain\n");
+  window.snag.setReadOnly(false);
+});

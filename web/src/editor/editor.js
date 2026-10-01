@@ -297,6 +297,7 @@ class ImageView {
     this.img.style.width = this.node.attrs.width ? this.node.attrs.width + "px" : "";
   }
   startResize(e) {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
@@ -416,6 +417,7 @@ class TaskItemView {
       this.box.addEventListener("mousedown", (e) => e.preventDefault());
       this.box.addEventListener("click", (e) => {
         e.preventDefault();
+        if (readOnly) return;
         const pos = getPos();
         if (pos == null) return;
         view.dispatch(view.state.tr.setNodeMarkup(pos, null, { checked: !this.node.attrs.checked }));

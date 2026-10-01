@@ -1,5 +1,5 @@
 // Page entry: builds the formatting bar, mounts the editor and exposes window.snag.
-import { mount, api, commands, toolbarState, COLORS, SIZES } from "./editor.js";
+import { mount, api, toolbarState, COLORS, SIZES } from "./editor.js";
 
 const $ = (tag, props = {}, ...kids) => {
   const el = document.createElement(tag);
@@ -12,9 +12,7 @@ const buttons = {};
 let editorView = null;
 
 function run(name, arg) {
-  const cmd = commands[name];
-  if (cmd && editorView) {
-    cmd(arg)(editorView.state, editorView.dispatch, editorView);
+  if (editorView && api.run(name, arg)) {
     editorView.focus();
   }
 }
