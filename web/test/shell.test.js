@@ -8,7 +8,7 @@ import { rectFraction, formatElapsed } from "../src/rect.js";
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
 /// An in-memory stand-in for the app's commands.
-function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowMedia = false, slowWrite = false, failCaptureFiling = false } = {}) {
+function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowCaptureFiling = false, slowMedia = false, slowWrite = false, failCaptureFiling = false } = {}) {
   const calls = [];
   const notes = new Map();
   let slowNote = null;
@@ -20,10 +20,13 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let nextOpen = 1;
   let nextMedia = 1;
   let releaseCaptureCheck;
+  let releaseCaptureFiling;
   let releaseMedia;
   let releaseWrite;
   let captureFilingBlocked = failCaptureFiling;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
+  const captureFilingGate = slowCaptureFiling ? new Promise((resolve) => { releaseCaptureFiling = resolve; }) : null;
+  let captureFilingUsed = false;
   const mediaGate = slowMedia ? new Promise((resolve) => { releaseMedia = resolve; }) : null;
   const writeGate = slowWrite ? new Promise((resolve) => { releaseWrite = resolve; }) : null;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
@@ -99,8 +102,13 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     set_selected: () => null,
     update_config: ({ patch }) => (Object.assign(config, patch), view()),
     start_screenshot: () => null,
-    capture_filed: () => {
+    capture_filed: async () => {
       if (captureFilingBlocked) throw "The capture could not be filed.";
+      if (captureFilingGate) {
+        if (captureFilingUsed) throw "That capture is not waiting to be filed.";
+        captureFilingUsed = true;
+        await captureFilingGate;
+      }
       return null;
     },
     capture_can_insert: async () => {
@@ -123,6 +131,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     calls,
     notes,
     releaseCaptureCheck: () => releaseCaptureCheck?.(),
+    releaseCaptureFiling: () => releaseCaptureFiling?.(),
     releaseMedia: () => releaseMedia?.(),
     releaseWrite: () => releaseWrite?.(),
     allowCaptureFiling: () => { captureFilingBlocked = false; },
@@ -482,6 +491,23 @@ test("a session switch waits for an autosave already in flight", async () => {
   assert.deepEqual(pending, { type: "changed", id: 1, markdown: "not lost" });
 });
 
+test("a session switch waits for a required flush already in flight", async () => {
+  const t = await setup({ session: true, slowWrite: true });
+  let pending = { id: 1, markdown: "not lost" };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.editor.restorePending = (p) => { pending = p; };
+  const before = t.shell.view().session.openToken;
+  const saving = t.shell.flush({ required: true });
+  await t.settle();
+  const switching = t.shell.newSession();
+  await t.settle();
+  assert.equal(t.shell.view().session.openToken, before);
+  t.app.releaseWrite();
+  await Promise.all([saving, switching]);
+  assert.notEqual(t.shell.view().session.openToken, before);
+  assert.equal(t.app.notes.get(1), "not lost");
+});
+
 test("a failed autosave prevents switching items", async () => {
   const t = await setup({ session: true });
   await t.shell.newItem();
@@ -553,6 +579,21 @@ test("an acknowledgement failure does not make a saved note dirty again", async 
   assert.equal(pending, null);
 });
 
+test("overlapping flushes cannot retry an acknowledgement already being consumed", async () => {
+  const t = await setup({ session: true, slowCaptureFiling: true });
+  t.editor.insertMedia = () => {};
+  const sessionId = t.shell.view().session.id;
+  const filing = t.shell.onCaptured({ sessionId, ack: "one-shot", id: 1, rel: "media/shot-001.png" });
+  await t.settle();
+  const overlapping = t.shell.flush({ required: true });
+  await t.settle();
+  assert.equal(t.app.calls.filter(([c]) => c === "capture_filed").length, 1);
+  t.app.releaseCaptureFiling();
+  await Promise.all([filing, overlapping]);
+  await assert.doesNotReject(t.shell.flush({ required: true }));
+  assert.equal(t.app.calls.filter(([c]) => c === "capture_filed").length, 1);
+});
+
 test("a delayed capture stays in its source session", async () => {
   const t = await setup({ session: true, captureCanInsert: false });
   let inserted = 0;
@@ -575,7 +616,7 @@ test("a failed origin acknowledgement does not strand the capture event handler"
   ]);
 });
 
-test("a note write overtaken by a session switch files the capture in its origin", async () => {
+test("a session switch waits for an in-flight capture note write", async () => {
   const t = await setup({ session: true, slowWrite: true });
   let pending = null;
   t.editor.insertMedia = ({ src }) => { pending = { id: 1, markdown: src }; };
@@ -584,10 +625,13 @@ test("a note write overtaken by a session switch files the capture in its origin
   const source = t.shell.view().session;
   const filing = t.shell.onCaptured({ sessionId: source.id, ack: "overtaken-ack", id: 1, rel: "media/shot-001.png" });
   await t.settle();
-  await t.shell.newSession();
+  const switching = t.shell.newSession();
+  await t.settle();
+  assert.equal(t.shell.view().session.id, source.id);
   t.app.releaseWrite();
-  await filing;
-  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "overtaken-ack", inserted: false }]);
+  await Promise.all([filing, switching]);
+  assert.notEqual(t.shell.view().session.id, source.id);
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "overtaken-ack", inserted: true }]);
 });
 
 test("a capture validation response cannot cross a session switch", async () => {

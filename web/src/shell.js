@@ -81,6 +81,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   const pendingCaptureAcks = new Map();
   const pendingOriginAcks = new Set();
   const editorWrites = new Set();
+  let flushTail = Promise.resolve();
   const s = { view: () => view, selected: () => selected };
 
   const platform = () => view?.platform || "linux";
@@ -110,7 +111,13 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   /// Save what the editor has not reported yet (before switching items or sessions).
-  async function flush({ required = false } = {}) {
+  function flush(options = {}) {
+    const work = flushTail.then(() => flushOnce(options));
+    flushTail = work.catch(() => {});
+    return work;
+  }
+
+  async function flushOnce({ required = false } = {}) {
     const ed = snag();
     if (!ed || !editorReady) return;
     if (editorWrites.size) await Promise.allSettled([...editorWrites]);
@@ -118,12 +125,17 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     let ackItem = editorItem;
     if (p && p.id != null) {
       ackItem = p.id;
+      let writing;
       try {
-        await call("write_note", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id: p.id, markdown: p.markdown });
+        writing = call("write_note", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id: p.id, markdown: p.markdown });
+        editorWrites.add(writing);
+        await writing;
       } catch (e) {
         ed.restorePending?.(p);
         if (required) throw e;
         return;
+      } finally {
+        if (writing) editorWrites.delete(writing);
       }
     }
     if (ackItem != null) {
