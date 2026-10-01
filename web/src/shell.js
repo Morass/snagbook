@@ -105,11 +105,15 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   /// Save what the editor has not reported yet (before switching items or sessions).
-  async function flush() {
+  async function flush({ required = false } = {}) {
     const ed = snag();
     if (!ed || !editorReady) return;
     const p = ed.takePending?.();
-    if (p && p.id != null) await call("write_note", { id: p.id, markdown: p.markdown }).catch(() => {});
+    if (p && p.id != null) {
+      const writing = call("write_note", { id: p.id, markdown: p.markdown });
+      if (required) await writing;
+      else await writing.catch(() => {});
+    }
   }
 
   async function apply(v, { select } = {}) {
@@ -232,12 +236,18 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function deleteSession() {
     if (!view?.session) return;
     const title = view.session.title;
+    const sessionId = view.session.id;
     const ok = await confirm(`Delete “${title}”?`, "The whole session folder, with every item, note, picture and video, goes to the Trash.", "Move to Trash");
     if (!ok) return;
-    await flush();
+    try {
+      await flush({ required: true });
+    } catch {
+      return;
+    }
+    if (view?.session?.id !== sessionId) return flash("The open session changed, so it was not deleted.", "error");
     let v;
     try {
-      v = await call("delete_session", { permanently: false });
+      v = await call("delete_session", { sessionId, permanently: false });
     } catch (e) {
       const msg = String(e?.message || e);
       if (!msg.startsWith("NOTRASH:")) return;
@@ -247,7 +257,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         "Delete Permanently"
       );
       if (!again) return;
-      v = await call("delete_session", { permanently: true });
+      v = await call("delete_session", { sessionId, permanently: true });
     }
     await apply(v);
   }
@@ -292,6 +302,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     if (selected !== id) await show(id, { focus: false });
     snag()?.insertMedia({ kind, src: rel, label });
     await flush();
+    if (kind === "video" && view?.session?.id) await call("capture_filed", { id, sessionId: view.session.id });
     await refresh();
     const it = items().find((i) => i.id === id);
     const where = it?.title ?? "item " + id;
@@ -301,7 +312,11 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   /// The mark-up window finished: a new screenshot goes into the note (or is gone); an
   /// existing picture is redrawn.
-  async function onMarked({ id, rel, isNew, kept, changed }) {
+  async function onMarked({ sessionId, id, rel, isNew, kept, changed }) {
+    if (sessionId && view?.session?.id !== sessionId) {
+      await refresh();
+      return flash("The marked picture stayed in its original session.");
+    }
     if (isNew && kept) return onCaptured({ id, rel, kind: "image" });
     if (isNew) {
       await refresh();
@@ -530,7 +545,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
           e.preventDefault();
           done(null);
         } else if (e.key === "Enter" && !(e.target instanceof win.HTMLTextAreaElement)) {
-          const p = buttons.find((b) => b.primary);
+          const focused = doc.activeElement?.closest?.("button");
+          const p = focused ? buttons.find((b) => String(b.value) === focused.dataset.value) : buttons.find((b) => b.primary);
           if (p) {
             e.preventDefault();
             done(p.value);

@@ -13,6 +13,9 @@ pub struct Pending {
     pub id: i64,
     pub rel: String,
     pub is_new: bool,
+    pub session_id: String,
+    pub session_dir: PathBuf,
+    pub item_dir: PathBuf,
     /// The self-test's script for the page ("ring", "count", "clear", "skip").
     pub auto: Option<String>,
 }

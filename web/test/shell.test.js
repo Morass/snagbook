@@ -25,7 +25,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
     list_sessions: () => list.map((s) => ({ ...s })),
     new_session: () => {
       const path = `~/Snagbook/${String(nextHash++).padStart(8, "0")}_25-09-2026`;
-      session = { path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
+      session = { id: `id-${nextHash}`, path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
       list.unshift({ path, title: session.title, items: 1, created: "2026-09-25T16:00:00Z" });
       handlers.add_item({});
       return view();
@@ -33,7 +33,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
     open_session: ({ path }) => {
       const s = list.find((x) => x.path === path);
       if (!s) throw "not a session";
-      session = { path, title: s.title, header: null, items: [{ id: 1, title: "Old", folder: "01-old", images: 0, videos: 0 }], nextItem: 2 };
+      session = { id: `id-${path}`, path, title: s.title, header: null, items: [{ id: 1, title: "Old", folder: "01-old", images: 0, videos: 0 }], nextItem: 2 };
       return view();
     },
     add_item: ({ title }) => {
@@ -53,7 +53,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
       settle();
       return view();
     },
-    delete_session: ({ permanently }) => {
+    delete_session: ({ sessionId, permanently }) => {
+      if (session?.id !== sessionId) throw "The open session changed.";
       if (!permanently && !trash) throw "NOTRASH:the drive has no Trash";
       const at = list.findIndex((s) => s.path === session.path);
       if (at >= 0) list.splice(at, 1);
@@ -73,6 +74,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
     set_selected: () => null,
     update_config: ({ patch }) => (Object.assign(config, patch), view()),
     start_screenshot: () => null,
+    capture_filed: () => null,
   };
   const invoke = async (cmd, args = {}) => {
     calls.push([cmd, args]);
@@ -306,6 +308,45 @@ test("deleting a session asks again when its drive has no Trash", async () => {
 
   assert.equal(t.shell.view().session, null);
   assert.deepEqual(t.app.calls.filter(([c]) => c === "delete_session").map(([, a]) => a.permanently), [false, true]);
+});
+
+test("Enter on the focused Cancel button keeps the session", async () => {
+  const t = await setup({ session: true });
+  const deleting = t.shell.deleteSession();
+  await t.settle();
+  const cancel = t.$("modal").querySelector('button[data-value="false"]');
+  cancel.focus();
+  t.key(cancel, { key: "Enter" });
+  await deleting;
+  assert.notEqual(t.shell.view().session, null);
+  assert.equal(t.app.calls.some(([c]) => c === "delete_session"), false);
+});
+
+test("a session switch during confirmation cannot delete the replacement", async () => {
+  const t = await setup({ session: true, sessions: [{ path: "~/Snagbook/other", title: "Other", items: 1, created: "2026-09-25T16:00:00Z" }] });
+  const deleting = t.shell.deleteSession();
+  await t.settle();
+  await t.shell.openSession("~/Snagbook/other");
+  await t.answer(true);
+  await deleting;
+  assert.equal(t.shell.view().session.title, "Other");
+  assert.equal(t.app.calls.some(([c]) => c === "delete_session"), false);
+});
+
+test("a failed pending-note write prevents session deletion", async () => {
+  const t = await setup({ session: true });
+  t.editor.takePending = () => ({ id: 1, markdown: "unsaved" });
+  const original = t.app.invoke;
+  t.app.invoke = original;
+  const before = t.shell.view().session.path;
+  const old = t.app.calls.length;
+  // The shell's invoke is already captured, so replace the handler by making Map.set fail.
+  t.app.notes.set = () => { throw new Error("disk full"); };
+  const deleting = t.shell.deleteSession();
+  await t.answer(true);
+  await deleting;
+  assert.equal(t.shell.view().session.path, before);
+  assert.equal(t.app.calls.slice(old).some(([c]) => c === "delete_session"), false);
 });
 
 test("an open session deleted from outside is closed with a message", async () => {

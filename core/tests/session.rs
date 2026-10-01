@@ -271,6 +271,21 @@ fn deleting_a_session_discards_the_whole_folder() {
 }
 
 #[test]
+fn a_replacement_at_the_same_path_is_neither_written_nor_deleted() {
+    let e = env();
+    let mut original = Session::create(&e.root, &Config::default(), date("2026-09-25T10:00:00Z"), "original").unwrap();
+    let old = original.dir.with_file_name("old");
+    fs::rename(&original.dir, &old).unwrap();
+    let replacement = Session::create(&e.root, &Config::default(), date("2026-09-25T10:00:00Z"), "replacement").unwrap();
+    fs::rename(&replacement.dir, &original.dir).unwrap();
+
+    assert!(!original.matches_disk_identity());
+    assert!(original.add_item(None, Utc::now()).is_err());
+    assert!(original.delete(|p| fs::remove_dir_all(p).map_err(Into::into)).is_err());
+    assert_eq!(Session::open(&original.dir.to_string_lossy(), "").unwrap().manifest.id, "replacement");
+}
+
+#[test]
 fn open_rejects_a_folder_without_manifest() {
     let e = env();
     assert_eq!(Session::open(&e.home, "").err(), Some(SnagError::NotASession(e.home.clone())));
