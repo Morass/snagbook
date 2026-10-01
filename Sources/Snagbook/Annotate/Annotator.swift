@@ -14,6 +14,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     let relative: String
     let isNew: Bool
     unowned let model: AppModel
+    let session: Session
+    let itemDir: URL
     let original: CGImage
     private let previousApp: NSRunningApplication?
 
@@ -84,16 +86,18 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
         if hasOrig, let data = try? Data(contentsOf: marksURL), let d = try? MarkDocument.decode(data), d.width == original.width, d.height == original.height {
             doc = d
         }
-        let a = Annotator(item: item, relative: relative, isNew: isNew, model: model, original: original, doc: doc)
+        let a = Annotator(item: item, relative: relative, isNew: isNew, model: model, session: session, itemDir: itemDir, original: original, doc: doc)
         open.append(a)
         a.show()
     }
 
-    init(item: Int, relative: String, isNew: Bool, model: AppModel, original: CGImage, doc: MarkDocument) {
+    init(item: Int, relative: String, isNew: Bool, model: AppModel, session: Session, itemDir: URL, original: CGImage, doc: MarkDocument) {
         self.item = item
         self.relative = relative
         self.isNew = isNew
         self.model = model
+        self.session = session
+        self.itemDir = itemDir
         self.original = original
         self.doc = doc
         let front = NSWorkspace.shared.frontmostApplication
@@ -171,11 +175,11 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     /// Save the marks and the rendered picture, then close.
     func done() {
         canvas?.endTextEditing(commit: true)
-        guard let session = model.session, let dir = try? session.itemURL(item) else { return close() }
-        let fileURL = dir.appendingPathComponent(relative)
+        guard session.matchesDiskIdentity else { return close() }
+        let fileURL = itemDir.appendingPathComponent(relative)
         let comp = MarkDocument.companions(of: relative)
-        let origURL = dir.appendingPathComponent(comp.orig)
-        let marksURL = dir.appendingPathComponent(comp.marks)
+        let origURL = itemDir.appendingPathComponent(comp.orig)
+        let marksURL = itemDir.appendingPathComponent(comp.marks)
         let fm = FileManager.default
         do {
             if doc.marks.isEmpty && doc.crop == nil {
@@ -195,7 +199,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                 try doc.encoded().write(to: marksURL, options: .atomic)
             }
             finished = true
-            model.annotationFinished(item: item, relative: relative, isNew: isNew, kept: true)
+            if model.session === session { model.annotationFinished(item: item, relative: relative, isNew: isNew, kept: true) }
             try? session.writeReadme()
         } catch {
             model.show(error)
@@ -206,15 +210,15 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     /// New screenshot: keep it without marks. Existing picture: leave it as it was.
     func skip() {
         finished = true
-        if isNew { model.annotationFinished(item: item, relative: relative, isNew: true, kept: true) }
+        if isNew, model.session === session { model.annotationFinished(item: item, relative: relative, isNew: true, kept: true) }
         close()
     }
 
     /// New screenshot only: throw it away.
     func discard() {
         finished = true
-        if isNew, let dir = try? model.session?.itemURL(item) {
-            try? FileManager.default.removeItem(at: dir.appendingPathComponent(relative))
+        if isNew {
+            try? FileManager.default.removeItem(at: itemDir.appendingPathComponent(relative))
             model.flash("Screenshot discarded")
         }
         close()

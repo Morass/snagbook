@@ -112,7 +112,14 @@ public final class Session {
     /// Whether the session is still present on disk. Its folder can disappear while the
     /// app has it open.
     public var exists: Bool {
-        fm.fileExists(atPath: url.appendingPathComponent(Self.manifestName).path)
+        matchesDiskIdentity
+    }
+
+    /// The path still names the session that was opened, rather than a replacement folder.
+    public var matchesDiskIdentity: Bool {
+        guard let data = try? Data(contentsOf: url.appendingPathComponent(Self.manifestName)),
+              let disk = try? Self.decoder.decode(Manifest.self, from: data) else { return false }
+        return disk.id == manifest.id
     }
 
     /// Folders may have been renamed or removed by hand: drop records whose folder is gone,
@@ -170,7 +177,7 @@ public final class Session {
         let t = (title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "Item \(id)"
         let folder = Naming.itemFolder(id: id, title: t)
         let dir = url.appendingPathComponent(folder, isDirectory: true)
-        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: false)
         let record = ItemRecord(id: id, folder: folder, title: t, created: now)
         let note = FrontMatter.join(raw: "", updates: [("title", t), ("created", Self.iso(now))], body: "")
         try Data(note.utf8).write(to: dir.appendingPathComponent(Self.noteName), options: .atomic)
@@ -220,6 +227,7 @@ public final class Session {
     /// Remove the whole session. The app supplies a discard that moves the folder to the
     /// Trash; keeping that policy outside the core also makes other front ends portable.
     public func delete(discard: (URL) throws -> Void) throws {
+        try requireExists()
         try discard(url)
     }
 
@@ -298,7 +306,7 @@ public final class Session {
     public func saveMedia(_ id: Int, data: Data, prefix: String, ext: String) throws -> String {
         try requireExists()
         let media = try mediaURL(id)
-        try fm.createDirectory(at: media, withIntermediateDirectories: true)
+        try ensureDirectory(media)
         let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
         try data.write(to: media.appendingPathComponent(name), options: .atomic)
         return Self.mediaName + "/" + name
@@ -308,7 +316,7 @@ public final class Session {
     public func reserveMediaName(_ id: Int, prefix: String, ext: String) throws -> (relative: String, url: URL) {
         try requireExists()
         let media = try mediaURL(id)
-        try fm.createDirectory(at: media, withIntermediateDirectories: true)
+        try ensureDirectory(media)
         let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
         return (Self.mediaName + "/" + name, media.appendingPathComponent(name))
     }
@@ -396,6 +404,12 @@ public final class Session {
 
     private func requireExists() throws {
         guard exists else { throw SnagError.notASession(displayPath) }
+    }
+
+    private func ensureDirectory(_ directory: URL) throws {
+        var isDirectory: ObjCBool = false
+        if fm.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue { return }
+        try fm.createDirectory(at: directory, withIntermediateDirectories: false)
     }
 
     static var decoder: JSONDecoder {

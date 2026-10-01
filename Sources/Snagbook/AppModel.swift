@@ -77,6 +77,9 @@ final class AppModel: ObservableObject {
     func newSession() {
         Task {
             await editor.flush()
+            guard self.session === session, capture.phase == .idle else {
+                return flash("The session changed or a capture started, so it was not deleted")
+            }
             do {
                 let s = try Session.create(root: config.sessionsFolder, config: config)
                 use(s)
@@ -174,6 +177,7 @@ final class AppModel: ObservableObject {
 
     /// Make sure there is somewhere to put a capture: a session and an item.
     func ensureItem() throws -> Int {
+        if let session, !session.exists { closeSession() }
         if session == nil {
             let s = try Session.create(root: config.sessionsFolder, config: config)
             use(s)

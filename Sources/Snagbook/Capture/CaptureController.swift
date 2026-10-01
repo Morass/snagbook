@@ -80,13 +80,14 @@ final class CaptureController: ObservableObject {
         switch intent {
         case .record:
             phase = .idle
+            overlay.hideAll()
             startRecording(t)
-            bringNotebookBack(activate: false)
+            if phase == .recording { bringNotebookBack(activate: false) }
         case .shoot:
-            phase = .idle
+            phase = .saving
             overlay.hideAll()
             // Let the overlay leave the screen before the picture is taken.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.shoot(t) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.shoot(t, finishesStandaloneCapture: true) }
         }
     }
 
@@ -114,8 +115,14 @@ final class CaptureController: ObservableObject {
 
     // MARK: - screenshot
 
-    func shoot(_ t: CaptureTarget) {
+    func shoot(_ t: CaptureTarget, finishesStandaloneCapture: Bool = false) {
         Task {
+            defer {
+                if finishesStandaloneCapture {
+                    phase = .idle
+                    target = nil
+                }
+            }
             do {
                 let image = try await ScreenGrabber.screenshot(t)
                 model.screenshotTaken(image, source: t.summary)
@@ -132,7 +139,11 @@ final class CaptureController: ObservableObject {
     func startRecording(_ t: CaptureTarget) {
         guard phase == .idle else { return }
         let id: Int
-        do { id = try model.ensureItem() } catch { return model.show(error) }
+        do { id = try model.ensureItem() } catch {
+            target = nil
+            bringNotebookBack()
+            return model.show(error)
+        }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Snagbook-recording-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("recording.mp4")

@@ -108,11 +108,11 @@ final class RegionOverlay {
         origin.x = min(max(origin.x, screen.minX + 4), screen.maxX - size.width - 4)
         p.setFrame(NSRect(origin: origin, size: size), display: true)
         p.orderFrontRegardless()
-        p.makeKey()
     }
 
     var stopControlAcceptsClick: Bool {
-        pill?.isVisible == true && pill?.isKeyWindow == true && pill?.ignoresMouseEvents == false
+        guard let pill, let view = pill.contentView else { return false }
+        return pill.isVisible && !pill.ignoresMouseEvents && view.acceptsFirstMouse(for: nil)
     }
 
     func hideAll() {

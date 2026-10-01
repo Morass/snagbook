@@ -88,6 +88,19 @@ final class SessionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: s.url.path))
     }
 
+    func testAReplacementAtTheSamePathIsNeitherWrittenNorDeleted() throws {
+        let s = try Session.create(root: root, config: Config(), hash: "original")
+        let old = s.url.deletingLastPathComponent().appendingPathComponent("old")
+        try FileManager.default.moveItem(at: s.url, to: old)
+        let replacement = try Session.create(root: root, config: Config(), hash: "replacement")
+        try FileManager.default.moveItem(at: replacement.url, to: s.url)
+
+        XCTAssertFalse(s.matchesDiskIdentity)
+        XCTAssertThrowsError(try s.addItem())
+        XCTAssertThrowsError(try s.delete { try FileManager.default.removeItem(at: $0) })
+        XCTAssertEqual(try Session.open(s.url.path).manifest.id, "replacement")
+    }
+
     func testDeletingASessionDiscardsTheWholeFolder() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem()
