@@ -15,8 +15,13 @@ export function tip(what, keys, detail = "") {
   return what + (keys ? "  " + keys : "") + (detail ? " — " + detail : "");
 }
 
-export function mediaBase(platform, id) {
-  return platform === "windows" ? `http://snagbook.localhost/item/${id}/` : `snagbook://localhost/item/${id}/`;
+/// Where the editor loads item `id`'s files. `epoch` changes with the session and when an
+/// item is deleted: the page keeps every picture it has shown by address, so without it
+/// item 1's media/image-001.png of another session (or of a deleted item 1) would be shown
+/// in place of a new one of the same name.
+export function mediaBase(platform, id, epoch = 0) {
+  const at = `item/${id}.${epoch}/`;
+  return platform === "windows" ? `http://snagbook.localhost/${at}` : `snagbook://localhost/${at}`;
 }
 
 /// A key press as "Ctrl+Alt+S" (the spelling of the shortcut settings); null for a lone
@@ -115,6 +120,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       shownPath = v.session?.path ?? null;
       selected = null;
       for (const it of items()) snag()?.forget?.(it.id);
+      epoch++;
     }
     const ids = items().map((i) => i.id);
     let want = select ?? selected;
@@ -131,6 +137,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   // ------------------------------------------------------------ items
 
   let showing = 0;
+  let epoch = 0; // part of every media address; see mediaBase
 
   async function show(id, { focus = true } = {}) {
     // Only the latest call opens its note: a slow read of an item left behind must not
@@ -152,7 +159,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return refresh();
     }
     if (turn !== showing || selected !== id) return;
-    ed.open({ id, markdown: md, base: mediaBase(platform(), id), focus });
+    ed.open({ id, markdown: md, base: mediaBase(platform(), id, epoch), focus });
   }
 
   async function newItem() {
@@ -217,6 +224,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       v = await call("delete_item", { id, permanently: true });
     }
     snag()?.forget?.(id);
+    epoch++;
     const rest = v.session?.items || [];
     await apply(v, { select: selected === id ? neighbour(rest, Math.max(0, index - 1)) : selected });
   }

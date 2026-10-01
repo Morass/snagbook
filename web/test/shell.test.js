@@ -136,8 +136,8 @@ test("key labels follow the platform", () => {
 });
 
 test("picture addresses carry the item, per platform", () => {
-  assert.equal(mediaBase("linux", 3), "snagbook://localhost/item/3/");
-  assert.equal(mediaBase("windows", 3), "http://snagbook.localhost/item/3/");
+  assert.equal(mediaBase("linux", 3, 2), "snagbook://localhost/item/3.2/");
+  assert.equal(mediaBase("windows", 3, 2), "http://snagbook.localhost/item/3.2/");
 });
 
 test("after a delete the item in its place is shown, or the last one", () => {
@@ -165,7 +165,7 @@ test("a new session starts on Item 1 with its title ready to type", async () => 
   assert.equal(t.doc.querySelectorAll("#items .item").length, 1);
   assert.match(t.$("session-button").textContent, /1 item$/);
   const opened = t.editor.log.filter((l) => l[0] === "open").pop()[1];
-  assert.equal(opened.base, "snagbook://localhost/item/1/");
+  assert.match(opened.base, /^snagbook:\/\/localhost\/item\/1\.\d+\/$/);
 });
 
 test("Ctrl+N adds an item on Linux and ⌘N does on macOS; the hint says which", async () => {
@@ -410,4 +410,21 @@ test("Copy Hand-off says so in green, and the next plain message is not green", 
   assert.ok($("status-text").classList.contains("ok"), "the copied line is green");
   await shell.newSession();
   assert.ok(!$("status-text").classList.contains("ok"), "an ordinary message is not green");
+});
+
+test("item 1 of another session, or a new item 1 after a delete, gets new picture addresses", async () => {
+  const { shell, editor, settle, answer } = await setup({ session: true });
+  const bases = () => editor.log.filter((e) => e[0] === "open" && e[1].id === 1).map((e) => e[1].base);
+  const first = bases().at(-1);
+  await shell.newSession();
+  await settle();
+  const second = bases().at(-1);
+  assert.notEqual(second, first, "the page would show the old session's image-001.png");
+  const deleted = shell.deleteItem(1);
+  await answer(true);
+  await deleted;
+  await settle();
+  await shell.newItem();
+  await settle();
+  assert.ok(![first, second].includes(bases().at(-1)), "a new item 1 must not reuse the deleted one's addresses");
 });

@@ -114,11 +114,13 @@ pub fn byte_range(header: Option<&str>, len: u64) -> Option<Option<(u64, u64)>> 
     }
 }
 
-/// "/item/5/media/shot-001.png" -> (5, "media/shot-001.png")
+/// "/item/5.2/media/shot-001.png" -> (5, "media/shot-001.png"); the ".2" is the page's
+/// epoch (see mediaBase in shell.js) and only makes the address new.
 pub fn parse_path(path: &str) -> Option<(i64, String)> {
     let decoded = percent_encoding::percent_decode_str(path).decode_utf8().ok()?.to_string();
     let rest = decoded.strip_prefix("/item/")?;
     let (id, rel) = rest.split_once('/')?;
+    let id = id.split_once('.').map_or(id, |(id, _)| id);
     Some((id.parse().ok()?, rel.to_string()))
 }
 
@@ -242,5 +244,7 @@ mod tests {
         assert_eq!(parse_path("/item/12/media/a%20b.png"), Some((12, "media/a b.png".into())));
         assert_eq!(parse_path("/other/5/x"), None);
         assert_eq!(parse_path("/item/x/y"), None);
+        assert_eq!(parse_path("/item/5.3/media/shot-001.png"), Some((5, "media/shot-001.png".into())));
+        assert_eq!(parse_path("/item/x.3/y"), None);
     }
 }
