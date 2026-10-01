@@ -132,6 +132,18 @@ test("pasted file bytes go to the app and come back as a picture", async () => {
   assert.match(md(), /!\[\]\(media\/shot-002\.png\)/);
 });
 
+test("attaching after a flush keeps text typed during that flush", () => {
+  api.open({ id: "attach-race", markdown: "Original note\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  type(" before flush");
+  const flushed = api.takePending();
+  type(" DURING FLUSH");
+  api.insertMedia({ kind: "image", src: "media/shot-001.png", label: "" });
+  assert.match(api.markdown(), /Original note before flush DURING FLUSH/);
+  assert.match(api.markdown(), /!\[\]\(media\/shot-001\.png\)/);
+  assert.equal(flushed.markdown, "Original note before flush\n");
+});
+
 test("a delayed pasted file cannot cross into another item", async () => {
   let release;
   const file = { type: "image/png", name: "slow.png", arrayBuffer: () => new Promise((r) => { release = r; }) };

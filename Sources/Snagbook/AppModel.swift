@@ -533,7 +533,7 @@ final class AppModel: ObservableObject {
                 _ = try Session.read(rebound)
                 try appendMedia("![](\(relative))", to: live, item: id)
                 if adoptIfOpen(live), selectedID == id {
-                    editor.open(item: id, markdown: try live.readNote(id), focus: false)
+                    editor.insertMedia(kind: "image", src: relative, label: "")
                     flash("Screenshot saved to \(itemTitle(id))")
                 }
             }
