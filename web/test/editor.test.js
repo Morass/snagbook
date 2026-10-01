@@ -165,6 +165,20 @@ test("locking during an image resize cancels its pending mouse-up change", () =>
   api.setReadOnly(false);
 });
 
+test("a resize begun in one item cannot finish in the item opened after a lock", () => {
+  api.open({ id: "resize-old", markdown: "![](media/image.png)\n", focus: false });
+  const img = document.querySelector(".img-wrap img");
+  img.getBoundingClientRect = () => ({ width: Number.parseFloat(img.style.width) || 200 });
+  document.querySelector(".img-wrap .resize").dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
+  document.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 180 }));
+  api.setReadOnly(true);
+  api.open({ id: "resize-new", markdown: "![](media/image.png)\n", focus: false });
+  api.setReadOnly(false);
+  document.dispatchEvent(new window.MouseEvent("mouseup", { clientX: 180 }));
+  assert.equal(api.markdown(), "![](media/image.png)\n");
+  assert.equal(api.takePending(), null);
+});
+
 test("moving to another item with the same picture name shows that item's picture", () => {
   const md = "Shot\n\n![](media/shot-001.png)\n\n[clip](media/clip-001.mp4)\n";
   api.open({ id: "21", markdown: md, base: "snagbook://item/21/", focus: false });

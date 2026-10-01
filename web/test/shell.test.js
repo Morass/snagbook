@@ -8,7 +8,7 @@ import { rectFraction, formatElapsed } from "../src/rect.js";
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
 /// An in-memory stand-in for the app's commands.
-function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowCaptureFiling = false, slowMedia = false, slowWrite = false, failCaptureFiling = false } = {}) {
+function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowCaptureFiling = false, slowMedia = false, slowWrite = false, slowDelete = false, failCaptureFiling = false } = {}) {
   const calls = [];
   const notes = new Map();
   let slowNote = null;
@@ -23,6 +23,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let releaseCaptureFiling;
   let releaseMedia;
   let releaseWrite;
+  let releaseDelete;
   let releaseSession;
   let sessionGate = null;
   let captureFilingBlocked = failCaptureFiling;
@@ -31,6 +32,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let captureFilingUsed = false;
   const mediaGate = slowMedia ? new Promise((resolve) => { releaseMedia = resolve; }) : null;
   const writeGate = slowWrite ? new Promise((resolve) => { releaseWrite = resolve; }) : null;
+  const deleteGate = slowDelete ? new Promise((resolve) => { releaseDelete = resolve; }) : null;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
   const list = [...sessions];
   const view = (extra = {}) => ({ config, session: session && JSON.parse(JSON.stringify(session)), loadError: null, closed: null, platform, ...extra });
@@ -54,6 +56,12 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       session = { id: s.id || `id-${path}`, openToken: `open-${nextOpen++}`, path, title: s.title, header: null, items: [{ id: 1, title: "Old", folder: "01-old", images: 0, videos: 0 }], nextItem: 2 };
       return view();
     },
+    pick_session_folder: async () => {
+      if (sessionGate) { await sessionGate; sessionGate = null; }
+      const path = "~/Snagbook/picked";
+      session = { id: "picked", openToken: `open-${nextOpen++}`, path, title: "Picked", header: null, items: [{ id: 1, title: "Picked item", folder: "01-picked-item", images: 0, videos: 0 }], nextItem: 2 };
+      return view();
+    },
     add_item: ({ title }) => {
       const id = session.nextItem;
       session.items.push({ id, title: title || `Item ${id}`, folder: `${String(id).padStart(2, "0")}-item-${id}`, images: 0, videos: 0 });
@@ -72,13 +80,15 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       settle();
       return view();
     },
-    delete_session: ({ sessionId, openToken, permanently }) => {
+    delete_session: async ({ sessionId, openToken, permanently }) => {
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
       if (!permanently && !trash) throw "NOTRASH:the drive has no Trash";
       const at = list.findIndex((s) => s.path === session.path);
       if (at >= 0) list.splice(at, 1);
       session = null;
-      return view();
+      const deleted = view();
+      if (deleteGate) await deleteGate;
+      return deleted;
     },
     move_item: ({ id, index }) => {
       const at = session.items.findIndex((i) => i.id === id);
@@ -137,6 +147,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseCaptureFiling: () => releaseCaptureFiling?.(),
     releaseMedia: () => releaseMedia?.(),
     releaseWrite: () => releaseWrite?.(),
+    releaseDelete: () => releaseDelete?.(),
     holdNextSession: () => { sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     releaseSession: () => releaseSession?.(),
     allowCaptureFiling: () => { captureFilingBlocked = false; },
@@ -246,6 +257,18 @@ test("the editor is read-only while a session switch is in flight", async () => 
   assert.deepEqual(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1), ["readOnly", true]);
   t.app.releaseSession();
   await switching;
+  assert.deepEqual(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1), ["readOnly", false]);
+});
+
+test("the editor is read-only while the folder picker opens another session", async () => {
+  const t = await setup({ session: true });
+  t.app.holdNextSession();
+  const picking = t.shell.pickFolder();
+  await t.settle();
+  assert.deepEqual(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1), ["readOnly", true]);
+  t.app.releaseSession();
+  await picking;
+  assert.equal(t.shell.view().session.path, "~/Snagbook/picked");
   assert.deepEqual(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1), ["readOnly", false]);
 });
 
@@ -387,6 +410,20 @@ test("a session can be deleted from its menu", async () => {
 
   assert.equal(t.shell.view().session, null);
   assert.deepEqual(t.app.calls.filter(([c]) => c === "delete_session").map(([, a]) => a.permanently), [false]);
+});
+
+test("session deletion locks the editor and cannot apply over a newer session", async () => {
+  const t = await setup({ session: true, slowDelete: true });
+  const deleting = t.shell.deleteSession();
+  await t.answer(true);
+  assert.deepEqual(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1), ["readOnly", true]);
+  const opening = t.shell.newSession();
+  await opening;
+  const newer = t.shell.view().session.openToken;
+  t.app.releaseDelete();
+  await deleting;
+  assert.equal(t.shell.view().session.openToken, newer);
+  assert.deepEqual(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1), ["readOnly", false]);
 });
 
 test("deleting a session asks again when its drive has no Trash", async () => {

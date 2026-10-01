@@ -301,6 +301,7 @@ class ImageView {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
+    const generation = openGeneration;
     const startW = this.img.getBoundingClientRect().width;
     const max = this.img.naturalWidth ? this.img.naturalWidth / (globalThis.devicePixelRatio || 1) : 4000;
     const move = (ev) => {
@@ -310,7 +311,7 @@ class ImageView {
     const up = (ev) => {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
-      if (readOnly) {
+      if (readOnly || generation !== openGeneration) {
         this.render();
         return;
       }
@@ -482,6 +483,7 @@ let view = null;
 let currentId = null;
 let currentSessionId = null;
 let currentOpenToken = null;
+let openGeneration = 0;
 let readOnly = false;
 let saveTimer = null;
 let onToolbar = () => {};
@@ -579,6 +581,7 @@ export const api = {
   /** Show item `id`. Keeps undo history when coming back to an item whose file did not change. */
   open({ id, markdown, base, sessionId = null, openToken = null, focus = true }) {
     persistNow();
+    openGeneration++;
     const baseChanged = base != null && base !== mediaBase;
     if (base != null) mediaBase = base;
     const entry = cache.get(id);

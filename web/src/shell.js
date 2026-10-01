@@ -84,7 +84,16 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let flushTail = Promise.resolve();
   let noteTail = Promise.resolve();
   let acknowledgementTail = Promise.resolve();
+  let editorLocks = 0;
   const s = { view: () => view, selected: () => selected };
+
+  function lockEditor() {
+    const ed = snag();
+    if (++editorLocks === 1) ed?.setReadOnly?.(true);
+    return () => {
+      if (editorLocks > 0 && --editorLocks === 0) ed?.setReadOnly?.(false);
+    };
+  }
 
   const platform = () => view?.platform || "linux";
   const key = (combo) => keyLabel(platform(), combo);
@@ -250,25 +259,26 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function newSession() {
-    try { await flush({ required: true }); }
-    catch { return flash("The note could not be saved, so the session was not changed.", "error"); }
-    await changeSession(() => call("new_session"));
+    if (!(await changeSession(() => call("new_session")))) return;
     flash(`New session: ${view.session.path}`);
     $("item-title").focus();
     $("item-title").select();
   }
 
   async function openSession(path) {
-    try { await flush({ required: true }); }
-    catch { return flash("The note could not be saved, so the session was not changed.", "error"); }
     await changeSession(() => call("open_session", { path }));
   }
 
   async function changeSession(request) {
-    const ed = snag();
-    ed?.setReadOnly?.(true);
-    try { await apply(await request()); }
-    finally { ed?.setReadOnly?.(false); }
+    const unlock = lockEditor();
+    try {
+      try { await flush({ required: true }); }
+      catch { flash("The note could not be saved, so the session was not changed.", "error"); return false; }
+      const v = await request();
+      if (!v) return false;
+      await apply(v);
+      return true;
+    } finally { unlock(); }
   }
 
   /// Save the title field into the item it shows. That is `titleFor`, not `selected`: the
@@ -297,32 +307,39 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
       return flash("The open session changed, so the item was not deleted.", "error");
     }
-    await flush();
-    if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
-      return flash("The open session changed, so the item was not deleted.", "error");
-    }
-    const index = items().findIndex((i) => i.id === id);
-    let v;
+    const unlock = lockEditor();
     try {
-      v = await call("delete_item", { sessionId, openToken, id, permanently: false });
-    } catch (e) {
-      const msg = String(e?.message || e);
-      if (!msg.startsWith("NOTRASH:")) return flash(msg, "error");
-      const again = await confirm(
-        `Delete “${it.title}” permanently?`,
-        `It could not go to the Trash (${msg.slice(8) || "this drive has none"}), so its folder, with the note and all its pictures and videos, would be deleted for good.`,
-        "Delete Permanently"
-      );
-      if (!again) return;
+      try { await flush({ required: true }); }
+      catch { return flash("The note could not be saved, so the item was not deleted.", "error"); }
       if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
         return flash("The open session changed, so the item was not deleted.", "error");
       }
-      v = await call("delete_item", { sessionId, openToken, id, permanently: true });
+      const index = items().findIndex((i) => i.id === id);
+      let v;
+      try {
+        v = await call("delete_item", { sessionId, openToken, id, permanently: false });
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (!msg.startsWith("NOTRASH:")) return flash(msg, "error");
+        const again = await confirm(
+          `Delete “${it.title}” permanently?`,
+          `It could not go to the Trash (${msg.slice(8) || "this drive has none"}), so its folder, with the note and all its pictures and videos, would be deleted for good.`,
+          "Delete Permanently"
+        );
+        if (!again) return;
+        if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
+          return flash("The open session changed, so the item was not deleted.", "error");
+        }
+        v = await call("delete_item", { sessionId, openToken, id, permanently: true });
+      }
+      if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
+      snag()?.forget?.(id);
+      epoch++;
+      const rest = v.session?.items || [];
+      await apply(v, { select: selected === id ? neighbour(rest, Math.max(0, index - 1)) : selected });
+    } finally {
+      unlock();
     }
-    snag()?.forget?.(id);
-    epoch++;
-    const rest = v.session?.items || [];
-    await apply(v, { select: selected === id ? neighbour(rest, Math.max(0, index - 1)) : selected });
   }
 
   async function deleteSession() {
@@ -332,27 +349,31 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const openToken = view.session.openToken;
     const ok = await confirm(`Delete “${title}”?`, "The whole session folder, with every item, note, picture and video, goes to the Trash.", "Move to Trash");
     if (!ok) return;
+    const unlock = lockEditor();
     try {
-      await flush({ required: true });
-    } catch {
-      return;
+      try { await flush({ required: true }); }
+      catch { return flash("The note could not be saved, so the session was not deleted.", "error"); }
+      if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return flash("The open session changed, so it was not deleted.", "error");
+      let v;
+      try {
+        v = await call("delete_session", { sessionId, openToken, permanently: false });
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (!msg.startsWith("NOTRASH:")) return flash(msg, "error");
+        const again = await confirm(
+          `Delete “${title}” permanently?`,
+          `It could not go to the Trash (${msg.slice(8) || "this drive has none"}), so the whole session folder would be deleted for good.`,
+          "Delete Permanently"
+        );
+        if (!again) return;
+        if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return flash("The open session changed, so it was not deleted.", "error");
+        v = await call("delete_session", { sessionId, openToken, permanently: true });
+      }
+      if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
+      await apply(v);
+    } finally {
+      unlock();
     }
-    if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return flash("The open session changed, so it was not deleted.", "error");
-    let v;
-    try {
-      v = await call("delete_session", { sessionId, openToken, permanently: false });
-    } catch (e) {
-      const msg = String(e?.message || e);
-      if (!msg.startsWith("NOTRASH:")) return flash(msg, "error");
-      const again = await confirm(
-        `Delete “${title}” permanently?`,
-        `It could not go to the Trash (${msg.slice(8) || "this drive has none"}), so the whole session folder would be deleted for good.`,
-        "Delete Permanently"
-      );
-      if (!again) return;
-      v = await call("delete_session", { sessionId, openToken, permanently: true });
-    }
-    await apply(v);
   }
 
   async function moveItem(id, index) {
@@ -670,10 +691,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function pickFolder() {
-    try { await flush({ required: true }); }
-    catch { return flash("The note could not be saved, so the session was not changed.", "error"); }
-    const v = await call("pick_session_folder");
-    if (v) await apply(v);
+    await changeSession(() => call("pick_session_folder"));
   }
 
   /// A modal with `body` and buttons; resolves to the value of the button pressed (Escape: null).
@@ -988,6 +1006,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     onCaptured,
     onMarked,
     sessionMenu,
+    pickFolder,
     settings,
     onEditorMessage,
     flush,
