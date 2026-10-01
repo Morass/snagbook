@@ -310,6 +310,10 @@ class ImageView {
     const up = (ev) => {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
+      if (readOnly) {
+        this.render();
+        return;
+      }
       const w = Math.round(this.img.getBoundingClientRect().width);
       const pos = this.getPos();
       if (pos == null) return;

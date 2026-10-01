@@ -152,6 +152,19 @@ test("read-only mode rejects programmatic template changes", () => {
   api.setReadOnly(false);
 });
 
+test("locking during an image resize cancels its pending mouse-up change", () => {
+  api.open({ id: "resize-locked", markdown: "![](media/image.png)\n", focus: false });
+  const img = document.querySelector(".img-wrap img");
+  img.getBoundingClientRect = () => ({ width: Number.parseFloat(img.style.width) || 200 });
+  document.querySelector(".img-wrap .resize").dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
+  api.setReadOnly(true);
+  document.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 180 }));
+  document.dispatchEvent(new window.MouseEvent("mouseup", { clientX: 180 }));
+  assert.equal(api.markdown(), "![](media/image.png)\n");
+  assert.equal(api.takePending(), null);
+  api.setReadOnly(false);
+});
+
 test("moving to another item with the same picture name shows that item's picture", () => {
   const md = "Shot\n\n![](media/shot-001.png)\n\n[clip](media/clip-001.mp4)\n";
   api.open({ id: "21", markdown: md, base: "snagbook://item/21/", focus: false });
