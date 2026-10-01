@@ -901,6 +901,18 @@ test("failed filing of delayed pasted media is retried", async () => {
   ]);
 });
 
+test("a successful filing retry reloads the source note before another edit", async () => {
+  const t = await setup({ session: true, failCaptureFiling: true });
+  t.editor.mediaSaved = () => false;
+  t.app.notes.set(1, "original\n");
+  const { id: sessionId, openToken } = t.shell.view().session;
+  await t.shell.onEditorMessage({ type: "media", reqId: 13, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  t.app.allowCaptureFiling();
+  await t.shell.refresh();
+  const reopened = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1];
+  assert.match(reopened.markdown, /!\[\]\(media\/image-001\.png\)/);
+});
+
 test("reopening the same folder refreshes the editor's session token", async () => {
   const t = await setup({ session: true });
   const path = t.shell.view().session.path;
