@@ -841,8 +841,12 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
 
 fn append_capture_link(s: &mut Session, item: i64, link: &str) -> Res<()> {
     let body = s.read_note(item).map_err(err)?;
+    if body.lines().any(|line| line.trim() == link) { return Ok(()) }
     let body = body.trim_end();
-    s.write_note(item, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") }).map_err(err)?;
+    if let Err(e) = s.write_note(item, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") }) {
+        if s.read_note(item).is_ok_and(|written| written.lines().any(|line| line.trim() == link)) { return Ok(()) }
+        return Err(err(e));
+    }
     Ok(())
 }
 
@@ -1437,6 +1441,23 @@ mod tests {
         assert!(busy.release(session, 1));
         assert!(!busy.has_session(session));
         assert!(!busy.release(session, 1), "an unknown writer is never reported as the last one");
+    }
+
+    #[test]
+    fn a_durable_capture_link_survives_a_readme_failure_without_duplicates() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        let id = s.add_item(None, Utc::now()).unwrap().id;
+        let readme = s.dir.join("README.md");
+        std::fs::remove_file(&readme).unwrap();
+        std::fs::create_dir(&readme).unwrap();
+        let link = "![](media/image-001.png)";
+
+        append_capture_link(&mut s, id, link).unwrap();
+        append_capture_link(&mut s, id, link).unwrap();
+
+        let note = s.read_note(id).unwrap();
+        assert_eq!(note.lines().filter(|line| line.trim() == link).count(), 1);
     }
 
     #[test]

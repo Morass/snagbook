@@ -995,7 +995,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         await call("open_link", { id: selected, href: msg.href }).catch(() => {});
         break;
       case "annotate":
-        if (selected != null && msg.src && !msg.src.includes("://")) await call("open_markup", { id: selected, rel: msg.src }).catch(() => {});
+        if (editorItem != null && msg.src && !msg.src.includes("://")) await call("open_markup", { id: editorItem, rel: msg.src }).catch(() => {});
         break;
     }
   }

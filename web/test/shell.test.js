@@ -872,6 +872,19 @@ test("a capture waits until its target item is actually open in the editor", asy
   assert.deepEqual(t.app.calls.filter(([c]) => c === "write_note").at(-1)[1].id, 2);
 });
 
+test("markup targets the item still visible while another item loads", async () => {
+  const t = await setup({ session: true });
+  await t.shell.newItem();
+  await t.shell.show(1);
+  t.app.holdNoteFor(2);
+  const switching = t.shell.show(2);
+  await t.settle();
+  await t.shell.onEditorMessage({ type: "annotate", src: "media/shot-001.png" });
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "open_markup").at(-1)[1], { id: 1, rel: "media/shot-001.png" });
+  t.app.releaseNote();
+  await switching;
+});
+
 test("an open session deleted from outside is closed with a message", async () => {
   const t = await setup({ session: true });
   const path = t.shell.view().session.path;
