@@ -79,6 +79,18 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try reopened.addItem().id, 3)
     }
 
+    func testAReusedNumberIsNotTheSameItemLifetime() throws {
+        let s = try Session.create(root: root, config: Config())
+        try s.addItem(now: date("2026-09-24T10:00:00Z"))
+        let opened = try Session.open(s.url.path)
+        let created = try opened.item(1).created
+        try FileManager.default.removeItem(at: try opened.itemURL(1))
+        let repaired = try Session.open(s.url.path)
+        try repaired.addItem(now: date("2026-09-24T10:00:01Z"))
+
+        XCTAssertFalse(repaired.isSameItem(1, created: created))
+    }
+
     func testASessionDeletedFromOutsideIsNeverRecreatedByAWrite() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem()

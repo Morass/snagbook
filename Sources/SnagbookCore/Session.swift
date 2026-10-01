@@ -182,6 +182,9 @@ public final class Session {
     public func itemURL(_ id: Int) throws -> URL { url.appendingPathComponent(try item(id).folder, isDirectory: true) }
     public func noteURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.noteName) }
     public func mediaURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.mediaName, isDirectory: true) }
+    public func isSameItem(_ id: Int, created: Date) -> Bool {
+        (try? item(id).created) == created
+    }
 
     /// Add an item after the others. With no title it is "Item N".
     @discardableResult

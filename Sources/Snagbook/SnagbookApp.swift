@@ -74,6 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.waitForSave(sender) }
                 return .terminateLater
             }
+            if model.capture.phase == .saving {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.waitForSave(sender) }
+                return .terminateLater
+            }
             Task {
                 await model.editor.flush()
                 sender.reply(toApplicationShouldTerminate: true)

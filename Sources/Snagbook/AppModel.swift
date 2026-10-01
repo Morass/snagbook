@@ -277,6 +277,10 @@ final class AppModel: ObservableObject {
 
     func commitTitle() {
         guard let session, let id = selectedID else { return }
+        guard !capture.isUsing(session, item: id) else {
+            titleDraft = items.first(where: { $0.id == id })?.title ?? ""
+            return flash("Finish the capture before renaming this item")
+        }
         let t = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else {
             titleDraft = items.first(where: { $0.id == id })?.title ?? ""
@@ -292,6 +296,9 @@ final class AppModel: ObservableObject {
 
     func rename(_ id: Int, to title: String) {
         guard let session else { return }
+        guard !capture.isUsing(session, item: id) else {
+            return flash("Finish the capture before renaming this item")
+        }
         do {
             try session.renameItem(id, to: title)
             items = session.manifest.items
