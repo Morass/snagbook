@@ -76,6 +76,7 @@ enum SelfTest {
         model.titleDraft = "Main menu"
         model.commitTitle()
         check(exists(session.url.appendingPathComponent("01-main-menu/notes.md")), "renaming the item renames its folder")
+        session = model.session!
 
         // 3. Typing is saved without a Save command.
         await settle()
@@ -443,6 +444,12 @@ enum SelfTest {
         check(read(replacementNote) == "replacement item\n", "a replacement item's note is not overwritten")
         let crossedPaste = model.savePasted(data: ImageFile.pngData(testImage(32, 32, hue: 0.1))!, mime: "image/png", name: "replacement.png")
         check(crossedPaste == nil && !exists(liveItem.appendingPathComponent("media")), "pasted media refuses a replacement item folder")
+        model.titleDraft = "Must not rename replacement"
+        model.commitTitle()
+        check(exists(liveItem) && read(replacementNote) == "replacement item\n", "rename refuses a replacement item folder")
+        model.delete(id, confirm: false)
+        await settle()
+        check(exists(liveItem), "delete refuses a replacement item folder")
         try? FileManager.default.removeItem(at: liveItem)
         try? FileManager.default.moveItem(at: heldItem, to: liveItem)
 
@@ -468,12 +475,12 @@ enum SelfTest {
         let currentSession = model.session!
         let pendingID = model.selectedID!
         let manifestURL = currentSession.url.appendingPathComponent(Session.manifestName)
-        let manifestData = try! Data(contentsOf: manifestURL)
+        let heldManifest = currentSession.url.appendingPathComponent(".manifest-unreadable-selftest")
         _ = await js(model, "snag.typeText(' pending while manifest unreadable')")
-        try? Data("not json".utf8).write(to: manifestURL, options: .atomic)
+        try? FileManager.default.moveItem(at: manifestURL, to: heldManifest)
         model.refreshSessionFromDisk()
         check(model.session != nil, "an unreadable manifest leaves the session and pending note open")
-        try? manifestData.write(to: manifestURL, options: .atomic)
+        try? FileManager.default.moveItem(at: heldManifest, to: manifestURL)
         check(await model.editor.flush(), "the pending note saves after the manifest is readable again")
         check(read(try! currentSession.noteURL(pendingID)).contains("pending while manifest unreadable"), "a temporary manifest read failure loses no editor text")
 

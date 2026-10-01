@@ -34,6 +34,7 @@ final class AppModel: ObservableObject {
     private var back: [Int] = []
     private var forward: [Int] = []
     private var editorItemIdentity: String?
+    private var itemIdentities: [Int: String] = [:]
     private var statusTimer: Timer?
 
     struct AlertInfo: Identifiable {
@@ -108,6 +109,10 @@ final class AppModel: ObservableObject {
 
     private func use(_ s: Session) {
         session = s
+        itemIdentities.removeAll()
+        for item in s.manifest.items {
+            if let identity = try? s.itemIdentity(item.id) { itemIdentities[item.id] = identity }
+        }
         editor.sessionChanged()
         items = s.manifest.items
         back.removeAll()
@@ -136,6 +141,7 @@ final class AppModel: ObservableObject {
         items = []
         selectedID = nil
         editorItemIdentity = nil
+        itemIdentities.removeAll()
         titleDraft = ""
         back.removeAll()
         forward.removeAll()
@@ -223,6 +229,7 @@ final class AppModel: ObservableObject {
         }
         guard let session else { throw SnagError.noSuchItem(0) }
         let rec = try session.addItem(title: title)
+        if let identity = try session.itemIdentity(rec.id) { itemIdentities[rec.id] = identity }
         items = session.manifest.items
         show(rec.id)
         if focusTitle { self.focusTitle = true }
@@ -251,7 +258,7 @@ final class AppModel: ObservableObject {
             forward.removeAll()
         }
         selectedID = id
-        editorItemIdentity = try? session.itemIdentity(id)
+        editorItemIdentity = itemIdentities[id]
         titleDraft = rec.title
         let md = (try? session.readNote(id)) ?? ""
         editor.open(item: id, markdown: md, focus: !focusTitle)
@@ -291,7 +298,7 @@ final class AppModel: ObservableObject {
     }
 
     func commitTitle() {
-        guard let session, let id = selectedID else { return }
+        guard let session, let id = selectedID, let itemIdentity = itemIdentities[id] else { return }
         guard !capture.isUsing(session, item: id) else {
             titleDraft = items.first(where: { $0.id == id })?.title ?? ""
             return flash("Finish the capture before renaming this item")
@@ -302,21 +309,25 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            try session.renameItem(id, to: t)
-            items = session.manifest.items
+            let live = try session.reopenedMatchingItem(id, identity: itemIdentity, fallbackHeader: config.header)
+            try live.renameItem(id, to: t, expectedIdentity: itemIdentity)
+            self.session = live
+            items = live.manifest.items
         } catch {
             show(error)
         }
     }
 
     func rename(_ id: Int, to title: String) {
-        guard let session else { return }
+        guard let session, let itemIdentity = itemIdentities[id] else { return }
         guard !capture.isUsing(session, item: id) else {
             return flash("Finish the capture before renaming this item")
         }
         do {
-            try session.renameItem(id, to: title)
-            items = session.manifest.items
+            let live = try session.reopenedMatchingItem(id, identity: itemIdentity, fallbackHeader: config.header)
+            try live.renameItem(id, to: title, expectedIdentity: itemIdentity)
+            self.session = live
+            items = live.manifest.items
             if id == selectedID { titleDraft = title }
         } catch {
             show(error)
@@ -325,7 +336,7 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: Int, confirm: Bool = true) {
         guard let session, let rec = items.first(where: { $0.id == id }) else { return }
-        guard let itemIdentity = try? session.itemIdentity(id) else { return flash("That item is no longer there") }
+        guard let itemIdentity = itemIdentities[id] else { return flash("That item is no longer there") }
         guard !capture.isUsing(session, item: id),
               !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: session) }) else {
             return flash("Finish the capture or picture before deleting this item")
@@ -366,6 +377,7 @@ final class AppModel: ObservableObject {
                     }))
                 self.session = current
                 editor.forget(item: id)
+                itemIdentities[id] = nil
                 items = current.manifest.items
                 if selectedID == id {
                     selectedID = nil

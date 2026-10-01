@@ -125,6 +125,16 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: s.url.path))
     }
 
+    func testAMissingManifestInTheSameFolderIsUnreadableRatherThanDeleted() throws {
+        let s = try Session.create(root: root, config: Config())
+        try FileManager.default.removeItem(at: s.url.appendingPathComponent(Session.manifestName))
+
+        XCTAssertEqual(s.diskState, .unreadable)
+        XCTAssertThrowsError(try s.addItem()) { error in
+            XCTAssertEqual(error as? SnagError, .sessionUnreadable(s.displayPath))
+        }
+    }
+
     func testAReplacementAtTheSamePathIsNeitherWrittenNorDeleted() throws {
         let s = try Session.create(root: root, config: Config(), hash: "original")
         let old = s.url.deletingLastPathComponent().appendingPathComponent("old")
@@ -360,6 +370,22 @@ final class SessionTests: XCTestCase {
         XCTAssertThrowsError(try s.deleteItem(item.id, expectedIdentity: identity))
         XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path))
         XCTAssertEqual(s.manifest.items.map(\.id), [item.id])
+    }
+
+    func testRenameDoesNotModifyAReplacementItemFolder() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        let identity = try XCTUnwrap(try s.itemIdentity(item.id))
+        let folder = try s.itemURL(item.id)
+        let original = s.url.appendingPathComponent(".original-item-for-rename")
+        try FileManager.default.moveItem(at: folder, to: original)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let note = folder.appendingPathComponent(Session.noteName)
+        try Data("replacement\n".utf8).write(to: note)
+
+        XCTAssertThrowsError(try s.renameItem(item.id, to: "Changed", expectedIdentity: identity))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path))
+        XCTAssertEqual(try String(contentsOf: note, encoding: .utf8), "replacement\n")
     }
 }
 

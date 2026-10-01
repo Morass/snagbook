@@ -122,7 +122,7 @@ public final class Session {
         if let fileIdentity, currentIdentity != fileIdentity { return .gone }
         let data: Data
         do { data = try Data(contentsOf: url.appendingPathComponent(Self.manifestName)) }
-        catch { return Self.isMissing(error) ? .gone : .unreadable }
+        catch { return .unreadable }
         guard let disk = try? Self.decoder.decode(Manifest.self, from: data) else { return .unreadable }
         return disk.id == manifest.id ? .current : .gone
     }
@@ -235,8 +235,9 @@ public final class Session {
 
     /// Rename an item: its title, its note's front matter and its folder name.
     @discardableResult
-    public func renameItem(_ id: Int, to title: String) throws -> ItemRecord {
+    public func renameItem(_ id: Int, to title: String, expectedIdentity: String? = nil) throws -> ItemRecord {
         try requireExists()
+        if let expectedIdentity, try itemIdentity(id) != expectedIdentity { throw SnagError.noSuchItem(id) }
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { throw SnagError.badName(title) }
         guard let i = manifest.items.firstIndex(where: { $0.id == id }) else { throw SnagError.noSuchItem(id) }
