@@ -417,6 +417,12 @@ final class AppModel: ObservableObject {
             items = live.manifest.items
             return true
         } catch {
+            if let live = try? session.reopenedMatchingItem(id, identity: editorItemIdentity, fallbackHeader: config.header),
+               (try? live.readNote(id)) == markdown {
+                self.session = live
+                items = live.manifest.items
+                return true
+            }
             show(error)
             return false
         }

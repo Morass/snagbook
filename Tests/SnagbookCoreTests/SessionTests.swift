@@ -307,6 +307,27 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), Data("replacement".utf8))
     }
 
+    func testBoundSymlinkRejectsAReplacementOfItsTarget() throws {
+        let s = try Session.create(root: root, config: Config())
+        try s.addItem()
+        let media = try s.mediaURL(1)
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        let target = media.appendingPathComponent("target.png")
+        let link = media.appendingPathComponent("shot-001.png")
+        try Data("original".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let binding = try Session.bindFile(link)
+
+        let held = media.appendingPathComponent("held-target.png")
+        try FileManager.default.moveItem(at: target, to: held)
+        try Data("replacement".utf8).write(to: target)
+
+        XCTAssertThrowsError(try Session.read(binding))
+        XCTAssertThrowsError(try Session.write(Data("ours".utf8), to: binding))
+        XCTAssertThrowsError(try Session.remove(binding))
+        XCTAssertEqual(try Data(contentsOf: target), Data("replacement".utf8))
+    }
+
     func testOpenRepairsFoldersRemovedOrAddedByHand() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem(title: "Keep")

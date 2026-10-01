@@ -495,13 +495,15 @@ enum SelfTest {
         Annotator.open(item: id, relative: readmeRel, isNew: true, model: model)
         await settle()
         if let readmeFailure = Annotator.open.last {
+            _ = await js(model, "snag.typeText(' retained through README failure')")
             let readme = session.url.appendingPathComponent(Session.readmeName)
             let heldReadme = session.url.appendingPathComponent(".selected-readme.selftest.md")
             try? FileManager.default.moveItem(at: readme, to: heldReadme)
             try? FileManager.default.createDirectory(at: readme, withIntermediateDirectories: false)
             readmeFailure.done()
             for _ in 0..<50 where Annotator.open.contains(where: { $0 === readmeFailure }) { await settle(100) }
-            check(!Annotator.open.contains(where: { $0 === readmeFailure }) && read(try! session.noteURL(id)).contains(readmeRel), "a selected attachment accepts a durable link when README refresh fails")
+            let durableNote = read(try! session.noteURL(id))
+            check(!Annotator.open.contains(where: { $0 === readmeFailure }) && durableNote.contains(readmeRel) && durableNote.contains("retained through README failure"), "a selected attachment accepts a durable note and link when README refresh fails")
             try? FileManager.default.removeItem(at: readme)
             try? FileManager.default.moveItem(at: heldReadme, to: readme)
             try? model.session?.writeReadme()

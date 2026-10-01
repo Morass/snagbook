@@ -542,7 +542,7 @@ public final class Session {
     }
 
     private static func readIdentity(of url: URL) throws -> String? {
-        let a = try FileManager.default.attributesOfItem(atPath: url.path)
+        let a = try FileManager.default.attributesOfItem(atPath: url.resolvingSymlinksInPath().path)
         guard let volume = a[.systemNumber] as? NSNumber,
               let file = a[.systemFileNumber] as? NSNumber else { return nil }
         return "\(volume.uint64Value):\(file.uint64Value)"
