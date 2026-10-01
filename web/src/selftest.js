@@ -90,9 +90,9 @@ export async function runSelfTest(shell, invoke) {
     await shell.flush();
     check(rel2 === rel1, "both items call their picture " + rel2);
     await shell.show(1);
-    check(await until(() => img()?.src.includes("/item/1/")), "item 1 shows its own picture after switching back");
+    check(await until(() => /\/item\/1\.\d+\//.test(img()?.src || "")), "item 1 shows its own picture after switching back");
     await shell.show(2);
-    check(await until(() => img()?.src.includes("/item/2/")), "item 2 shows its own picture");
+    check(await until(() => /\/item\/2\.\d+\//.test(img()?.src || "")), "item 2 shows its own picture");
 
     // 7. arrow keys move through the list
     $("items").focus();
