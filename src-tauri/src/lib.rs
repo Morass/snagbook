@@ -337,6 +337,7 @@ fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String,
     app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), pending);
     Ok(capture::Captured {
         session_id: Some(session_id),
+        session_path: s.dir.to_string_lossy().into_owned(),
         ack: Some(ack),
         id,
         rel,
@@ -783,7 +784,16 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
         });
         let session_id = s.manifest.id.clone();
         drop(a);
-        capture::announce(app, capture::Captured { session_id: Some(session_id), ack: Some(active.ack), id: active.id, rel, kind: kind.into(), label, problem: f.problem });
+        capture::announce(app, capture::Captured {
+            session_id: Some(session_id),
+            session_path: active.session.to_string_lossy().into_owned(),
+            ack: Some(active.ack),
+            id: active.id,
+            rel,
+            kind: kind.into(),
+            label,
+            problem: f.problem,
+        });
         return;
     }
     // Otherwise (another session open, or the notebook closed) the link goes at the end of
@@ -888,6 +898,7 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
         None
     };
     app.state::<Busy>().add(&session_dir, id);
+    let session_path = session_dir.to_string_lossy().into_owned();
     app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), PendingCapture {
         session: session_dir,
         session_identity,
@@ -901,7 +912,16 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
             return Ok(());
         }
     }
-    capture::announce(&app, capture::Captured { session_id: Some(session_id), ack: Some(ack), id, rel, kind: "image".into(), label: String::new(), problem: None });
+    capture::announce(&app, capture::Captured {
+        session_id: Some(session_id),
+        session_path,
+        ack: Some(ack),
+        id,
+        rel,
+        kind: "image".into(),
+        label: String::new(),
+        problem: None,
+    });
     Ok(())
 }
 
@@ -918,6 +938,7 @@ struct SelftestNext(Mutex<Option<String>>);
 #[serde(rename_all = "camelCase")]
 struct Marked {
     session_id: String,
+    session_path: String,
     ack: Option<String>,
     id: i64,
     rel: String,
@@ -1044,7 +1065,16 @@ fn finish_markup(app: &AppHandle, kept: bool, changed: bool) {
     if let Some(w) = app.get_webview_window(markup::WINDOW) {
         let _ = w.destroy();
     }
-    let _ = app.emit_to("main", "marked", Marked { session_id: p.session_id, ack: event_ack, id: p.id, rel: p.rel, is_new: p.is_new, kept, changed });
+    let _ = app.emit_to("main", "marked", Marked {
+        session_id: p.session_id,
+        session_path: p.session_dir.to_string_lossy().into_owned(),
+        ack: event_ack,
+        id: p.id,
+        rel: p.rel,
+        is_new: p.is_new,
+        kept,
+        changed,
+    });
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.set_focus();

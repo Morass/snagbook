@@ -43,6 +43,7 @@ pub struct Rect {
 #[serde(rename_all = "camelCase")]
 pub struct Captured {
     pub session_id: Option<String>,
+    pub session_path: String,
     pub ack: Option<String>,
     pub id: i64,
     pub rel: String,

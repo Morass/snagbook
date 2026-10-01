@@ -489,7 +489,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   function originIsOpen(origin) {
-    return !!origin && selected === origin.id && editorItem === origin.id
+    return !!origin && editorItem === origin.id
       && view?.session?.id === origin.sessionId
       && (origin.path ? view.session.path === origin.path : view.session.openToken === origin.openToken);
   }
@@ -510,12 +510,14 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
-  async function onCaptured({ sessionId, ack, id, rel, kind = "image", label = "", problem = null }) {
+  async function onCaptured({ sessionId, sessionPath = null, ack, id, rel, kind = "image", label = "", problem = null }) {
     const expectedSessionId = view?.session?.id;
     const expectedOpenToken = view?.session?.openToken;
     const expectedPath = view?.session?.path;
     const stillHere = () => view?.session?.id === expectedSessionId && view?.session?.openToken === expectedOpenToken;
-    const origin = { id, sessionId, openToken: expectedOpenToken, path: expectedPath };
+    const path = sessionPath || (sessionId === expectedSessionId ? expectedPath : null);
+    const openToken = sessionId === expectedSessionId && path === expectedPath ? expectedOpenToken : null;
+    const origin = { id, sessionId, openToken, path };
     const belongsHere = ack ? await call("capture_can_insert", { ack }).catch(() => false) : sessionId === view?.session?.id;
     if (!belongsHere || !stillHere()) {
       const filed = await leaveCaptureInOrigin(ack, origin);
@@ -565,8 +567,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   /// The mark-up window finished: a new screenshot goes into the note (or is gone); an
   /// existing picture is redrawn.
-  async function onMarked({ sessionId, ack, id, rel, isNew, kept, changed }) {
-    if (isNew && kept) return onCaptured({ sessionId, ack, id, rel, kind: "image" });
+  async function onMarked({ sessionId, sessionPath = null, ack, id, rel, isNew, kept, changed }) {
+    if (isNew && kept) return onCaptured({ sessionId, sessionPath, ack, id, rel, kind: "image" });
     if (sessionId && view?.session?.id !== sessionId) {
       await refresh();
       return flash("The marked picture stayed in its original session.");

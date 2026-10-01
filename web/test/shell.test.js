@@ -158,7 +158,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       const ack = `media-${nextMedia++}`;
       const rel = mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png";
       captureOrigins.set(ack, { sessionId, openToken, id, rel });
-      return { sessionId, ack, id, rel, kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
+      return { sessionId, sessionPath: session.path, ack, id, rel, kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
     },
   };
   const invoke = async (cmd, args = {}) => {
@@ -771,6 +771,69 @@ test("capture fallback reload follows the same session folder after reopening it
   t.app.releaseCaptureCheck();
   await filing;
   assert.match(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, /shot-reopen\.png/);
+});
+
+test("capture fallback protects the editor still visible during an item switch", async () => {
+  const t = await setup({ session: true, slowMedia: true });
+  await t.shell.newItem();
+  await t.shell.show(1);
+  t.editor.mediaSaved = () => false;
+  const source = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({
+    type: "media",
+    reqId: 17,
+    itemId: 1,
+    sessionId: source.id,
+    openToken: source.openToken,
+    base64: "AA==",
+    mime: "image/png",
+    name: "",
+  });
+  await t.settle();
+  t.app.holdNoteFor(2);
+  const switching = t.shell.show(2);
+  await t.settle();
+  let pending = { id: 1, markdown: "typed before fallback\n" };
+  t.editor.takePending = () => {
+    const value = pending;
+    pending = null;
+    return value;
+  };
+  t.editor.restorePending = (value) => { pending = value; };
+  t.app.releaseMedia();
+  await saving;
+  assert.match(t.app.notes.get(1), /^typed before fallback\n\n!\[\]\(media\/image-001\.png\)\n$/);
+  assert.equal(t.editor.log.some(([kind, value]) => kind === "readOnly" && value === true), true);
+  t.app.releaseNote();
+  await switching;
+});
+
+test("a late marked capture keeps its source folder for a filing retry", async () => {
+  const t = await setup({ session: true, failCaptureFiling: true });
+  const source = t.shell.view().session;
+  t.app.notes.set(1, "original\n");
+  t.app.addCaptureOrigin("late-markup", {
+    sessionId: source.id,
+    openToken: source.openToken,
+    id: 1,
+    rel: "media/shot-001.png",
+  });
+  await t.shell.newSession();
+  await t.shell.onMarked({
+    sessionId: source.id,
+    sessionPath: source.path,
+    ack: "late-markup",
+    id: 1,
+    rel: "media/shot-001.png",
+    isNew: true,
+    kept: true,
+    changed: true,
+  });
+  t.app.allowCaptureFiling();
+  await t.shell.openSession(source.path);
+  assert.match(t.app.notes.get(1), /!\[\]\(media\/shot-001\.png\)/);
+  assert.equal(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, t.app.notes.get(1));
+  assert.equal(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1)[1], false);
 });
 
 test("a capture note read cannot cross a session switch", async () => {
