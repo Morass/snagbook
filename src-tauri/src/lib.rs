@@ -1038,12 +1038,14 @@ fn open_markup_now(app: &AppHandle, id: i64, rel: String, is_new: bool, auto: Op
 /// Mark up a picture already in a note (double-click it).
 #[tauri::command]
 async fn open_markup(app: AppHandle, st: St<'_>, session_id: String, open_token: String, id: i64, rel: String) -> Res<()> {
-    let a = st.lock().unwrap();
-    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
-        return Err("The picture's session is no longer open.".into());
-    }
-    drop(a);
-    open_markup_now(&app, id, rel, false, None)
+    let p = {
+        let mut a = st.lock().unwrap();
+        if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
+            return Err("The picture's session is no longer open.".into());
+        }
+        pending_markup(&mut a, id, rel, false, None, None)?
+    };
+    show_markup(&app, p)
 }
 
 #[tauri::command]

@@ -947,6 +947,17 @@ test("pasted bytes arriving after a session switch are filed in their source ses
   assert.match(t.app.notes.get(1), /!\[\]\(media\/image-001\.png\)/);
 });
 
+test("pasted bytes arriving after their session is reopened reload the visible note", async () => {
+  const t = await setup({ session: true });
+  const source = t.shell.view().session;
+  await t.shell.openSession(source.path);
+  await t.shell.onEditorMessage({ type: "media", reqId: 19, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  const shown = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown;
+  assert.match(shown, /!\[\]\(media\/image-001\.png\)/);
+  await t.shell.onEditorMessage({ type: "changed", id: 1, markdown: `${shown}\nnext edit\n` });
+  assert.match(t.app.notes.get(1), /!\[\]\(media\/image-001\.png\)/);
+});
+
 test("a pasted-media save response cannot cross an item switch", async () => {
   const t = await setup({ session: true, slowMedia: true });
   const { id: sessionId, openToken } = t.shell.view().session;

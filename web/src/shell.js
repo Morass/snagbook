@@ -972,8 +972,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         const id = msg.itemId;
         try {
           if (id == null) throw new Error("the destination changed");
-          const sessionPath = view?.session?.id === msg.sessionId && view?.session?.openToken === msg.openToken ? view.session.path : null;
           const saved = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
+          const sessionPath = saved.sessionPath || (view?.session?.id === msg.sessionId && view?.session?.openToken === msg.openToken ? view.session.path : null);
           const canInsert = await call("capture_can_insert", { ack: saved.ack }).catch(() => false);
           if (!canInsert || selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken || !snag()?.mediaSaved(msg.reqId, saved.rel)) {
             snag()?.mediaFailed(msg.reqId);
