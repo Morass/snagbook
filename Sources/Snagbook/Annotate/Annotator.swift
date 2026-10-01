@@ -337,7 +337,14 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     }
 
     private func keepUnchanged() async throws {
-        if isNew { try await model.annotationFinished(session: try liveSession(), item: item, itemIdentity: itemIdentity, relative: relative, isNew: true, kept: true) }
+        if isNew {
+            let live = try liveSession()
+            let fileURL = try live.itemURL(item).appendingPathComponent(relative)
+            let pictureBinding = try Session.rebind(self.pictureBinding, to: fileURL)
+            _ = try Session.read(pictureBinding)
+            self.pictureBinding = pictureBinding
+            try await model.annotationFinished(session: live, item: item, itemIdentity: itemIdentity, relative: relative, isNew: true, kept: true)
+        }
         finished = true
     }
 

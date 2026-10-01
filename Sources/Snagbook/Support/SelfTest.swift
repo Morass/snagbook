@@ -424,6 +424,28 @@ enum SelfTest {
             check(false, "the replacement-original mark-up window opens")
         }
 
+        let unchangedRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.35))!, prefix: "shot", ext: "png")) ?? ""
+        Annotator.open(item: id, relative: unchangedRel, isNew: true, model: model)
+        await settle()
+        if let unchanged = Annotator.open.last {
+            let picture = try! session.itemURL(id).appendingPathComponent(unchangedRel)
+            let held = picture.deletingLastPathComponent().appendingPathComponent(".unchanged.selftest.png")
+            try? FileManager.default.moveItem(at: picture, to: held)
+            let stranger = Data("replacement picture".utf8)
+            try? stranger.write(to: picture)
+            unchanged.skip()
+            for _ in 0..<50 where unchanged.finishing { await settle(100) }
+            check(Annotator.open.contains(where: { $0 === unchanged }) && !read(try! session.noteURL(id)).contains(unchangedRel), "No Marks refuses to attach a replacement picture")
+            check((try? Data(contentsOf: picture)) == stranger, "No Marks leaves a replacement picture unchanged")
+            try? FileManager.default.removeItem(at: picture)
+            try? FileManager.default.moveItem(at: held, to: picture)
+            unchanged.skip()
+            for _ in 0..<50 where Annotator.open.contains(where: { $0 === unchanged }) { await settle(100) }
+            check(!Annotator.open.contains(where: { $0 === unchanged }) && read(try! session.noteURL(id)).contains(unchangedRel), "No Marks attaches the restored original picture")
+        } else {
+            check(false, "the unchanged-picture mark-up window opens")
+        }
+
         let retryRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.4))!, prefix: "shot", ext: "png")) ?? ""
         Annotator.open(item: id, relative: retryRel, isNew: true, model: model)
         await settle()
