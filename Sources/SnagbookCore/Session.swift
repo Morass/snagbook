@@ -254,8 +254,9 @@ public final class Session {
 
     /// Remove an item. `discard` decides what happens to the folder (the app moves it to
     /// the Trash); the default deletes it.
-    public func deleteItem(_ id: Int, discard: ((URL) throws -> Void)? = nil) throws {
+    public func deleteItem(_ id: Int, expectedIdentity: String? = nil, discard: ((URL) throws -> Void)? = nil) throws {
         try requireExists()
+        if let expectedIdentity, try itemIdentity(id) != expectedIdentity { throw SnagError.noSuchItem(id) }
         let dir = try itemURL(id)
         if let discard { try discard(dir) } else { try fm.removeItem(at: dir) }
         manifest.items.removeAll { $0.id == id }

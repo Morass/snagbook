@@ -314,6 +314,7 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: Int, confirm: Bool = true) {
         guard let session, let rec = items.first(where: { $0.id == id }) else { return }
+        guard let itemIdentity = try? session.itemIdentity(id) else { return flash("That item is no longer there") }
         guard !capture.isUsing(session, item: id),
               !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: session) }) else {
             return flash("Finish the capture or picture before deleting this item")
@@ -335,7 +336,8 @@ final class AppModel: ObservableObject {
                 return flash("The item changed or a capture started, so it was not deleted")
             }
             do {
-                try live.deleteItem(id, discard: Session.trashOrDelete(
+                let current = try live.reopenedMatchingItem(id, identity: itemIdentity, fallbackHeader: config.header)
+                try current.deleteItem(id, expectedIdentity: itemIdentity, discard: Session.trashOrDelete(
                     trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
                     deletePermanently: { _ in
                         guard confirm else { return true }
@@ -347,12 +349,13 @@ final class AppModel: ObservableObject {
                         a.buttons.first?.hasDestructiveAction = true
                         return a.runModal() == .alertFirstButtonReturn
                             && self.session?.isSameSession(as: live) == true
-                            && !self.capture.isUsing(live, item: id)
-                            && !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: live) })
+                            && (try? current.itemIdentity(id)) == itemIdentity
+                            && !self.capture.isUsing(current, item: id)
+                            && !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: current) })
                     }))
-                self.session = live
+                self.session = current
                 editor.forget(item: id)
-                items = live.manifest.items
+                items = current.manifest.items
                 if selectedID == id {
                     selectedID = nil
                     if let prev = back.last(where: { b in items.contains { $0.id == b } }) ?? items.last?.id { show(prev, record: false) } else { titleDraft = "" }

@@ -321,6 +321,19 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(s.manifest.items.first?.title, "Item 1")
         XCTAssertTrue(FileManager.default.fileExists(atPath: note.path))
     }
+
+    func testDeleteDoesNotRemoveAReplacementItemFolder() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        let identity = try XCTUnwrap(try s.itemIdentity(item.id))
+        let folder = try s.itemURL(item.id)
+        let original = s.url.appendingPathComponent(".original-item")
+        try FileManager.default.moveItem(at: folder, to: original)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try s.deleteItem(item.id, expectedIdentity: identity))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path))
+        XCTAssertEqual(s.manifest.items.map(\.id), [item.id])
+    }
 }
 
 final class ConfigTests: XCTestCase {
