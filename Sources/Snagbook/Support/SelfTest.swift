@@ -386,6 +386,43 @@ enum SelfTest {
         let stem = (name as NSString).deletingPathExtension
         check(exists(media.appendingPathComponent(stem + ".marks.json")), "Return saves the marks")
 
+        Annotator.open(item: id, relative: rel, isNew: false, model: model)
+        await settle()
+        if let renamed = Annotator.open.last {
+            let originalTitle = model.itemTitle(id)
+            renamed.commit { $0.marks.append(Mark(tool: .rect, points: [Pt(20, 20), Pt(90, 70)], color: "#ff3b30", width: 4)) }
+            model.rename(id, to: "Annotated item")
+            renamed.done()
+            await settle()
+            check(!Annotator.open.contains(where: { $0 === renamed }), "mark-up saves after its item is renamed")
+            let movedMedia = (try? model.session?.mediaURL(id)) ?? media
+            check(exists(movedMedia.appendingPathComponent(stem + ".marks.json")), "renamed item keeps the annotated picture")
+            model.rename(id, to: originalTitle)
+        } else {
+            check(false, "the rename-during-mark-up window opens")
+        }
+
+        Annotator.open(item: id, relative: rel, isNew: false, model: model)
+        await settle()
+        if let originalReplaced = Annotator.open.last {
+            let currentMedia = try! model.session!.mediaURL(id)
+            let pristine = currentMedia.appendingPathComponent(stem + ".orig.png")
+            let heldPristine = currentMedia.appendingPathComponent(".original.selftest.png")
+            try? FileManager.default.moveItem(at: pristine, to: heldPristine)
+            let stranger = ImageFile.pngData(testImage(600, 400, hue: 0.9))!
+            try? stranger.write(to: pristine)
+            originalReplaced.commit { $0.marks.append(Mark(tool: .ellipse, points: [Pt(30, 30), Pt(100, 90)], color: "#ff3b30", width: 4)) }
+            originalReplaced.done()
+            check(Annotator.open.contains(where: { $0 === originalReplaced }), "mark-up refuses a replacement original picture")
+            check((try? Data(contentsOf: pristine)) == stranger, "mark-up leaves a replacement original picture unchanged")
+            try? FileManager.default.removeItem(at: pristine)
+            try? FileManager.default.moveItem(at: heldPristine, to: pristine)
+            originalReplaced.skip()
+            await settle()
+        } else {
+            check(false, "the replacement-original mark-up window opens")
+        }
+
         let failedRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.7))!, prefix: "shot", ext: "png")) ?? ""
         Annotator.open(item: id, relative: failedRel, isNew: true, model: model)
         await settle()

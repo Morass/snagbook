@@ -382,6 +382,11 @@ public final class Session {
         return FileBinding(url: url, identity: identity)
     }
 
+    public static func rebind(_ binding: FileBinding, to url: URL) throws -> FileBinding {
+        guard identity(of: url) == binding.identity else { throw SnagError.mediaChanged(url.lastPathComponent) }
+        return FileBinding(url: url, identity: binding.identity)
+    }
+
     public static func write(_ data: Data, to binding: FileBinding) throws {
         guard identity(of: binding.url) == binding.identity else { throw SnagError.mediaChanged(binding.url.lastPathComponent) }
         let output = try FileHandle(forWritingTo: binding.url)

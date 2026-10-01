@@ -263,6 +263,12 @@ final class SessionTests: XCTestCase {
         let binding = try Session.bindFile(url)
         XCTAssertEqual(try Session.read(binding), Data("original".utf8))
 
+        let renamed = url.deletingLastPathComponent().appendingPathComponent("renamed.png")
+        try FileManager.default.moveItem(at: url, to: renamed)
+        let movedBinding = try Session.rebind(binding, to: renamed)
+        XCTAssertEqual(try Session.read(movedBinding), Data("original".utf8))
+        try FileManager.default.moveItem(at: renamed, to: url)
+
         let held = url.deletingLastPathComponent().appendingPathComponent(".held.png")
         try FileManager.default.moveItem(at: url, to: held)
         try Data("replacement".utf8).write(to: url)

@@ -192,19 +192,23 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
         do {
             let live = try liveSession()
             let itemDir = try live.itemURL(item)
+            let fileURL = itemDir.appendingPathComponent(relative)
             let comp = MarkDocument.companions(of: relative)
             let origURL = itemDir.appendingPathComponent(comp.orig)
             let marksURL = itemDir.appendingPathComponent(comp.marks)
+            let pictureBinding = try Session.rebind(self.pictureBinding, to: fileURL)
+            let origBinding = try self.origBinding.map { try Session.rebind($0, to: origURL) }
+            let marksBinding = try self.marksBinding.map { try Session.rebind($0, to: marksURL) }
             if origBinding == nil, FileManager.default.fileExists(atPath: origURL.path) {
                 throw SnagError.mediaChanged(origURL.lastPathComponent)
             }
             if marksBinding == nil, FileManager.default.fileExists(atPath: marksURL.path) {
                 throw SnagError.mediaChanged(marksURL.lastPathComponent)
             }
+            let boundOriginal = try origBinding.map(Session.read)
             if doc.marks.isEmpty && doc.crop == nil {
-                if let origBinding {
+                if let origBinding, let originalPicture = boundOriginal {
                     let previousPicture = try Session.read(pictureBinding)
-                    let originalPicture = try Session.read(origBinding)
                     let previousMarks = try marksBinding.map(Session.read)
                     var removedMarks = false
                     do {
@@ -274,8 +278,9 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     func discard() {
         do {
             if isNew {
-                _ = try liveSession()
-                try Session.remove(pictureBinding)
+                let live = try liveSession()
+                let current = try Session.rebind(pictureBinding, to: try live.itemURL(item).appendingPathComponent(relative))
+                try Session.remove(current)
                 model.flash("Screenshot discarded")
             }
             finished = true
