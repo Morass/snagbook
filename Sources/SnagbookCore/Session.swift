@@ -361,8 +361,8 @@ public final class Session {
         try requireExists()
         let media = try mediaURL(id)
         try ensureDirectory(media)
-        let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
-        try data.write(to: media.appendingPathComponent(name), options: .atomic)
+        let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set(try fm.contentsOfDirectory(atPath: media.path)))
+        try data.write(to: media.appendingPathComponent(name), options: .withoutOverwriting)
         return Self.mediaName + "/" + name
     }
 
@@ -419,7 +419,7 @@ public final class Session {
         let media = try mediaURL(id)
         try ensureDirectory(media)
         while true {
-            let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
+            let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set(try fm.contentsOfDirectory(atPath: media.path)))
             let url = media.appendingPathComponent(name)
             do {
                 try Data().write(to: url, options: .withoutOverwriting)

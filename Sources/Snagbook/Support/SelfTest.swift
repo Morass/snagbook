@@ -451,6 +451,29 @@ enum SelfTest {
             check(false, "the attachment-retry mark-up window opens")
         }
 
+        let discardRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.8))!, prefix: "shot", ext: "png")) ?? ""
+        Annotator.open(item: id, relative: discardRel, isNew: true, model: model)
+        await settle()
+        if let discardAfterFailure = Annotator.open.last {
+            discardAfterFailure.commit { $0.marks.append(Mark(tool: .rect, points: [Pt(15, 15), Pt(90, 70)], color: "#ff3b30", width: 4)) }
+            let elsewhere = try? model.addItem(title: "Discard retry", focusTitle: false)
+            let note = try! session.noteURL(id)
+            let heldNote = note.deletingLastPathComponent().appendingPathComponent(".discard.selftest.md")
+            try? FileManager.default.moveItem(at: note, to: heldNote)
+            discardAfterFailure.done()
+            try? FileManager.default.moveItem(at: heldNote, to: note)
+            let media = try! model.session!.mediaURL(id)
+            let name = (discardRel as NSString).lastPathComponent
+            let discardStem = (name as NSString).deletingPathExtension
+            discardAfterFailure.discard()
+            await settle()
+            check(!exists(media.appendingPathComponent(name))
+                  && !exists(media.appendingPathComponent(discardStem + ".orig.png"))
+                  && !exists(media.appendingPathComponent(discardStem + ".marks.json")), "discard after a failed attachment removes the picture and companions")
+            if let elsewhere { model.delete(elsewhere, confirm: false); await settle() }
+        } else {
+            check(false, "the discard-after-failure mark-up window opens")
+        }
 
         Annotator.open(item: id, relative: rel, isNew: false, model: model)
         await settle()

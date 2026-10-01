@@ -240,6 +240,19 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(s.mediaCount(1), Session.MediaCount(images: 2, videos: 2))
     }
 
+    func testUnreadableMediaFolderDoesNotGuessAName() throws {
+        let s = try Session.create(root: root, config: Config())
+        try s.addItem()
+        _ = try s.saveMedia(1, data: Data([1]), prefix: "shot", ext: "png")
+        let media = try s.mediaURL(1)
+        try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: media.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: media.path) }
+        XCTAssertThrowsError(try s.saveMedia(1, data: Data([2]), prefix: "shot", ext: "png"))
+        XCTAssertThrowsError(try s.reserveMediaName(1, prefix: "clip", ext: "mp4"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: media.path)
+        XCTAssertEqual(try Data(contentsOf: media.appendingPathComponent("shot-001.png")), Data([1]))
+    }
+
     func testAReplacedMediaReservationIsNeverOverwrittenOrDeleted() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem()

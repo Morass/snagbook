@@ -293,8 +293,17 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
         do {
             if isNew {
                 let live = try liveSession()
-                let current = try Session.rebind(pictureBinding, to: try live.itemURL(item).appendingPathComponent(relative))
-                try Session.remove(current)
+                let itemDir = try live.itemURL(item)
+                let comp = MarkDocument.companions(of: relative)
+                if let origBinding {
+                    try Session.remove(Session.rebind(origBinding, to: itemDir.appendingPathComponent(comp.orig)))
+                    self.origBinding = nil
+                }
+                if let marksBinding {
+                    try Session.remove(Session.rebind(marksBinding, to: itemDir.appendingPathComponent(comp.marks)))
+                    self.marksBinding = nil
+                }
+                try Session.remove(Session.rebind(pictureBinding, to: itemDir.appendingPathComponent(relative)))
                 model.flash("Screenshot discarded")
             }
             finished = true
