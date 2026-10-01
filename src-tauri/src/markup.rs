@@ -18,6 +18,7 @@ pub struct Pending {
     pub session_path: String,
     pub session_dir: PathBuf,
     pub session_identity: FolderIdentity,
+    pub item_identity: FolderIdentity,
     pub item_dir: PathBuf,
     pub fallback_header: String,
     pub ack: Option<String>,

@@ -323,6 +323,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     if (!it) return;
     const sessionId = view.session.id;
     const openToken = view.session.openToken;
+    const itemToken = it.itemToken;
     const ok = await confirm(`Delete “${it.title}”?`, "Its folder, with the note and all its pictures and videos, goes to the Trash.", "Move to Trash");
     if (!ok) return;
     if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
@@ -338,7 +339,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       const index = items().findIndex((i) => i.id === id);
       let v;
       try {
-        v = await call("delete_item", { sessionId, openToken, id, permanently: false });
+        v = await call("delete_item", { sessionId, openToken, itemToken, id, permanently: false });
       } catch (e) {
         const msg = String(e?.message || e);
         if (!msg.startsWith("NOTRASH:")) return flash(msg, "error");
@@ -351,7 +352,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
           return flash("The open session changed, so the item was not deleted.", "error");
         }
-        v = await call("delete_item", { sessionId, openToken, id, permanently: true });
+        v = await call("delete_item", { sessionId, openToken, itemToken, id, permanently: true });
       }
       if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
       snag()?.forget?.(id);

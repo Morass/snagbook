@@ -94,8 +94,9 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       it.title = title;
       return view();
     },
-    delete_item: ({ sessionId, openToken, id, permanently }) => {
+    delete_item: ({ sessionId, openToken, itemToken, id, permanently }) => {
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
+      if (session.items.find((item) => item.id === id)?.itemToken !== itemToken) throw "The item changed, so it was not deleted.";
       if (!permanently && !trash) throw "NOTRASH:the drive has no Trash";
       const removed = session.items.find((i) => i.id === id);
       if (removed) itemOrigins.get(removed.itemToken).valid = false;
@@ -400,6 +401,19 @@ test("an item delete confirmation cannot cross into another session", async () =
   await deleting;
   assert.equal(t.shell.view().session.title, "Other");
   assert.equal(t.app.calls.some(([c]) => c === "delete_item"), false);
+});
+
+test("an item delete confirmation cannot delete a replacement with the same number", async () => {
+  const t = await setup({ session: true });
+  const originalToken = t.shell.view().session.items[0].itemToken;
+  const deleting = t.shell.deleteItem(1);
+  await t.settle();
+  t.app.replaceItem(1);
+  await t.answer(true);
+  await deleting;
+  await t.shell.refresh();
+  assert.notEqual(t.shell.view().session.items[0].itemToken, originalToken);
+  assert.match(t.$("status-text").textContent, /item changed/i);
 });
 
 test("on a drive without a Trash, delete asks again before deleting for good", async () => {

@@ -244,13 +244,17 @@ fn rename_item(app: AppHandle, st: St, id: i64, title: String) -> Res<View> {
 /// Move an item's folder to the Trash. When that is impossible the answer starts with
 /// "NOTRASH:" and the page asks before calling again with `permanently`.
 #[tauri::command]
-fn delete_item(app: AppHandle, window: tauri::Window, st: St, session_id: String, open_token: String, id: i64, permanently: bool) -> Res<View> {
+fn delete_item(app: AppHandle, window: tauri::Window, st: St, session_id: String, open_token: String, item_token: String, id: i64, permanently: bool) -> Res<View> {
     if window.label() != "main" {
         return Err("Items are deleted from the notebook window.".into());
     }
     let mut a = st.lock().unwrap();
     if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
         return Err("The open session changed, so the item was not deleted.".into());
+    }
+    let item_identity = a.item_origins.iter().find_map(|(identity, token)| (token == &item_token).then(|| identity.clone())).ok_or("The item is no longer known.")?;
+    if a.session.as_ref().is_none_or(|s| !s.matches_item_identity(id, &item_identity)) {
+        return Err("The item changed, so it was not deleted.".into());
     }
     if app.state::<Busy>().has(a.session.as_ref().map(|s| s.dir.as_path()), id) {
         return Err("A capture is still being saved into this item. Delete it once the capture is in its note.".into());
@@ -371,6 +375,7 @@ fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String,
         session_identity: s.folder_identity(),
         session_id: s.manifest.id.clone(),
         item: id,
+        item_identity,
         link,
     };
     app.state::<Busy>().add(&pending.session, id);
@@ -557,6 +562,7 @@ struct Active {
     /// when it ends.
     session: PathBuf,
     session_identity: FolderIdentity,
+    item_identity: FolderIdentity,
     session_name: String,
     stem: String,
     started_ms: u64,
@@ -582,6 +588,7 @@ struct PendingCapture {
     session_identity: FolderIdentity,
     session_id: String,
     item: i64,
+    item_identity: FolderIdentity,
     link: String,
 }
 
@@ -614,9 +621,9 @@ impl Busy {
     }
 }
 
-fn release_capture(busy: &Busy, session_path: &Path, item: i64, session: Option<&mut Session>) {
+fn release_capture(busy: &Busy, session_path: &Path, item: i64, item_identity: &FolderIdentity, session: Option<&mut Session>) {
     if busy.release(session_path, item) {
-        if let Some(s) = session {
+        if let Some(s) = session.filter(|s| s.matches_item_identity(item, item_identity)) {
             if let Ok(title) = s.item(item).map(|r| r.title.clone()) {
                 let _ = s.retitle_item(item, &title, true);
             }
@@ -657,9 +664,9 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
     let id = target_item(&mut a)?;
     let cap = a.store.config.capture.clone();
     let path = hold_clip_name(a.session()?, id)?;
-    let (session, session_identity, session_name) = {
+    let (session, session_identity, item_identity, session_name) = {
         let s = a.session()?;
-        (s.dir.clone(), s.folder_identity(), s.display_path.clone())
+        (s.dir.clone(), s.folder_identity(), s.item_identity(id).map_err(err)?, s.display_path.clone())
     };
     app.state::<Busy>().add(&session, id);
     drop(a);
@@ -691,7 +698,7 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
     });
     let started_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let ack = uuid::Uuid::new_v4().to_string();
-    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, session, session_identity, session_name, stem, started_ms, ack });
+    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, session, session_identity, item_identity, session_name, stem, started_ms, ack });
     open_recbar(app, rect, monitor);
     let _ = app.emit_to("main", "recording", true);
     Ok(())
@@ -756,12 +763,12 @@ fn stop_recording_now(app: &AppHandle) {
     app.state::<Finishing>().0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let app = app.clone();
     std::thread::spawn(move || {
-        let Active { handle, id, session, session_identity, session_name, stem, ack, .. } = active;
+        let Active { handle, id, session, session_identity, item_identity, session_name, stem, ack, .. } = active;
         let result = handle.join().unwrap_or_else(|_| Err("the recording stopped unexpectedly".into()));
         // Another recording may have started meanwhile: the button shows whichever is true now.
         let now = app.state::<Recorder>().0.lock().unwrap().is_some();
         let _ = app.emit_to("main", "recording", now);
-        finish_recording(&app, Done { id, session, session_identity, session_name, stem, ack }, result);
+        finish_recording(&app, Done { id, session, session_identity, item_identity, session_name, stem, ack }, result);
         let left = app.state::<Finishing>().0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
         // The windows were closed while it finished: quit now, as closing them would have.
         if left == 0 && app.webview_windows().is_empty() {
@@ -775,6 +782,7 @@ struct Done {
     id: i64,
     session: PathBuf,
     session_identity: FolderIdentity,
+    item_identity: FolderIdentity,
     session_name: String,
     stem: String,
     ack: String,
@@ -797,7 +805,7 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
             .filter(|s| s.matches_folder_identity(&active.session_identity));
     }
     let s = if open_here { a.session.as_mut() } else { other.as_mut() };
-    let Some(s) = s.filter(|s| s.item(active.id).is_ok()) else {
+    let Some(s) = s.filter(|s| s.matches_item_identity(active.id, &active.item_identity)) else {
         app.state::<Busy>().release(&active.session, active.id);
         drop(a);
         let _ = app.emit_to("main", "problem", match outcome {
@@ -820,7 +828,7 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     // Shown in the notebook: its editor adds the link where the note is being written.
     if open_here && app.get_webview_window("main").is_some() {
         app.state::<CaptureAcks>().0.lock().unwrap().insert(active.ack.clone(), PendingCapture {
-            session: active.session.clone(), session_identity: active.session_identity.clone(), session_id: s.manifest.id.clone(), item: active.id, link,
+            session: active.session.clone(), session_identity: active.session_identity.clone(), session_id: s.manifest.id.clone(), item: active.id, item_identity: active.item_identity.clone(), link,
         });
         let session_id = s.manifest.id.clone();
         drop(a);
@@ -843,7 +851,9 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     let written = s.write_note(active.id, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") });
     let last = app.state::<Busy>().release(&active.session, active.id);
     if last {
-        if let Ok(title) = s.item(active.id).map(|r| r.title.clone()) { let _ = s.retitle_item(active.id, &title, true); }
+        if s.matches_item_identity(active.id, &active.item_identity) {
+            if let Ok(title) = s.item(active.id).map(|r| r.title.clone()) { let _ = s.retitle_item(active.id, &title, true); }
+        }
     }
     let title = s.item(active.id).map(|r| r.title.clone()).unwrap_or_default();
     drop(a);
@@ -859,24 +869,32 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
     let pending = app.state::<CaptureAcks>().0.lock().unwrap().get(&ack).cloned().ok_or("That capture is not waiting to be filed.")?;
     let mut a = st.lock().unwrap();
     if inserted {
-        if a.session.as_ref().is_none_or(|s| s.manifest.id != pending.session_id || !s.matches_folder_identity(&pending.session_identity)) {
-            return Err("The capture's session is no longer open.".into());
+        if a.session.as_ref().is_none_or(|s| s.manifest.id != pending.session_id || !s.matches_folder_identity(&pending.session_identity) || !s.matches_item_identity(pending.item, &pending.item_identity)) {
+            return Err("The capture's session or item is no longer open.".into());
         }
     } else {
-        let mut s = Session::open(&pending.session.to_string_lossy(), &a.store.config.header).map_err(err)?;
-        if !s.matches_folder_identity(&pending.session_identity) || s.manifest.id != pending.session_id {
-            return Err("The capture's session is gone or was replaced.".into());
-        }
-        append_capture_link(&mut s, pending.item, &pending.link)?;
+        file_pending_capture(&pending, &a.store.config.header)?;
     }
     app.state::<CaptureAcks>().0.lock().unwrap().remove(&ack);
     release_capture(
         app.state::<Busy>().inner(),
         &pending.session,
         pending.item,
+        &pending.item_identity,
         a.session.as_mut().filter(|s| s.manifest.id == pending.session_id),
     );
     Ok(())
+}
+
+fn file_pending_capture(pending: &PendingCapture, fallback_header: &str) -> Res<()> {
+    let mut s = Session::open(&pending.session.to_string_lossy(), fallback_header).map_err(err)?;
+    if !s.matches_folder_identity(&pending.session_identity) || s.manifest.id != pending.session_id {
+        return Err("The capture's session is gone or was replaced.".into());
+    }
+    if !s.matches_item_identity(pending.item, &pending.item_identity) {
+        return Err("The capture's item is gone or was replaced.".into());
+    }
+    append_capture_link(&mut s, pending.item, &pending.link)
 }
 
 fn append_capture_link(s: &mut Session, item: i64, link: &str) -> Res<()> {
@@ -896,7 +914,9 @@ fn capture_can_insert(app: AppHandle, window: tauri::Window, st: St, ack: String
     let pending = app.state::<CaptureAcks>().0.lock().unwrap().get(&ack).cloned().ok_or("That capture is not waiting to be filed.")?;
     let a = st.lock().unwrap();
     Ok(a.session.as_ref().is_some_and(|s| {
-        s.manifest.id == pending.session_id && s.matches_folder_identity(&pending.session_identity)
+        s.manifest.id == pending.session_id
+            && s.matches_folder_identity(&pending.session_identity)
+            && s.matches_item_identity(pending.item, &pending.item_identity)
     }))
 }
 
@@ -937,8 +957,9 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
     let session_path = s.display_path.clone();
     let session_dir = s.dir.clone();
     let session_identity = s.folder_identity();
+    let item_identity = s.item_identity(id).map_err(err)?;
     let marked = if annotate {
-        Some(pending_markup(&mut a, id, rel.clone(), true, Some(ack.clone()), app.state::<SelftestNext>().0.lock().unwrap().take())?)
+        Some(pending_markup(&mut a, id, rel.clone(), true, None, Some(ack.clone()), app.state::<SelftestNext>().0.lock().unwrap().take())?)
     } else {
         None
     };
@@ -948,6 +969,7 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
         session_identity,
         session_id: session_id.clone(),
         item: id,
+        item_identity,
         link: format!("![]({rel})"),
     });
     drop(a);
@@ -998,10 +1020,13 @@ fn markup_files(p: &markup::Pending) -> Res<markup::Files> {
     if session.manifest.id != p.session_id || !session.matches_folder_identity(&p.session_identity) {
         return Err("The session containing this picture is gone or was replaced.".into());
     }
+    if !session.matches_item_identity(p.id, &p.item_identity) {
+        return Err("The item containing this picture is gone or was replaced.".into());
+    }
     markup::files(&p.item_dir, &p.rel).ok_or_else(|| format!("{} is not a picture in this item.", p.rel))
 }
 
-fn pending_markup(a: &mut App, id: i64, rel: String, is_new: bool, ack: Option<String>, auto: Option<String>) -> Res<markup::Pending> {
+fn pending_markup(a: &mut App, id: i64, rel: String, is_new: bool, item_identity: Option<FolderIdentity>, ack: Option<String>, auto: Option<String>) -> Res<markup::Pending> {
     let fallback_header = a.store.config.header.clone();
     let s = a.session()?;
     Ok(markup::Pending {
@@ -1012,6 +1037,7 @@ fn pending_markup(a: &mut App, id: i64, rel: String, is_new: bool, ack: Option<S
         session_path: s.display_path.clone(),
         session_dir: s.dir.clone(),
         session_identity: s.folder_identity(),
+        item_identity: item_identity.map_or_else(|| s.item_identity(id), Ok).map_err(err)?,
         item_dir: s.item_dir(id).map_err(err)?,
         fallback_header,
         ack,
@@ -1042,7 +1068,7 @@ fn open_markup_now(app: &AppHandle, id: i64, rel: String, is_new: bool, auto: Op
     let p = {
         let st = app.state::<Mutex<App>>();
         let mut a = st.lock().unwrap();
-        pending_markup(&mut a, id, rel, is_new, None, auto)?
+        pending_markup(&mut a, id, rel, is_new, None, None, auto)?
     };
     show_markup(app, p)
 }
@@ -1059,7 +1085,7 @@ async fn open_markup(app: AppHandle, st: St<'_>, session_id: String, open_token:
         if a.session.as_ref().is_none_or(|s| !s.matches_item_identity(id, &item_identity)) {
             return Err("The picture's source item is gone or was replaced.".into());
         }
-        pending_markup(&mut a, id, rel, false, None, None)?
+        pending_markup(&mut a, id, rel, false, Some(item_identity), None, None)?
     };
     show_markup(&app, p)
 }
@@ -1071,33 +1097,37 @@ fn markup_info(app: AppHandle) -> Res<markup::Info> {
     Ok(markup::info(&f, &p))
 }
 
-fn finish_markup(app: &AppHandle, kept: bool, changed: bool) {
+fn finish_markup(app: &AppHandle, kept: bool, changed: bool) -> Res<()> {
     let st = app.state::<Mutex<App>>();
     let mut a = st.lock().unwrap();
     let markup_state = app.state::<Markup>();
     let mut markup = markup_state.0.lock().unwrap();
-    let Some(p) = markup.as_ref().cloned() else { return };
+    let Some(p) = markup.as_ref().cloned() else { return Ok(()) };
 
+    let open_here = a.session.as_ref().is_some_and(|s| {
+        s.manifest.id == p.session_id
+            && s.matches_folder_identity(&p.session_identity)
+            && s.matches_item_identity(p.id, &p.item_identity)
+    });
+    let mut other = None;
+    if !open_here {
+        other = Session::open(&p.session_dir.to_string_lossy(), &p.fallback_header)
+            .ok()
+            .filter(|s| s.manifest.id == p.session_id
+                && s.matches_folder_identity(&p.session_identity)
+                && s.matches_item_identity(p.id, &p.item_identity));
+    }
+    let file_without_notebook = p.is_new && kept && app.get_webview_window("main").is_none();
+    let mut event_ack = p.ack.clone();
+    let source = if open_here { a.session.as_mut() } else { other.as_mut() };
+    let Some(s) = source else { return Err("The item containing this picture is gone or was replaced.".into()) };
     if p.is_new && !kept {
         if let Some(ack) = &p.ack {
             app.state::<CaptureAcks>().0.lock().unwrap().remove(ack);
             app.state::<Busy>().release(&p.session_dir, p.id);
         }
     }
-
-    let open_here = a.session.as_ref().is_some_and(|s| {
-        s.manifest.id == p.session_id && s.matches_folder_identity(&p.session_identity)
-    });
-    let mut other = None;
-    if !open_here {
-        other = Session::open(&p.session_dir.to_string_lossy(), &p.fallback_header)
-            .ok()
-            .filter(|s| s.manifest.id == p.session_id && s.matches_folder_identity(&p.session_identity));
-    }
-    let file_without_notebook = p.is_new && kept && app.get_webview_window("main").is_none();
-    let mut event_ack = p.ack.clone();
-    let source = if open_here { a.session.as_mut() } else { other.as_mut() };
-    if let Some(s) = source {
+    {
         if file_without_notebook {
             if let Some(ack) = &p.ack {
                 if append_capture_link(s, p.id, &format!("![]({})", p.rel)).is_ok() {
@@ -1135,6 +1165,7 @@ fn finish_markup(app: &AppHandle, kept: bool, changed: bool) {
         let _ = w.show();
         let _ = w.set_focus();
     }
+    Ok(())
 }
 
 /// Done: `png` (base64) and `marks` (JSON) to save, or neither to put the original back.
@@ -1150,14 +1181,13 @@ async fn save_markup(app: AppHandle, png: Option<String>, marks: Option<String>)
     };
     markup::save(&f, bytes.as_deref(), marks.as_deref())?;
     drop(_app_guard);
-    finish_markup(&app, true, true);
-    Ok(())
+    finish_markup(&app, true, true)
 }
 
 /// No Marks / Cancel: the picture stays as it was.
 #[tauri::command]
-async fn skip_markup(app: AppHandle) {
-    finish_markup(&app, true, false);
+async fn skip_markup(app: AppHandle) -> Res<()> {
+    finish_markup(&app, true, false)
 }
 
 /// A new screenshot is thrown away.
@@ -1168,8 +1198,7 @@ async fn discard_markup(app: AppHandle) -> Res<()> {
         let f = markup_files(&p)?;
         let _ = std::fs::remove_file(&f.picture);
     }
-    finish_markup(&app, !p.is_new, false);
-    Ok(())
+    finish_markup(&app, !p.is_new, false)
 }
 
 #[tauri::command]
@@ -1389,7 +1418,15 @@ pub fn run() {
         .on_window_event(|w, e| {
             // The mark-up window closed with its close button: the picture stays as it was.
             if w.label() == markup::WINDOW && matches!(e, tauri::WindowEvent::Destroyed) {
-                finish_markup(w.app_handle(), true, false);
+                if let Err(e) = finish_markup(w.app_handle(), true, false) {
+                    if let Some(p) = w.app_handle().state::<Markup>().0.lock().unwrap().take() {
+                        if let Some(ack) = p.ack {
+                            w.app_handle().state::<CaptureAcks>().0.lock().unwrap().remove(&ack);
+                            w.app_handle().state::<Busy>().release(&p.session_dir, p.id);
+                        }
+                    }
+                    let _ = w.app_handle().emit_to("main", "problem", e);
+                }
             }
         })
         .manage(Bindings::default())
@@ -1512,18 +1549,63 @@ mod tests {
     }
 
     #[test]
+    fn pending_capture_and_markup_refuse_a_replacement_item_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        let id = s.add_item(None, Utc::now()).unwrap().id;
+        let rel = s.save_media(id, b"original", "image", "png").unwrap();
+        let item_dir = s.item_dir(id).unwrap();
+        let item_identity = s.item_identity(id).unwrap();
+        let capture = PendingCapture {
+            session: s.dir.clone(),
+            session_identity: s.folder_identity(),
+            session_id: s.manifest.id.clone(),
+            item: id,
+            item_identity: item_identity.clone(),
+            link: format!("![]({rel})"),
+        };
+        let markup = markup::Pending {
+            id,
+            rel: rel.clone(),
+            is_new: false,
+            session_id: s.manifest.id.clone(),
+            session_path: s.display_path.clone(),
+            session_dir: s.dir.clone(),
+            session_identity: s.folder_identity(),
+            item_identity,
+            item_dir: item_dir.clone(),
+            fallback_header: String::new(),
+            ack: None,
+            auto: None,
+        };
+        let held = s.dir.join("held-item");
+        std::fs::rename(&item_dir, held).unwrap();
+        std::fs::create_dir(&item_dir).unwrap();
+        std::fs::write(item_dir.join("notes.md"), "replacement\n").unwrap();
+        std::fs::create_dir(item_dir.join("media")).unwrap();
+        let replacement = item_dir.join(&rel);
+        std::fs::write(&replacement, b"replacement").unwrap();
+
+        assert!(file_pending_capture(&capture, "").is_err());
+        assert!(markup_files(&markup).is_err());
+        assert_eq!(std::fs::read_to_string(item_dir.join("notes.md")).unwrap(), "replacement\n");
+        assert_eq!(std::fs::read(replacement).unwrap(), b"replacement");
+    }
+
+    #[test]
     fn a_deferred_folder_rename_failure_does_not_turn_a_filed_capture_into_a_retry() {
         let d = tempfile::tempdir().unwrap();
         let mut s = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
         let id = s.add_item(None, Utc::now()).unwrap().id;
         s.retitle_item(id, "Renamed", false).unwrap();
+        let item_identity = s.item_identity(id).unwrap();
         let item_dir = s.item_dir(id).unwrap();
         std::fs::remove_dir_all(item_dir).unwrap();
         let busy = Busy::default();
         busy.add(&s.dir, id);
         let session_path = s.dir.clone();
 
-        release_capture(&busy, &session_path, id, Some(&mut s));
+        release_capture(&busy, &session_path, id, &item_identity, Some(&mut s));
 
         assert!(!busy.has(Some(&session_path), id));
     }

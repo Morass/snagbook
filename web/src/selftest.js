@@ -40,7 +40,7 @@ export async function runSelfTest(shell, invoke) {
   const $ = (id) => document.getElementById(id);
   const snag = () => window.snag;
   const items = () => shell.view()?.session?.items || [];
-  const sessionArgs = (id) => ({ sessionId: shell.view().session.id, openToken: shell.view().session.openToken, id });
+  const sessionArgs = (id) => ({ sessionId: shell.view().session.id, openToken: shell.view().session.openToken, itemToken: items().find((item) => item.id === id)?.itemToken, id });
 
   try {
     // SNAGBOOK_SELFTEST=fail: one check that must fail, to prove a failure reaches the exit status.
