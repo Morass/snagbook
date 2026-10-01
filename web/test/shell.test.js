@@ -39,6 +39,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   const deleteGate = slowDelete ? new Promise((resolve) => { releaseDelete = resolve; }) : null;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
   const captureOrigins = new Map();
+  const sessionOrigins = new Map();
   const list = [...sessions];
   const view = (extra = {}) => ({ config, session: session && JSON.parse(JSON.stringify(session)), loadError: null, closed: null, platform, ...extra });
   const settle = () => {
@@ -51,6 +52,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (sessionGate && !holdSessionReply) { await sessionGate; sessionGate = null; }
       const path = `~/Snagbook/${String(nextHash++).padStart(8, "0")}_25-09-2026`;
       session = { id: `id-${nextHash}`, openToken: `open-${nextOpen++}`, path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
+      sessionOrigins.set(session.openToken, { id: session.id, path: session.path });
       list.unshift({ id: session.id, path, title: session.title, items: 1, created: "2026-09-25T16:00:00Z" });
       handlers.add_item({});
       const opened = view();
@@ -61,6 +63,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       const s = list.find((x) => x.path === path);
       if (!s) throw "not a session";
       session = { id: s.id || `id-${path}`, openToken: `open-${nextOpen++}`, path, title: s.title, header: null, items: [{ id: 1, title: "Old", folder: "01-old", images: 0, videos: 0 }], nextItem: 2 };
+      sessionOrigins.set(session.openToken, { id: session.id, path: session.path });
       return view();
     },
     pick_session_folder: async () => {
@@ -68,6 +71,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (cancelFolderPick) { cancelFolderPick = false; return null; }
       const path = "~/Snagbook/picked";
       session = { id: "picked", openToken: `open-${nextOpen++}`, path, title: "Picked", header: null, items: [{ id: 1, title: "Picked item", folder: "01-picked-item", images: 0, videos: 0 }], nextItem: 2 };
+      sessionOrigins.set(session.openToken, { id: session.id, path: session.path });
       return view();
     },
     add_item: ({ title }) => {
@@ -153,12 +157,13 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       return captureCanInsert && (!origin || (origin.sessionId === session?.id && origin.openToken === session?.openToken));
     },
     save_media: async ({ sessionId, openToken, id, mime }) => {
-      if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
+      const origin = sessionOrigins.get(openToken);
+      if (!origin || origin.id !== sessionId) throw "The picture's source session is no longer known.";
       if (mediaGate) await mediaGate;
       const ack = `media-${nextMedia++}`;
       const rel = mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png";
       captureOrigins.set(ack, { sessionId, openToken, id, rel });
-      return { sessionId, sessionPath: session.path, ack, id, rel, kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
+      return { sessionId, sessionPath: origin.path, ack, id, rel, kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
     },
   };
   const invoke = async (cmd, args = {}) => {
@@ -876,11 +881,12 @@ test("markup targets the item still visible while another item loads", async () 
   const t = await setup({ session: true });
   await t.shell.newItem();
   await t.shell.show(1);
+  const source = t.shell.view().session;
   t.app.holdNoteFor(2);
   const switching = t.shell.show(2);
   await t.settle();
-  await t.shell.onEditorMessage({ type: "annotate", src: "media/shot-001.png" });
-  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "open_markup").at(-1)[1], { id: 1, rel: "media/shot-001.png" });
+  await t.shell.onEditorMessage({ type: "annotate", itemId: 1, sessionId: source.id, openToken: source.openToken, src: "media/shot-001.png" });
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "open_markup").at(-1)[1], { sessionId: source.id, openToken: source.openToken, id: 1, rel: "media/shot-001.png" });
   t.app.releaseNote();
   await switching;
 });
@@ -930,14 +936,15 @@ test("pasted bytes are saved into the shown item and handed back to the editor",
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "media-1", inserted: true }]);
 });
 
-test("pasted bytes arriving after a session switch are refused", async () => {
+test("pasted bytes arriving after a session switch are filed in their source session", async () => {
   const t = await setup({ session: true, sessions: [{ path: "~/Snagbook/other", title: "Other", items: 1, created: "2026-09-25T16:00:00Z" }] });
-  const { id: sessionId, openToken } = t.shell.view().session;
+  const source = t.shell.view().session;
   await t.shell.openSession("~/Snagbook/other");
-  const oldCalls = t.app.calls.length;
-  await t.shell.onEditorMessage({ type: "media", reqId: 8, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
-  assert.equal(t.app.calls.slice(oldCalls).some(([c]) => c === "save_media"), false);
+  await t.shell.onEditorMessage({ type: "media", reqId: 8, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "save_media").at(-1)[1].sessionId, source.id);
   assert.deepEqual(t.editor.log.pop(), ["failed", 8]);
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").at(-1)[1], { ack: "media-1", inserted: false });
+  assert.match(t.app.notes.get(1), /!\[\]\(media\/image-001\.png\)/);
 });
 
 test("a pasted-media save response cannot cross an item switch", async () => {

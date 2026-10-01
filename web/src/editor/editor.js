@@ -282,7 +282,7 @@ class ImageView {
     this.handle.addEventListener("mousedown", (e) => this.startResize(e));
     this.dom.addEventListener("dblclick", (e) => {
       e.preventDefault();
-      post({ type: "annotate", src: this.node.attrs.src });
+      post({ type: "annotate", itemId: currentId, sessionId: currentSessionId, openToken: currentOpenToken, src: this.node.attrs.src });
     });
     this.render();
     mediaViews.add(this);

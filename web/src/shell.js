@@ -971,8 +971,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       case "media": {
         const id = msg.itemId;
         try {
-          if (id == null || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken) throw new Error("the destination changed");
-          const sessionPath = view.session.path;
+          if (id == null) throw new Error("the destination changed");
+          const sessionPath = view?.session?.id === msg.sessionId && view?.session?.openToken === msg.openToken ? view.session.path : null;
           const saved = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
           const canInsert = await call("capture_can_insert", { ack: saved.ack }).catch(() => false);
           if (!canInsert || selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken || !snag()?.mediaSaved(msg.reqId, saved.rel)) {
@@ -995,7 +995,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         await call("open_link", { id: selected, href: msg.href }).catch(() => {});
         break;
       case "annotate":
-        if (editorItem != null && msg.src && !msg.src.includes("://")) await call("open_markup", { id: editorItem, rel: msg.src }).catch(() => {});
+        if (msg.itemId != null && msg.src && !msg.src.includes("://")) {
+          await call("open_markup", { sessionId: msg.sessionId, openToken: msg.openToken, id: msg.itemId, rel: msg.src }).catch(() => {});
+        }
         break;
     }
   }

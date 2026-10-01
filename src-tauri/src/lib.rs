@@ -10,6 +10,7 @@ use base64::Engine;
 use chrono::Utc;
 use serde::Serialize;
 use snagbook_core::{Config, ConfigStore, FolderIdentity, HandoffStyle, Paths, Session, Shortcuts, SnagError, Summary, Template};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
@@ -25,6 +26,14 @@ pub struct App {
     pub selected: Option<i64>,
     /// Global shortcuts that could not be registered, in words.
     pub shortcut_errors: Vec<String>,
+    origins: HashMap<String, SessionOrigin>,
+}
+
+#[derive(Clone)]
+struct SessionOrigin {
+    session: PathBuf,
+    session_identity: FolderIdentity,
+    session_id: String,
 }
 
 type St<'a> = State<'a, Mutex<App>>;
@@ -94,7 +103,9 @@ impl App {
     fn load() -> App {
         let store = ConfigStore::new(&config_path());
         let session = store.config.last_session.as_deref().and_then(|p| Session::open(p, &store.config.header).ok());
-        App { store, session, selected: None, shortcut_errors: vec![] }
+        let mut app = App { store, session, selected: None, shortcut_errors: vec![], origins: HashMap::new() };
+        app.remember_current();
+        app
     }
 
     /// The whole state the page draws from. A session whose folder was deleted from outside
@@ -138,8 +149,22 @@ impl App {
 
     fn use_session(&mut self, s: Session) {
         let path = s.display_path.clone();
+        self.origins.insert(s.open_token.clone(), SessionOrigin {
+            session: s.dir.clone(),
+            session_identity: s.folder_identity(),
+            session_id: s.manifest.id.clone(),
+        });
         self.session = Some(s);
         let _ = self.store.update(|c| c.last_session = Some(path));
+    }
+
+    fn remember_current(&mut self) {
+        let Some(s) = self.session.as_ref() else { return };
+        self.origins.entry(s.open_token.clone()).or_insert_with(|| SessionOrigin {
+            session: s.dir.clone(),
+            session_identity: s.folder_identity(),
+            session_id: s.manifest.id.clone(),
+        });
     }
 }
 
@@ -318,10 +343,13 @@ fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String,
     let data = base64::engine::general_purpose::STANDARD.decode(base64.as_bytes()).map_err(|e| e.to_string())?;
     let (prefix, ext) = media::name_for(&mime, &name);
     let mut a = st.lock().unwrap();
-    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
-        return Err("The open session changed before the picture could be saved.".into());
+    a.remember_current();
+    let origin = a.origins.get(&open_token).cloned().filter(|o| o.session_id == session_id).ok_or("The picture's source session is no longer known.")?;
+    let mut source = Session::open(&origin.session.to_string_lossy(), &a.store.config.header).map_err(err)?;
+    if !source.matches_folder_identity(&origin.session_identity) || source.manifest.id != session_id {
+        return Err("The picture's source session is gone or was replaced.".into());
     }
-    let s = a.session()?;
+    let s = &mut source;
     let rel = s.save_media(id, &data, prefix, &ext).map_err(err)?;
     let ack = uuid::Uuid::new_v4().to_string();
     let kind = if mime.starts_with("video/") { "video" } else { "image" };
@@ -1009,7 +1037,12 @@ fn open_markup_now(app: &AppHandle, id: i64, rel: String, is_new: bool, auto: Op
 
 /// Mark up a picture already in a note (double-click it).
 #[tauri::command]
-async fn open_markup(app: AppHandle, id: i64, rel: String) -> Res<()> {
+async fn open_markup(app: AppHandle, st: St<'_>, session_id: String, open_token: String, id: i64, rel: String) -> Res<()> {
+    let a = st.lock().unwrap();
+    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
+        return Err("The picture's session is no longer open.".into());
+    }
+    drop(a);
     open_markup_now(&app, id, rel, false, None)
 }
 
