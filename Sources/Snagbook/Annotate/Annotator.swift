@@ -276,7 +276,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
             self.pictureBinding = pictureBinding
             self.origBinding = nextOrigBinding
             self.marksBinding = nextMarksBinding
-            try await model.annotationFinished(session: live, item: item, itemIdentity: itemIdentity, relative: relative, isNew: isNew, kept: true)
+            try await model.annotationFinished(session: live, item: item, itemIdentity: itemIdentity, pictureBinding: pictureBinding, relative: relative, isNew: isNew, kept: true)
             finished = true
             try? live.writeReadme()
             close()
@@ -341,9 +341,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
             let live = try liveSession()
             let fileURL = try live.itemURL(item).appendingPathComponent(relative)
             let pictureBinding = try Session.rebind(self.pictureBinding, to: fileURL)
-            _ = try Session.read(pictureBinding)
             self.pictureBinding = pictureBinding
-            try await model.annotationFinished(session: live, item: item, itemIdentity: itemIdentity, relative: relative, isNew: true, kept: true)
+            try await model.annotationFinished(session: live, item: item, itemIdentity: itemIdentity, pictureBinding: pictureBinding, relative: relative, isNew: true, kept: true)
         }
         finished = true
     }

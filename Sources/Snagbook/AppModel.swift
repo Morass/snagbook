@@ -519,7 +519,7 @@ final class AppModel: ObservableObject {
     }
 
     /// The mark-up window finished with a picture.
-    func annotationFinished(session sourceSession: Session, item id: Int, itemIdentity: String, relative: String, isNew: Bool, kept: Bool) async throws {
+    func annotationFinished(session sourceSession: Session, item id: Int, itemIdentity: String, pictureBinding: Session.FileBinding, relative: String, isNew: Bool, kept: Bool) async throws {
         let isOpen = session?.isSameSession(as: sourceSession) == true
         if isNew {
             if kept {
@@ -529,6 +529,8 @@ final class AppModel: ObservableObject {
                     }
                 }
                 let live = try sourceSession.reopenedMatchingItem(id, identity: itemIdentity, fallbackHeader: config.header)
+                let rebound = try Session.rebind(pictureBinding, to: live.itemURL(id).appendingPathComponent(relative))
+                _ = try Session.read(rebound)
                 try appendMedia("![](\(relative))", to: live, item: id)
                 if adoptIfOpen(live), selectedID == id {
                     editor.open(item: id, markdown: try live.readNote(id), focus: false)
