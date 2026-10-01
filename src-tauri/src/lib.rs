@@ -573,6 +573,16 @@ impl Busy {
     }
 }
 
+fn release_capture(busy: &Busy, session_path: &Path, item: i64, session: Option<&mut Session>) {
+    if busy.release(session_path, item) {
+        if let Some(s) = session {
+            if let Ok(title) = s.item(item).map(|r| r.title.clone()) {
+                let _ = s.retitle_item(item, &title, true);
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct Recorder(Mutex<Option<Active>>);
 
@@ -810,11 +820,12 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
         append_capture_link(&mut s, pending.item, &pending.link)?;
     }
     app.state::<CaptureAcks>().0.lock().unwrap().remove(&ack);
-    if app.state::<Busy>().release(&pending.session, pending.item) {
-        if let Some(s) = a.session.as_mut().filter(|s| s.manifest.id == pending.session_id) {
-            if let Ok(title) = s.item(pending.item).map(|r| r.title.clone()) { s.retitle_item(pending.item, &title, true).map_err(err)?; }
-        }
-    }
+    release_capture(
+        app.state::<Busy>().inner(),
+        &pending.session,
+        pending.item,
+        a.session.as_mut().filter(|s| s.manifest.id == pending.session_id),
+    );
     Ok(())
 }
 
@@ -1395,5 +1406,22 @@ mod tests {
         assert!(busy.release(session, 1));
         assert!(!busy.has_session(session));
         assert!(!busy.release(session, 1), "an unknown writer is never reported as the last one");
+    }
+
+    #[test]
+    fn a_deferred_folder_rename_failure_does_not_turn_a_filed_capture_into_a_retry() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        let id = s.add_item(None, Utc::now()).unwrap().id;
+        s.retitle_item(id, "Renamed", false).unwrap();
+        let item_dir = s.item_dir(id).unwrap();
+        std::fs::remove_dir_all(item_dir).unwrap();
+        let busy = Busy::default();
+        busy.add(&s.dir, id);
+        let session_path = s.dir.clone();
+
+        release_capture(&busy, &session_path, id, Some(&mut s));
+
+        assert!(!busy.has(Some(&session_path), id));
     }
 }

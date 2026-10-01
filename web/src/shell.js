@@ -72,12 +72,14 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   let view = null;
   let selected = null;
+  let editorItem = null;
   let shownPath = null;
   let shownOpenToken = null;
   let editorReady = false;
   let titleFor = null;
   let statusTimer = null;
   const pendingCaptureAcks = new Map();
+  const pendingOriginAcks = new Set();
   const s = { view: () => view, selected: () => selected };
 
   const platform = () => view?.platform || "linux";
@@ -111,15 +113,20 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const ed = snag();
     if (!ed || !editorReady) return;
     const p = ed.takePending?.();
+    let ackItem = editorItem;
     if (p && p.id != null) {
-      const writing = call("write_note", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id: p.id, markdown: p.markdown });
+      ackItem = p.id;
       try {
-        await writing;
-        await acknowledgeCapture(p.id);
+        await call("write_note", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id: p.id, markdown: p.markdown });
       } catch (e) {
         ed.restorePending?.(p);
         if (required) throw e;
+        return;
       }
+    }
+    if (ackItem != null) {
+      try { await acknowledgeCapture(ackItem); }
+      catch (e) { if (required) throw e; }
     }
   }
 
@@ -145,13 +152,15 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function apply(v, { select } = {}) {
     const newSession = v.session?.path !== shownPath || v.session?.openToken !== shownOpenToken;
+    const oldIds = items().map((i) => i.id);
     view = v;
     if (v.closed) flash(`The session folder ${v.closed} was deleted, so it was closed.`, "error");
     if (newSession) {
       shownPath = v.session?.path ?? null;
       shownOpenToken = v.session?.openToken ?? null;
       selected = null;
-      for (const it of items()) snag()?.forget?.(it.id);
+      for (const id of oldIds) snag()?.forget?.(id);
+      editorItem = null;
       epoch++;
     }
     const ids = items().map((i) => i.id);
@@ -160,6 +169,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     render();
     if (want !== selected || newSession) await show(want, { focus: false });
     else renderTitle();
+    await retryOriginCaptures();
   }
 
   async function refresh() {
@@ -175,7 +185,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     // Only the latest call opens its note: a slow read of an item left behind must not
     // open over the one chosen after it (its typing would go into the wrong note).
     const turn = ++showing;
-    await flush();
+    try { await flush({ required: true }); }
+    catch { return; }
     if (titleFor != null && titleFor !== id) await renameSelected().catch(() => {});
     if (turn !== showing) return;
     selected = id;
@@ -183,7 +194,10 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     renderList();
     renderTitle();
     const ed = snag();
-    if (id == null || !ed || !editorReady) return;
+    if (id == null || !ed || !editorReady) {
+      editorItem = null;
+      return;
+    }
     let md = "";
     try {
       md = await call("read_note", { id });
@@ -192,6 +206,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     }
     if (turn !== showing || selected !== id) return;
     ed.open({ id, markdown: md, base: mediaBase(platform(), id, epoch), sessionId: view.session.id, openToken: view.session.openToken, focus });
+    editorItem = id;
   }
 
   async function newItem() {
@@ -340,10 +355,24 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function leaveCaptureInOrigin(ack) {
     if (ack) {
-      try { await call("capture_filed", { ack, inserted: false }); }
-      catch { return false; }
+      try {
+        await call("capture_filed", { ack, inserted: false });
+        pendingOriginAcks.delete(ack);
+      } catch {
+        pendingOriginAcks.add(ack);
+        return false;
+      }
     }
     return true;
+  }
+
+  async function retryOriginCaptures() {
+    for (const ack of [...pendingOriginAcks]) {
+      try {
+        await call("capture_filed", { ack, inserted: false });
+        pendingOriginAcks.delete(ack);
+      } catch {}
+    }
   }
 
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
@@ -364,8 +393,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       if (filed) flash("The capture stayed in its original session.");
       return;
     }
-    if (selected !== id) await show(id, { focus: false });
-    if (!stillHere() || selected !== id) {
+    if (selected !== id || editorItem !== id) await show(id, { focus: false });
+    if (!stillHere() || selected !== id || editorItem !== id) {
       const filed = await leaveCaptureInOrigin(ack);
       if (filed) flash("The capture stayed in its original session.");
       return;
@@ -411,7 +440,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function copyHandoff() {
-    await flush();
+    try { await flush({ required: true }); }
+    catch { return null; }
     const text = await call("copy_handoff");
     flash("✓ Hand-off copied: " + text.split("\n")[0].slice(0, 80), "ok");
     return text;

@@ -22,6 +22,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let releaseCaptureCheck;
   let releaseMedia;
   let releaseWrite;
+  let captureFilingBlocked = failCaptureFiling;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
   const mediaGate = slowMedia ? new Promise((resolve) => { releaseMedia = resolve; }) : null;
   const writeGate = slowWrite ? new Promise((resolve) => { releaseWrite = resolve; }) : null;
@@ -99,7 +100,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     update_config: ({ patch }) => (Object.assign(config, patch), view()),
     start_screenshot: () => null,
     capture_filed: () => {
-      if (failCaptureFiling) throw "The capture could not be filed.";
+      if (captureFilingBlocked) throw "The capture could not be filed.";
       return null;
     },
     capture_can_insert: async () => {
@@ -124,6 +125,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseCaptureCheck: () => releaseCaptureCheck?.(),
     releaseMedia: () => releaseMedia?.(),
     releaseWrite: () => releaseWrite?.(),
+    allowCaptureFiling: () => { captureFilingBlocked = false; },
     slowNoteFor(id) {
       slowNote = id;
     },
@@ -463,6 +465,18 @@ test("a failed autosave prevents switching to a new session", async () => {
   assert.deepEqual(pending, { type: "changed", id: 1, markdown: "not lost" });
 });
 
+test("a failed autosave prevents switching items", async () => {
+  const t = await setup({ session: true });
+  await t.shell.newItem();
+  let pending = { id: 2, markdown: "not lost" };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.editor.restorePending = (p) => { pending = p; };
+  t.app.notes.set = () => { throw new Error("disk full"); };
+  await t.shell.show(1);
+  assert.equal(t.shell.selected(), 2);
+  assert.deepEqual(pending, { id: 2, markdown: "not lost" });
+});
+
 test("every finished recording kind acknowledges only after filing", async () => {
   const t = await setup({ session: true });
   t.editor.insertMedia = () => {};
@@ -507,6 +521,21 @@ test("two captures waiting on one failed note save are both acknowledged", async
   ]);
 });
 
+test("an acknowledgement failure does not make a saved note dirty again", async () => {
+  const t = await setup({ session: true, failCaptureFiling: true });
+  let pending = null;
+  t.editor.insertMedia = ({ src }) => { pending = { id: 1, markdown: src }; };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.editor.restorePending = (p) => { pending = p; };
+  const sessionId = t.shell.view().session.id;
+  await t.shell.onCaptured({ sessionId, ack: "retry-ack", id: 1, rel: "media/shot-001.png" });
+  pending = { id: 1, markdown: "saved text" };
+  await t.shell.flush();
+  await t.shell.flush();
+  assert.equal(t.app.calls.filter(([c]) => c === "write_note").length, 2);
+  assert.equal(pending, null);
+});
+
 test("a delayed capture stays in its source session", async () => {
   const t = await setup({ session: true, captureCanInsert: false });
   let inserted = 0;
@@ -520,6 +549,13 @@ test("a failed origin acknowledgement does not strand the capture event handler"
   const t = await setup({ session: true, captureCanInsert: false, failCaptureFiling: true });
   await assert.doesNotReject(t.shell.onCaptured({ sessionId: "another-session", ack: "failed-ack", id: 1, rel: "media/clip-001.mp4", kind: "video" }));
   assert.match(t.$("status-text").textContent, /could not be filed/);
+  t.app.allowCaptureFiling();
+  await t.shell.refresh();
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [
+    { ack: "failed-ack", inserted: false },
+    { ack: "failed-ack", inserted: false },
+    { ack: "failed-ack", inserted: false },
+  ]);
 });
 
 test("a note write overtaken by a session switch files the capture in its origin", async () => {
@@ -567,6 +603,26 @@ test("a capture note read cannot cross a session switch", async () => {
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "read-ack", inserted: false }]);
 });
 
+test("a capture waits until its target item is actually open in the editor", async () => {
+  const t = await setup({ session: true });
+  await t.shell.newItem();
+  let current = null;
+  let pending = null;
+  const open = t.editor.open;
+  t.editor.open = (v) => { current = v.id; open(v); };
+  t.editor.insertMedia = ({ src }) => { pending = { id: current, markdown: src }; };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  await t.shell.show(1);
+  t.app.holdNoteFor(2);
+  const switching = t.shell.show(2);
+  await t.settle();
+  const sessionId = t.shell.view().session.id;
+  await t.shell.onCaptured({ sessionId, ack: "item-two", id: 2, rel: "media/shot-001.png" });
+  t.app.releaseNote();
+  await switching;
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "write_note").at(-1)[1].id, 2);
+});
+
 test("an open session deleted from outside is closed with a message", async () => {
   const t = await setup({ session: true });
   const path = t.shell.view().session.path;
@@ -576,6 +632,18 @@ test("an open session deleted from outside is closed with a message", async () =
   assert.equal(t.shell.view().session, null);
   assert.equal(t.$("empty").hidden, false);
   assert.match(t.$("status-text").textContent, new RegExp(`${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} was deleted`));
+});
+
+test("unsaved editor state from an externally deleted session cannot block starting again", async () => {
+  const t = await setup({ session: true });
+  let pending = { id: 1, markdown: "unsaved" };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.editor.restorePending = (p) => { pending = p; };
+  t.editor.forget = (id) => { if (pending?.id === id) pending = null; };
+  t.app.deleteFromOutside();
+  await t.shell.refresh();
+  await t.shell.newSession();
+  assert.notEqual(t.shell.view().session, null);
 });
 
 test("template buttons name their shortcut and Ctrl+1 types the first", async () => {
@@ -740,6 +808,17 @@ test("Copy Hand-off says so in green, and the next plain message is not green", 
   assert.ok($("status-text").classList.contains("ok"), "the copied line is green");
   await shell.newSession();
   assert.ok(!$("status-text").classList.contains("ok"), "an ordinary message is not green");
+});
+
+test("Copy Hand-off is not copied when the pending note cannot be saved", async () => {
+  const t = await setup({ session: true });
+  let pending = { id: 1, markdown: "not on disk" };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.editor.restorePending = (p) => { pending = p; };
+  t.app.notes.set = () => { throw new Error("disk full"); };
+  await t.shell.copyHandoff();
+  assert.equal(t.app.calls.some(([c]) => c === "copy_handoff"), false);
+  assert.deepEqual(pending, { id: 1, markdown: "not on disk" });
 });
 
 test("item 1 of another session, or a new item 1 after a delete, gets new picture addresses", async () => {
