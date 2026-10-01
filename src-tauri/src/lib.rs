@@ -9,7 +9,7 @@ mod record;
 use base64::Engine;
 use chrono::Utc;
 use serde::Serialize;
-use snagbook_core::{Config, ConfigStore, HandoffStyle, Paths, Session, Shortcuts, SnagError, Summary, Template};
+use snagbook_core::{Config, ConfigStore, FolderIdentity, HandoffStyle, Paths, Session, Shortcuts, SnagError, Summary, Template};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
@@ -48,6 +48,7 @@ pub struct ItemView {
 #[serde(rename_all = "camelCase")]
 pub struct SessionView {
     id: String,
+    open_token: String,
     path: String,
     title: String,
     /// This session's own header, or None when it follows the global one.
@@ -106,6 +107,7 @@ impl App {
         }
         let session = self.session.as_ref().map(|s| SessionView {
             id: s.manifest.id.clone(),
+            open_token: s.open_token.clone(),
             path: s.display_path.clone(),
             title: s.title(),
             header: s.manifest.header.clone(),
@@ -215,7 +217,12 @@ fn delete_item(app: AppHandle, window: tauri::Window, st: St, id: i64, permanent
     }
     let mut a = st.lock().unwrap();
     if app.state::<Busy>().has(a.session.as_ref().map(|s| s.dir.as_path()), id) {
-        return Err("A recording is still being saved into this item. Delete it once the recording is in its note.".into());
+        return Err("A capture is still being saved into this item. Delete it once the capture is in its note.".into());
+    }
+    if app.state::<Markup>().0.lock().unwrap().as_ref().is_some_and(|p| {
+        a.session.as_ref().is_some_and(|s| p.session_id == s.manifest.id && s.matches_folder_identity(&p.session_identity)) && p.id == id
+    }) {
+        return Err("Finish or close the picture being marked up before deleting this item.".into());
     }
     let s = a.session()?;
     let r = if permanently {
@@ -236,24 +243,24 @@ fn delete_item(app: AppHandle, window: tauri::Window, st: St, id: i64, permanent
 }
 
 #[tauri::command]
-fn delete_session(app: AppHandle, window: tauri::Window, st: St, session_id: String, permanently: bool) -> Res<View> {
+fn delete_session(app: AppHandle, window: tauri::Window, st: St, session_id: String, open_token: String, permanently: bool) -> Res<View> {
     if window.label() != "main" {
         return Err("Sessions are deleted from the notebook window.".into());
     }
     let mut a = st.lock().unwrap();
     let current = a.session.as_ref().ok_or_else(|| "No session is open.".to_string())?;
-    if current.manifest.id != session_id {
+    if current.manifest.id != session_id || current.open_token != open_token {
         return Err("The open session changed, so it was not deleted.".into());
     }
     let dir = current.dir.clone();
     if app.state::<Busy>().has_session(&dir) {
-        return Err("A recording is still being saved into this session. Delete it once the recording is in its note.".into());
+        return Err("A capture is still being saved into this session. Delete it once the capture is in its note.".into());
     }
     if app.state::<Markup>().0.lock().unwrap().as_ref().is_some_and(|p| p.session_id == session_id) {
         return Err("Finish or close the picture being marked up before deleting this session.".into());
     }
     let r = if permanently {
-        if !app.state::<SessionDeleteFallback>().0.lock().unwrap().remove(&session_id) {
+        if !app.state::<SessionDeleteFallback>().0.lock().unwrap().remove(&(session_id.clone(), open_token.clone())) {
             return Err("Permanent deletion is available only after moving this session to the Trash has failed.".into());
         }
         a.session.as_ref().unwrap().delete(|p| std::fs::remove_dir_all(p).map_err(Into::into))
@@ -266,7 +273,7 @@ fn delete_session(app: AppHandle, window: tauri::Window, st: St, session_id: Str
             })
         });
         if r == Err(SnagError::NoTrash) {
-            app.state::<SessionDeleteFallback>().0.lock().unwrap().insert(session_id);
+            app.state::<SessionDeleteFallback>().0.lock().unwrap().insert((session_id, open_token));
             return Err(format!("NOTRASH:{reason}"));
         }
         r
@@ -300,10 +307,13 @@ fn write_note(st: St, session_id: String, id: i64, markdown: String) -> Res<bool
 
 /// Bytes pasted or dropped into the editor. Returns the note-relative path.
 #[tauri::command]
-fn save_media(st: St, id: i64, base64: String, mime: String, name: String) -> Res<String> {
+fn save_media(st: St, session_id: String, id: i64, base64: String, mime: String, name: String) -> Res<String> {
     let data = base64::engine::general_purpose::STANDARD.decode(base64.as_bytes()).map_err(|e| e.to_string())?;
     let (prefix, ext) = media::name_for(&mime, &name);
     let mut a = st.lock().unwrap();
+    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id) {
+        return Err("The open session changed before the picture could be saved.".into());
+    }
     a.session()?.save_media(id, &data, prefix, &ext).map_err(err)
 }
 
@@ -476,6 +486,7 @@ struct Active {
     /// The session the recording goes into (its folder), which may no longer be the open one
     /// when it ends.
     session: PathBuf,
+    session_identity: FolderIdentity,
     session_name: String,
     stem: String,
     started_ms: u64,
@@ -493,11 +504,12 @@ struct Finishing(std::sync::atomic::AtomicUsize);
 struct Busy(Mutex<std::collections::HashMap<(PathBuf, i64), usize>>);
 
 #[derive(Default)]
-struct SessionDeleteFallback(Mutex<std::collections::HashSet<String>>);
+struct SessionDeleteFallback(Mutex<std::collections::HashSet<(String, String)>>);
 
 #[derive(Clone)]
 struct PendingCapture {
     session: PathBuf,
+    session_identity: FolderIdentity,
     session_id: String,
     item: i64,
     link: String,
@@ -565,7 +577,10 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
     let id = target_item(&mut a)?;
     let cap = a.store.config.capture.clone();
     let path = hold_clip_name(a.session()?, id)?;
-    let (session, session_name) = { let s = a.session()?; (s.dir.clone(), s.display_path.clone()) };
+    let (session, session_identity, session_name) = {
+        let s = a.session()?;
+        (s.dir.clone(), s.folder_identity(), s.display_path.clone())
+    };
     app.state::<Busy>().add(&session, id);
     drop(a);
     let dir = path.parent().ok_or("no media folder")?.to_path_buf();
@@ -596,7 +611,7 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
     });
     let started_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let ack = uuid::Uuid::new_v4().to_string();
-    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, session, session_name, stem, started_ms, ack });
+    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, session, session_identity, session_name, stem, started_ms, ack });
     open_recbar(app, rect, monitor);
     let _ = app.emit_to("main", "recording", true);
     Ok(())
@@ -661,12 +676,12 @@ fn stop_recording_now(app: &AppHandle) {
     app.state::<Finishing>().0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let app = app.clone();
     std::thread::spawn(move || {
-        let Active { handle, id, session, session_name, stem, ack, .. } = active;
+        let Active { handle, id, session, session_identity, session_name, stem, ack, .. } = active;
         let result = handle.join().unwrap_or_else(|_| Err("the recording stopped unexpectedly".into()));
         // Another recording may have started meanwhile: the button shows whichever is true now.
         let now = app.state::<Recorder>().0.lock().unwrap().is_some();
         let _ = app.emit_to("main", "recording", now);
-        finish_recording(&app, Done { id, session, session_name, stem, ack }, result);
+        finish_recording(&app, Done { id, session, session_identity, session_name, stem, ack }, result);
         let left = app.state::<Finishing>().0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
         // The windows were closed while it finished: quit now, as closing them would have.
         if left == 0 && app.webview_windows().is_empty() {
@@ -679,6 +694,7 @@ fn stop_recording_now(app: &AppHandle) {
 struct Done {
     id: i64,
     session: PathBuf,
+    session_identity: FolderIdentity,
     session_name: String,
     stem: String,
     ack: String,
@@ -692,11 +708,13 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     });
     let st = app.state::<Mutex<App>>();
     let mut a = st.lock().unwrap();
-    let open_here = a.session.as_ref().is_some_and(|s| s.dir == active.session);
+    let open_here = a.session.as_ref().is_some_and(|s| s.dir == active.session && s.matches_folder_identity(&active.session_identity));
     // The session the recording went into: the open one, or its folder opened again.
     let mut other = None;
     if !open_here {
-        other = Session::open(&active.session.to_string_lossy(), &a.store.config.header).ok();
+        other = Session::open(&active.session.to_string_lossy(), &a.store.config.header)
+            .ok()
+            .filter(|s| s.matches_folder_identity(&active.session_identity));
     }
     let s = if open_here { a.session.as_mut() } else { other.as_mut() };
     let Some(s) = s.filter(|s| s.item(active.id).is_ok()) else {
@@ -722,7 +740,7 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     // Shown in the notebook: its editor adds the link where the note is being written.
     if open_here && app.get_webview_window("main").is_some() {
         app.state::<CaptureAcks>().0.lock().unwrap().insert(active.ack.clone(), PendingCapture {
-            session: active.session.clone(), session_id: s.manifest.id.clone(), item: active.id, link,
+            session: active.session.clone(), session_identity: active.session_identity.clone(), session_id: s.manifest.id.clone(), item: active.id, link,
         });
         let session_id = s.manifest.id.clone();
         drop(a);
@@ -752,9 +770,14 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
     let pending = app.state::<CaptureAcks>().0.lock().unwrap().get(&ack).cloned().ok_or("That recording is not waiting to be filed.")?;
     let mut a = st.lock().unwrap();
     if inserted {
-        if a.session.as_ref().is_none_or(|s| s.manifest.id != pending.session_id) { return Err("The recording's session is no longer open.".into()); }
+        if a.session.as_ref().is_none_or(|s| s.manifest.id != pending.session_id || !s.matches_folder_identity(&pending.session_identity)) {
+            return Err("The recording's session is no longer open.".into());
+        }
     } else {
         let mut s = Session::open(&pending.session.to_string_lossy(), &a.store.config.header).map_err(err)?;
+        if !s.matches_folder_identity(&pending.session_identity) || s.manifest.id != pending.session_id {
+            return Err("The recording's session is gone or was replaced.".into());
+        }
         let body = s.read_note(pending.item).unwrap_or_default();
         let body = body.trim_end();
         s.write_note(pending.item, &if body.is_empty() { format!("{}\n", pending.link) } else { format!("{body}\n\n{}\n", pending.link) }).map_err(err)?;
@@ -799,22 +822,31 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
     let id = target_item(&mut a)?;
     let rel = a.session()?.save_media(id, &png, "shot", "png").map_err(err)?;
     let annotate = a.store.config.capture.annotate_screenshots;
-    let session_id = a.session.as_ref().map(|s| s.manifest.id.clone());
-    let session_dir = a.session.as_ref().map(|s| s.dir.clone());
+    let ack = uuid::Uuid::new_v4().to_string();
+    let s = a.session.as_ref().ok_or("No session is open.")?;
+    let session_id = s.manifest.id.clone();
+    let session_dir = s.dir.clone();
+    let session_identity = s.folder_identity();
+    let marked = if annotate {
+        Some(pending_markup(&mut a, id, rel.clone(), true, Some(ack.clone()), app.state::<SelftestNext>().0.lock().unwrap().take())?)
+    } else {
+        None
+    };
+    app.state::<Busy>().add(&session_dir, id);
+    app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), PendingCapture {
+        session: session_dir,
+        session_identity,
+        session_id: session_id.clone(),
+        item: id,
+        link: format!("![]({rel})"),
+    });
     drop(a);
-    if annotate {
-        let auto = app.state::<SelftestNext>().0.lock().unwrap().take();
-        if open_markup_now(&app, id, rel.clone(), true, auto).is_ok() {
+    if let Some(p) = marked {
+        if show_markup(&app, p).is_ok() {
             return Ok(());
         }
     }
-    let ack = uuid::Uuid::new_v4().to_string();
-    if let (Some(source_id), Some(session)) = (session_id.clone(), session_dir) {
-        app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), PendingCapture {
-            session, session_id: source_id, item: id, link: format!("![]({rel})"),
-        });
-    }
-    capture::announce(&app, capture::Captured { session_id, ack: Some(ack), id, rel, kind: "image".into(), label: String::new(), problem: None });
+    capture::announce(&app, capture::Captured { session_id: Some(session_id), ack: Some(ack), id, rel, kind: "image".into(), label: String::new(), problem: None });
     Ok(())
 }
 
@@ -831,6 +863,7 @@ struct SelftestNext(Mutex<Option<String>>);
 #[serde(rename_all = "camelCase")]
 struct Marked {
     session_id: String,
+    ack: Option<String>,
     id: i64,
     rel: String,
     is_new: bool,
@@ -842,21 +875,30 @@ struct Marked {
 
 fn markup_files(p: &markup::Pending) -> Res<markup::Files> {
     let session = Session::open(&p.session_dir.to_string_lossy(), "").map_err(err)?;
-    if session.manifest.id != p.session_id {
+    if session.manifest.id != p.session_id || !session.matches_folder_identity(&p.session_identity) {
         return Err("The session containing this picture is gone or was replaced.".into());
     }
     markup::files(&p.item_dir, &p.rel).ok_or_else(|| format!("{} is not a picture in this item.", p.rel))
 }
 
-fn open_markup_now(app: &AppHandle, id: i64, rel: String, is_new: bool, auto: Option<String>) -> Res<()> {
-    let (session_id, session_dir, item_dir, fallback_header) = {
-        let st = app.state::<Mutex<App>>();
-        let mut a = st.lock().unwrap();
-        let fallback_header = a.store.config.header.clone();
-        let s = a.session()?;
-        (s.manifest.id.clone(), s.dir.clone(), s.item_dir(id).map_err(err)?, fallback_header)
-    };
-    let p = markup::Pending { id, rel, is_new, session_id, session_dir, item_dir, fallback_header, auto };
+fn pending_markup(a: &mut App, id: i64, rel: String, is_new: bool, ack: Option<String>, auto: Option<String>) -> Res<markup::Pending> {
+    let fallback_header = a.store.config.header.clone();
+    let s = a.session()?;
+    Ok(markup::Pending {
+        id,
+        rel,
+        is_new,
+        session_id: s.manifest.id.clone(),
+        session_dir: s.dir.clone(),
+        session_identity: s.folder_identity(),
+        item_dir: s.item_dir(id).map_err(err)?,
+        fallback_header,
+        ack,
+        auto,
+    })
+}
+
+fn show_markup(app: &AppHandle, p: markup::Pending) -> Res<()> {
     markup_files(&p)?;
     if let Some(w) = app.get_webview_window(markup::WINDOW) {
         let _ = w.set_focus();
@@ -875,6 +917,15 @@ fn open_markup_now(app: &AppHandle, id: i64, rel: String, is_new: bool, auto: Op
     Ok(())
 }
 
+fn open_markup_now(app: &AppHandle, id: i64, rel: String, is_new: bool, auto: Option<String>) -> Res<()> {
+    let p = {
+        let st = app.state::<Mutex<App>>();
+        let mut a = st.lock().unwrap();
+        pending_markup(&mut a, id, rel, is_new, None, auto)?
+    };
+    show_markup(app, p)
+}
+
 /// Mark up a picture already in a note (double-click it).
 #[tauri::command]
 async fn open_markup(app: AppHandle, id: i64, rel: String) -> Res<()> {
@@ -889,22 +940,45 @@ fn markup_info(app: AppHandle) -> Res<markup::Info> {
 }
 
 fn finish_markup(app: &AppHandle, kept: bool, changed: bool) {
-    let Some(p) = app.state::<Markup>().0.lock().unwrap().take() else { return };
+    let st = app.state::<Mutex<App>>();
+    let mut a = st.lock().unwrap();
+    let markup_state = app.state::<Markup>();
+    let mut markup = markup_state.0.lock().unwrap();
+    let Some(p) = markup.as_ref().cloned() else { return };
+
+    if p.is_new && !kept {
+        if let Some(ack) = &p.ack {
+            app.state::<CaptureAcks>().0.lock().unwrap().remove(ack);
+            app.state::<Busy>().release(&p.session_dir, p.id);
+        }
+    }
+
+    let open_here = a.session.as_ref().is_some_and(|s| {
+        s.manifest.id == p.session_id && s.matches_folder_identity(&p.session_identity)
+    });
+    let mut other = None;
+    if !open_here {
+        other = Session::open(&p.session_dir.to_string_lossy(), &p.fallback_header)
+            .ok()
+            .filter(|s| s.manifest.id == p.session_id && s.matches_folder_identity(&p.session_identity));
+    }
+    let source = if open_here { a.session.as_mut() } else { other.as_mut() };
+    if let Some(s) = source {
+        let _ = s.write_readme();
+        if !app.state::<Busy>().has(Some(&s.dir), p.id) {
+            if let Ok(title) = s.item(p.id).map(|r| r.title.clone()) {
+                let _ = s.retitle_item(p.id, &title, true);
+            }
+        }
+    }
+
+    markup.take();
+    drop(markup);
+    drop(a);
     if let Some(w) = app.get_webview_window(markup::WINDOW) {
         let _ = w.destroy();
     }
-    if let Ok(mut s) = Session::open(&p.session_dir.to_string_lossy(), &p.fallback_header) {
-        let still_open = app.state::<Mutex<App>>().lock().unwrap().session.as_ref().is_some_and(|open| open.manifest.id == p.session_id);
-        if p.is_new && kept && !still_open {
-            let body = s.read_note(p.id).unwrap_or_default();
-            let link = format!("![]({})", p.rel);
-            let body = body.trim_end();
-            let _ = s.write_note(p.id, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") });
-        }
-        let _ = s.write_readme();
-        if let Ok(title) = s.item(p.id).map(|r| r.title.clone()) { let _ = s.retitle_item(p.id, &title, true); }
-    }
-    let _ = app.emit_to("main", "marked", Marked { session_id: p.session_id, id: p.id, rel: p.rel, is_new: p.is_new, kept, changed });
+    let _ = app.emit_to("main", "marked", Marked { session_id: p.session_id, ack: p.ack, id: p.id, rel: p.rel, is_new: p.is_new, kept, changed });
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.set_focus();

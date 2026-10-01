@@ -231,7 +231,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       v = await call("delete_item", { id, permanently: false });
     } catch (e) {
       const msg = String(e?.message || e);
-      if (!msg.startsWith("NOTRASH:")) return;
+      if (!msg.startsWith("NOTRASH:")) return flash(msg, "error");
       const again = await confirm(
         `Delete “${it.title}” permanently?`,
         `It could not go to the Trash (${msg.slice(8) || "this drive has none"}), so its folder, with the note and all its pictures and videos, would be deleted for good.`,
@@ -250,6 +250,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     if (!view?.session) return;
     const title = view.session.title;
     const sessionId = view.session.id;
+    const openToken = view.session.openToken;
     const ok = await confirm(`Delete “${title}”?`, "The whole session folder, with every item, note, picture and video, goes to the Trash.", "Move to Trash");
     if (!ok) return;
     try {
@@ -257,20 +258,20 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     } catch {
       return;
     }
-    if (view?.session?.id !== sessionId) return flash("The open session changed, so it was not deleted.", "error");
+    if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return flash("The open session changed, so it was not deleted.", "error");
     let v;
     try {
-      v = await call("delete_session", { sessionId, permanently: false });
+      v = await call("delete_session", { sessionId, openToken, permanently: false });
     } catch (e) {
       const msg = String(e?.message || e);
-      if (!msg.startsWith("NOTRASH:")) return;
+      if (!msg.startsWith("NOTRASH:")) return flash(msg, "error");
       const again = await confirm(
         `Delete “${title}” permanently?`,
         `It could not go to the Trash (${msg.slice(8) || "this drive has none"}), so the whole session folder would be deleted for good.`,
         "Delete Permanently"
       );
       if (!again) return;
-      v = await call("delete_session", { sessionId, permanently: true });
+      v = await call("delete_session", { sessionId, openToken, permanently: true });
     }
     await apply(v);
   }
@@ -335,12 +336,13 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   /// The mark-up window finished: a new screenshot goes into the note (or is gone); an
   /// existing picture is redrawn.
-  async function onMarked({ sessionId, id, rel, isNew, kept, changed }) {
+  async function onMarked({ sessionId, ack, id, rel, isNew, kept, changed }) {
     if (sessionId && view?.session?.id !== sessionId) {
+      if (isNew && kept && ack) await call("capture_filed", { ack, inserted: false });
       await refresh();
       return flash("The marked picture stayed in its original session.");
     }
-    if (isNew && kept) return onCaptured({ id, rel, kind: "image" });
+    if (isNew && kept) return onCaptured({ sessionId, ack, id, rel, kind: "image" });
     if (isNew) {
       await refresh();
       return flash("Screenshot discarded");
@@ -511,7 +513,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function sessionMenu() {
     const b = $("session-button").getBoundingClientRect();
-    // Read the folder each time: sessions deleted from outside are gone from the list.
+    // Reconcile the open session and read the folder each time the menu is unrolled.
+    await apply(await call("state"), { select: selected });
     const recent = (await call("list_sessions").catch(() => [])).slice(0, 12);
     const cur = view?.session?.path;
     const entries = [];
@@ -730,6 +733,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
             await call("write_note", { sessionId: view?.session?.id, id: msg.id, markdown: msg.markdown });
             await acknowledgeCapture(msg.id);
           } catch {
+            snag()?.restorePending?.(msg);
             await refresh();
           }
         }
@@ -738,7 +742,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         const id = selected;
         try {
           if (id == null) throw new Error("no item");
-          const rel = await call("save_media", { id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
+          const rel = await call("save_media", { sessionId: view?.session?.id, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
           snag()?.mediaSaved(msg.reqId, rel);
           await refresh();
         } catch {

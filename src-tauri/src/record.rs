@@ -725,18 +725,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stop = Stop::new();
         let s2 = stop.clone();
+        let (slow_tx, slow_rx) = std::sync::mpsc::sync_channel(0);
+        std::thread::spawn(move || {
+            slow_rx.recv().unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            s2.request();
+        });
         let mut n = 0;
         let grab = move || {
             n += 1;
-            if n == 20 {
-                s2.request();
+            if n == 2 {
+                slow_tx.send(()).unwrap();
                 std::thread::sleep(Duration::from_millis(3000)); // the grab after Stop is slow
             }
             Ok(RgbaImage::from_pixel(64, 48, Rgba([1, 2, 3, 255])))
         };
         let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), finish_timeout: Duration::from_secs(60) };
         let f = run(grab, plan, stop).unwrap();
-        assert!(f.duration < 2.0, "the clip runs {}s past a Stop at about 1.3s", f.duration);
+        assert!(f.duration < 1.0, "the clip runs {}s past a Stop during a slow grab", f.duration);
     }
 
     #[cfg(unix)]

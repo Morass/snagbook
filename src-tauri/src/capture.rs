@@ -40,6 +40,7 @@ pub struct Rect {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Captured {
     pub session_id: Option<String>,
     pub ack: Option<String>,

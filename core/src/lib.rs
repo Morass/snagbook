@@ -26,6 +26,6 @@ pub use frontmatter::FrontMatter;
 pub use header::render_header;
 pub use naming::Naming;
 pub use paths::Paths;
-pub use session::{ItemRecord, Manifest, MediaCount, Session, Summary};
+pub use session::{FolderIdentity, ItemRecord, Manifest, MediaCount, Session, Summary};
 
 pub type Result<T> = std::result::Result<T, SnagError>;

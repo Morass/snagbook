@@ -5,6 +5,7 @@
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use snagbook_core::FolderIdentity;
 
 pub const WINDOW: &str = "annotate";
 
@@ -15,8 +16,10 @@ pub struct Pending {
     pub is_new: bool,
     pub session_id: String,
     pub session_dir: PathBuf,
+    pub session_identity: FolderIdentity,
     pub item_dir: PathBuf,
     pub fallback_header: String,
+    pub ack: Option<String>,
     /// The self-test's script for the page ("ring", "count", "clear", "skip").
     pub auto: Option<String>,
 }

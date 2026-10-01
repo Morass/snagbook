@@ -14,6 +14,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
   let slowNote = null;
   let session = null;
   let nextHash = 1;
+  let nextOpen = 1;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
   const list = [...sessions];
   const view = (extra = {}) => ({ config, session: session && JSON.parse(JSON.stringify(session)), loadError: null, closed: null, platform, ...extra });
@@ -25,7 +26,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
     list_sessions: () => list.map((s) => ({ ...s })),
     new_session: () => {
       const path = `~/Snagbook/${String(nextHash++).padStart(8, "0")}_25-09-2026`;
-      session = { id: `id-${nextHash}`, path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
+      session = { id: `id-${nextHash}`, openToken: `open-${nextOpen++}`, path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
       list.unshift({ path, title: session.title, items: 1, created: "2026-09-25T16:00:00Z" });
       handlers.add_item({});
       return view();
@@ -33,7 +34,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
     open_session: ({ path }) => {
       const s = list.find((x) => x.path === path);
       if (!s) throw "not a session";
-      session = { id: `id-${path}`, path, title: s.title, header: null, items: [{ id: 1, title: "Old", folder: "01-old", images: 0, videos: 0 }], nextItem: 2 };
+      session = { id: s.id || `id-${path}`, openToken: `open-${nextOpen++}`, path, title: s.title, header: null, items: [{ id: 1, title: "Old", folder: "01-old", images: 0, videos: 0 }], nextItem: 2 };
       return view();
     },
     add_item: ({ title }) => {
@@ -53,8 +54,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
       settle();
       return view();
     },
-    delete_session: ({ sessionId, permanently }) => {
-      if (session?.id !== sessionId) throw "The open session changed.";
+    delete_session: ({ sessionId, openToken, permanently }) => {
+      if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
       if (!permanently && !trash) throw "NOTRASH:the drive has no Trash";
       const at = list.findIndex((s) => s.path === session.path);
       if (at >= 0) list.splice(at, 1);
@@ -289,6 +290,14 @@ test("the session menu reads the folder each time it opens", async () => {
   assert.equal(t.app.calls.filter(([c]) => c === "list_sessions").length >= 3, true);
 });
 
+test("opening the session menu closes a current session deleted from outside", async () => {
+  const t = await setup({ session: true });
+  t.app.deleteFromOutside();
+  await t.shell.sessionMenu();
+  assert.equal(t.shell.view().session, null);
+  assert.doesNotMatch(t.$("menu").textContent, /Delete This Session/);
+});
+
 test("a session can be deleted from its menu", async () => {
   const t = await setup({ session: true });
   await t.shell.sessionMenu();
@@ -337,6 +346,17 @@ test("a session switch during confirmation cannot delete the replacement", async
   assert.equal(t.app.calls.some(([c]) => c === "delete_session"), false);
 });
 
+test("a copied session with the same manifest id cannot reuse a deletion confirmation", async () => {
+  const t = await setup({ session: true, sessions: [{ id: "id-2", path: "~/Snagbook/copy", title: "Copy", items: 1, created: "2026-09-25T16:00:00Z" }] });
+  const deleting = t.shell.deleteSession();
+  await t.settle();
+  await t.shell.openSession("~/Snagbook/copy");
+  await t.answer(true);
+  await deleting;
+  assert.equal(t.shell.view().session.title, "Copy");
+  assert.equal(t.app.calls.some(([c]) => c === "delete_session"), false);
+});
+
 test("a failed pending-note write prevents session deletion", async () => {
   const t = await setup({ session: true });
   let pending = { id: 1, markdown: "unsaved" };
@@ -361,12 +381,39 @@ test("a failed pending-note write prevents session deletion", async () => {
   assert.equal(t.shell.view().session, null);
 });
 
+test("a failed ordinary autosave is restored for the next required flush", async () => {
+  const t = await setup({ session: true });
+  let pending = null;
+  t.editor.restorePending = (p) => { pending = p; };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  const set = t.app.notes.set.bind(t.app.notes);
+  let full = true;
+  t.app.notes.set = (id, markdown) => { if (full) throw new Error("disk full"); return set(id, markdown); };
+  await t.shell.onEditorMessage({ type: "changed", id: 1, markdown: "not lost" });
+  assert.deepEqual(pending, { type: "changed", id: 1, markdown: "not lost" });
+
+  full = false;
+  const deleting = t.shell.deleteSession();
+  await t.answer(true);
+  await deleting;
+  assert.equal(t.app.notes.get(1), "not lost");
+  assert.equal(t.shell.view().session, null);
+});
+
 test("every finished recording kind acknowledges only after filing", async () => {
   const t = await setup({ session: true });
   t.editor.insertMedia = () => {};
   const sessionId = t.shell.view().session.id;
   await t.shell.onCaptured({ sessionId, ack: "contact-ack", id: 1, rel: "media/clip-001-contact.jpg", kind: "image" });
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "contact-ack", inserted: true }]);
+});
+
+test("a marked screenshot carries its native filing acknowledgement", async () => {
+  const t = await setup({ session: true });
+  t.editor.insertMedia = () => {};
+  const sessionId = t.shell.view().session.id;
+  await t.shell.onMarked({ sessionId, ack: "marked-ack", id: 1, rel: "media/shot-001.png", isNew: true, kept: true, changed: true });
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "marked-ack", inserted: true }]);
 });
 
 test("a delayed capture stays in its source session", async () => {
@@ -403,6 +450,7 @@ test("pasted bytes are saved into the shown item and handed back to the editor",
   await t.shell.onEditorMessage({ type: "media", reqId: 7, base64: "AA==", mime: "image/png", name: "" });
   // The fake app has no save_media: the editor is told it failed, and nothing breaks.
   assert.deepEqual(t.editor.log.pop(), ["failed", 7]);
+  assert.equal(t.app.calls.find(([c]) => c === "save_media")[1].sessionId, t.shell.view().session.id);
 });
 
 test("switching sessions forgets the old items in the editor", async () => {

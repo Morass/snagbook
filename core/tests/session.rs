@@ -289,6 +289,7 @@ fn a_replacement_at_the_same_path_is_neither_written_nor_deleted() {
     fs::rename(&replacement.dir, &original.dir).unwrap();
 
     assert!(!original.matches_disk_identity());
+    assert!(!original.exists(), "the app closes a session whose folder was replaced");
     assert!(original.add_item(None, Utc::now()).is_err());
     assert!(original.delete(|p| fs::remove_dir_all(p).map_err(Into::into)).is_err());
     assert_eq!(Session::open(&original.dir.to_string_lossy(), "").unwrap().manifest.id, "replacement");
@@ -304,6 +305,7 @@ fn a_copied_replacement_with_the_same_manifest_id_is_rejected() {
     copy_dir(&old, &original.dir);
 
     assert!(!original.matches_disk_identity());
+    assert!(!original.exists(), "a same-id copy is still a different open folder");
     assert!(original.write_note(1, "must not reach the copy").is_err());
     assert!(original.delete(|p| fs::remove_dir_all(p).map_err(Into::into)).is_err());
     assert!(original.dir.join("session.json").is_file());

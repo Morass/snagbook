@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub const MANIFEST_NAME: &str = "session.json";
 pub const README_NAME: &str = "README.md";
@@ -96,13 +97,17 @@ fn names_in(dir: &Path) -> Vec<String> {
 }
 
 /// One test session: a folder holding session.json, README.md and a folder per item.
+#[derive(Clone)]
+pub struct FolderIdentity(Arc<same_file::Handle>);
+
 pub struct Session {
     pub dir: PathBuf,
     /// How to spell the folder for people and other programs ("~/…").
     pub display_path: String,
     pub manifest: Manifest,
+    pub open_token: String,
     fallback_header: String,
-    folder_identity: same_file::Handle,
+    folder_identity: FolderIdentity,
 }
 
 impl Session {
@@ -124,10 +129,11 @@ impl Session {
         let dir = fs::canonicalize(dir)?;
         let display = format!("{}/{}", root.trim_end_matches('/'), name);
         let s = Session {
-            folder_identity: same_file::Handle::from_path(&dir)?,
+            folder_identity: FolderIdentity(Arc::new(same_file::Handle::from_path(&dir)?)),
             dir,
             display_path: Paths::abbreviate(&Paths::expand(&display)),
             manifest: Manifest { created: trunc(now), format: 1, header: None, id: hash.into(), items: vec![], next_item: 1, title: None },
+            open_token: uuid::Uuid::new_v4().to_string(),
             fallback_header: config.header.clone(),
         };
         s.save_new()?;
@@ -144,8 +150,8 @@ impl Session {
         let dir = fs::canonicalize(&requested).map_err(|_| SnagError::NotASession(path.into()))?;
         let data = fs::read(dir.join(MANIFEST_NAME)).map_err(|_| SnagError::NotASession(path.into()))?;
         let manifest: Manifest = serde_json::from_slice(&data).map_err(|e| SnagError::Io(format!("{path}: {e}")))?;
-        let folder_identity = same_file::Handle::from_path(&dir)?;
-        let mut s = Session { dir, display_path: Paths::abbreviate(&Paths::expand(path)), manifest, fallback_header: fallback_header.into(), folder_identity };
+        let folder_identity = FolderIdentity(Arc::new(same_file::Handle::from_path(&dir)?));
+        let mut s = Session { dir, display_path: Paths::abbreviate(&Paths::expand(path)), manifest, open_token: uuid::Uuid::new_v4().to_string(), fallback_header: fallback_header.into(), folder_identity };
         s.repair();
         Ok(s)
     }
@@ -175,15 +181,23 @@ impl Session {
 
     /// Whether the folder is still there (it can be deleted from outside at any time).
     pub fn exists(&self) -> bool {
-        self.dir.is_dir() && self.dir.join(MANIFEST_NAME).is_file()
+        self.dir.is_dir() && self.dir.join(MANIFEST_NAME).is_file() && self.matches_folder_identity(&self.folder_identity)
     }
 
     pub fn matches_disk_identity(&self) -> bool {
-        let same_folder = same_file::Handle::from_path(&self.dir).ok().is_some_and(|current| current == self.folder_identity);
+        let same_folder = self.matches_folder_identity(&self.folder_identity);
         same_folder && fs::read(self.dir.join(MANIFEST_NAME))
             .ok()
             .and_then(|data| serde_json::from_slice::<Manifest>(&data).ok())
             .is_some_and(|disk| disk.id == self.manifest.id)
+    }
+
+    pub fn folder_identity(&self) -> FolderIdentity {
+        self.folder_identity.clone()
+    }
+
+    pub fn matches_folder_identity(&self, expected: &FolderIdentity) -> bool {
+        same_file::Handle::from_path(&self.dir).ok().is_some_and(|current| current == *expected.0)
     }
 
     /// Folders may have been renamed or removed by hand: drop records whose folder is gone,
