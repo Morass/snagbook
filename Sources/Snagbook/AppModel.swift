@@ -513,17 +513,20 @@ final class AppModel: ObservableObject {
     }
 
     /// The mark-up window finished with a picture.
-    func annotationFinished(session sourceSession: Session, item id: Int, relative: String, isNew: Bool, kept: Bool) async throws {
-        let isOpen = adoptIfOpen(sourceSession)
+    func annotationFinished(session sourceSession: Session, item id: Int, itemIdentity: String, relative: String, isNew: Bool, kept: Bool) async throws {
+        let isOpen = session?.isSameSession(as: sourceSession) == true
         if isNew {
             if kept {
                 if isOpen, selectedID == id {
-                    guard await editor.insertMediaAndFlush(kind: "image", src: relative, label: "") else {
+                    guard await editor.flush() else {
                         throw VideoErrorLike("the note link could not be saved")
                     }
+                }
+                let live = try sourceSession.reopenedMatchingItem(id, identity: itemIdentity, fallbackHeader: config.header)
+                try appendMedia("![](\(relative))", to: live, item: id)
+                if adoptIfOpen(live), selectedID == id {
+                    editor.open(item: id, markdown: try live.readNote(id), focus: false)
                     flash("Screenshot saved to \(itemTitle(id))")
-                } else {
-                    try appendMedia("![](\(relative))", to: sourceSession, item: id)
                 }
             }
         } else if isOpen {

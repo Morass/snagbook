@@ -690,14 +690,6 @@ export const api = {
     return true;
   },
 
-  hasMedia(src) {
-    let found = false;
-    view.state.doc.descendants((node) => {
-      if (node.attrs?.src === src) found = true;
-    });
-    return found;
-  },
-
   /** The app saved a pasted or dropped file; put it where the user dropped it. */
   mediaSaved(reqId, src) {
     const p = pending.get(reqId);

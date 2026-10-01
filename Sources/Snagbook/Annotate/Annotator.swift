@@ -276,7 +276,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
             self.pictureBinding = pictureBinding
             self.origBinding = nextOrigBinding
             self.marksBinding = nextMarksBinding
-            try await model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
+            try await model.annotationFinished(session: live, item: item, itemIdentity: itemIdentity, relative: relative, isNew: isNew, kept: true)
             finished = true
             try? live.writeReadme()
             close()
@@ -337,7 +337,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     }
 
     private func keepUnchanged() async throws {
-        if isNew { try await model.annotationFinished(session: try liveSession(), item: item, relative: relative, isNew: true, kept: true) }
+        if isNew { try await model.annotationFinished(session: try liveSession(), item: item, itemIdentity: itemIdentity, relative: relative, isNew: true, kept: true) }
         finished = true
     }
 
