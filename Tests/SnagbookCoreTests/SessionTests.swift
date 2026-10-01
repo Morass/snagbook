@@ -445,6 +445,24 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(s.manifest.items.map(\.id), [item.id])
     }
 
+    func testItemPathCannotEscapeItsSession() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        let victim = s.url.deletingLastPathComponent().appendingPathComponent("victim")
+        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: false)
+        try Data("keep me".utf8).write(to: victim.appendingPathComponent(Session.noteName))
+        let manifestURL = s.url.appendingPathComponent(Session.manifestName)
+        var json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any])
+        var items = try XCTUnwrap(json["items"] as? [[String: Any]])
+        items[0]["folder"] = "../victim"
+        json["items"] = items
+        try JSONSerialization.data(withJSONObject: json).write(to: manifestURL)
+        let corrupt = try Session.open(s.url.path)
+
+        try corrupt.deleteItem(item.id)
+        XCTAssertEqual(try String(contentsOf: victim.appendingPathComponent(Session.noteName), encoding: .utf8), "keep me")
+    }
+
     func testRenameDoesNotModifyAReplacementItemFolder() throws {
         let s = try Session.create(root: root, config: Config())
         let item = try s.addItem()

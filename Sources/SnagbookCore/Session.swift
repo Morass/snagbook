@@ -150,7 +150,10 @@ public final class Session {
     func repair() {
         var changed = false
         let before = manifest.items.count
-        manifest.items.removeAll { !fm.fileExists(atPath: url.appendingPathComponent($0.folder).path) }
+        manifest.items.removeAll { record in
+            guard let folder = try? itemFolderURL(record.folder) else { return true }
+            return !fm.fileExists(atPath: folder.path)
+        }
         changed = changed || manifest.items.count != before
         let known = Set(manifest.items.map(\.folder))
         let names = ((try? fm.contentsOfDirectory(atPath: url.path)) ?? []).sorted()
@@ -188,7 +191,15 @@ public final class Session {
         return it
     }
 
-    public func itemURL(_ id: Int) throws -> URL { url.appendingPathComponent(try item(id).folder, isDirectory: true) }
+    private func itemFolderURL(_ folder: String) throws -> URL {
+        let path = folder as NSString
+        guard !folder.isEmpty, folder != ".", folder != "..", !path.isAbsolutePath, path.pathComponents.count == 1 else {
+            throw SnagError.badName(folder)
+        }
+        return url.appendingPathComponent(folder, isDirectory: true)
+    }
+
+    public func itemURL(_ id: Int) throws -> URL { try itemFolderURL(item(id).folder) }
     public func noteURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.noteName) }
     public func mediaURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.mediaName, isDirectory: true) }
     public func itemIdentity(_ id: Int) throws -> String? {
@@ -243,19 +254,19 @@ public final class Session {
         guard let i = manifest.items.firstIndex(where: { $0.id == id }) else { throw SnagError.noSuchItem(id) }
         var rec = manifest.items[i]
         if rec.title == t { return rec }
-        let text = try String(contentsOf: url.appendingPathComponent(rec.folder).appendingPathComponent(Self.noteName), encoding: .utf8)
+        let oldFolder = try itemFolderURL(rec.folder)
+        let text = try String(contentsOf: oldFolder.appendingPathComponent(Self.noteName), encoding: .utf8)
         let newFolder = Naming.itemFolder(id: id, title: t)
         if newFolder != rec.folder {
-            let from = url.appendingPathComponent(rec.folder)
             let to = url.appendingPathComponent(newFolder)
             if !fm.fileExists(atPath: to.path) {
-                try fm.moveItem(at: from, to: to)
+                try fm.moveItem(at: oldFolder, to: to)
                 rec.folder = newFolder
             }
         }
         rec.title = t
         manifest.items[i] = rec
-        let noteURL = url.appendingPathComponent(rec.folder).appendingPathComponent(Self.noteName)
+        let noteURL = try itemFolderURL(rec.folder).appendingPathComponent(Self.noteName)
         let parts = FrontMatter.split(text)
         try Data(FrontMatter.join(raw: parts.raw, updates: [("title", t)], body: parts.body).utf8).write(to: noteURL, options: .atomic)
         try save()
