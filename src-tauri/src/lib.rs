@@ -337,7 +337,7 @@ fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String,
     app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), pending);
     Ok(capture::Captured {
         session_id: Some(session_id),
-        session_path: s.dir.to_string_lossy().into_owned(),
+        session_path: s.display_path.clone(),
         ack: Some(ack),
         id,
         rel,
@@ -786,7 +786,7 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
         drop(a);
         capture::announce(app, capture::Captured {
             session_id: Some(session_id),
-            session_path: active.session.to_string_lossy().into_owned(),
+            session_path: active.session_name.clone(),
             ack: Some(active.ack),
             id: active.id,
             rel,
@@ -890,6 +890,7 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
     let ack = uuid::Uuid::new_v4().to_string();
     let s = a.session.as_ref().ok_or("No session is open.")?;
     let session_id = s.manifest.id.clone();
+    let session_path = s.display_path.clone();
     let session_dir = s.dir.clone();
     let session_identity = s.folder_identity();
     let marked = if annotate {
@@ -898,7 +899,6 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
         None
     };
     app.state::<Busy>().add(&session_dir, id);
-    let session_path = session_dir.to_string_lossy().into_owned();
     app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), PendingCapture {
         session: session_dir,
         session_identity,
@@ -965,6 +965,7 @@ fn pending_markup(a: &mut App, id: i64, rel: String, is_new: bool, ack: Option<S
         rel,
         is_new,
         session_id: s.manifest.id.clone(),
+        session_path: s.display_path.clone(),
         session_dir: s.dir.clone(),
         session_identity: s.folder_identity(),
         item_dir: s.item_dir(id).map_err(err)?,
@@ -1067,7 +1068,7 @@ fn finish_markup(app: &AppHandle, kept: bool, changed: bool) {
     }
     let _ = app.emit_to("main", "marked", Marked {
         session_id: p.session_id,
-        session_path: p.session_dir.to_string_lossy().into_owned(),
+        session_path: p.session_path,
         ack: event_ack,
         id: p.id,
         rel: p.rel,

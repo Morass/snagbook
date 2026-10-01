@@ -15,6 +15,7 @@ pub struct Pending {
     pub rel: String,
     pub is_new: bool,
     pub session_id: String,
+    pub session_path: String,
     pub session_dir: PathBuf,
     pub session_identity: FolderIdentity,
     pub item_dir: PathBuf,

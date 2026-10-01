@@ -155,7 +155,7 @@ export async function runSelfTest(shell, invoke) {
     await invoke("finish_screenshot", { rect: { x: 0.1, y: 0.1, w: 0.25, h: 0.2 } });
     check(await until(() => invoke("markup_open")), "a new screenshot opens in the mark-up window");
     let m = await Promise.race([marked, sleep(10000).then(() => null)]);
-    check(m?.id === 1 && m?.rel === "media/shot-001.png" && m.isNew && m.kept, "Done saves it into item 1 as media/shot-001.png: " + JSON.stringify(m));
+    check(m?.id === 1 && m?.rel === "media/shot-001.png" && m.isNew && m.kept && m.sessionPath === shell.view().session.path, "Done saves it into item 1 as media/shot-001.png with its session path: " + JSON.stringify(m));
     check(await until(async () => !(await invoke("capture_open")) && !(await invoke("markup_open"))), "the screenshot and mark-up windows close");
     await shell.flush();
     check((await invoke("read_note", { id: 1 })).includes("media/shot-001.png"), "the screenshot is in the note");
@@ -278,7 +278,7 @@ export async function runSelfTest(shell, invoke) {
     lines.push(`note the recording was finished ${((Date.now() - stoppedAt) / 1000).toFixed(1)}s after Stop`);
     const video = await invoke("ffmpeg_found");
     const wantRel = video ? "media/clip-001.mp4" : "media/clip-001-contact.jpg";
-    if (video) check(rec?.kind === "video" && rec?.rel === wantRel, "the recording is saved as " + wantRel + ": " + JSON.stringify(rec));
+    if (video) check(rec?.kind === "video" && rec?.rel === wantRel && rec?.sessionPath === shell.view().session.path, "the recording is saved as " + wantRel + " with its session path: " + JSON.stringify(rec));
     else check(rec?.kind === "image" && rec?.rel === wantRel && /ffmpeg/.test(rec?.problem || ""), "without ffmpeg the contact sheet is saved, and the reason is given: " + JSON.stringify(rec));
     check((await invoke("read_note", { id: 1 })).includes(wantRel), "the recording is in the note");
     check(await until(() => $("rec").textContent === "Record"), "the button says Record again");
