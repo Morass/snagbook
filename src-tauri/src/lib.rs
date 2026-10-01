@@ -310,16 +310,40 @@ fn write_note(st: St, session_id: String, open_token: String, id: i64, markdown:
     a.session()?.write_note(id, &markdown).map_err(err)
 }
 
-/// Bytes pasted or dropped into the editor. Returns the note-relative path.
+/// Bytes pasted or dropped into the editor. The acknowledgement keeps the item protected
+/// until the page has durably linked the file, or asks native code to append the link.
 #[tauri::command]
-fn save_media(st: St, session_id: String, open_token: String, id: i64, base64: String, mime: String, name: String) -> Res<String> {
+fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String, open_token: String, id: i64, base64: String, mime: String, name: String) -> Res<capture::Captured> {
+    if window.label() != "main" { return Err("Pictures and videos are pasted into the notebook window.".into()); }
     let data = base64::engine::general_purpose::STANDARD.decode(base64.as_bytes()).map_err(|e| e.to_string())?;
     let (prefix, ext) = media::name_for(&mime, &name);
     let mut a = st.lock().unwrap();
     if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
         return Err("The open session changed before the picture could be saved.".into());
     }
-    a.session()?.save_media(id, &data, prefix, &ext).map_err(err)
+    let s = a.session()?;
+    let rel = s.save_media(id, &data, prefix, &ext).map_err(err)?;
+    let ack = uuid::Uuid::new_v4().to_string();
+    let kind = if mime.starts_with("video/") { "video" } else { "image" };
+    let link = if kind == "video" { format!("[Video]({rel})") } else { format!("![]({rel})") };
+    let pending = PendingCapture {
+        session: s.dir.clone(),
+        session_identity: s.folder_identity(),
+        session_id: s.manifest.id.clone(),
+        item: id,
+        link,
+    };
+    app.state::<Busy>().add(&pending.session, id);
+    app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), pending);
+    Ok(capture::Captured {
+        session_id: Some(session_id),
+        ack: Some(ack),
+        id,
+        rel,
+        kind: kind.into(),
+        label: String::new(),
+        problem: None,
+    })
 }
 
 #[tauri::command]
@@ -771,17 +795,17 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
 
 #[tauri::command]
 fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, inserted: bool) -> Res<()> {
-    if window.label() != "main" { return Err("Recordings are filed from the notebook window.".into()); }
-    let pending = app.state::<CaptureAcks>().0.lock().unwrap().get(&ack).cloned().ok_or("That recording is not waiting to be filed.")?;
+    if window.label() != "main" { return Err("Captures are filed from the notebook window.".into()); }
+    let pending = app.state::<CaptureAcks>().0.lock().unwrap().get(&ack).cloned().ok_or("That capture is not waiting to be filed.")?;
     let mut a = st.lock().unwrap();
     if inserted {
         if a.session.as_ref().is_none_or(|s| s.manifest.id != pending.session_id || !s.matches_folder_identity(&pending.session_identity)) {
-            return Err("The recording's session is no longer open.".into());
+            return Err("The capture's session is no longer open.".into());
         }
     } else {
         let mut s = Session::open(&pending.session.to_string_lossy(), &a.store.config.header).map_err(err)?;
         if !s.matches_folder_identity(&pending.session_identity) || s.manifest.id != pending.session_id {
-            return Err("The recording's session is gone or was replaced.".into());
+            return Err("The capture's session is gone or was replaced.".into());
         }
         append_capture_link(&mut s, pending.item, &pending.link)?;
     }

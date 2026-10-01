@@ -73,6 +73,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let view = null;
   let selected = null;
   let shownPath = null;
+  let shownOpenToken = null;
   let editorReady = false;
   let titleFor = null;
   let statusTimer = null;
@@ -143,11 +144,12 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function apply(v, { select } = {}) {
-    const newSession = v.session?.path !== shownPath;
+    const newSession = v.session?.path !== shownPath || v.session?.openToken !== shownOpenToken;
     view = v;
     if (v.closed) flash(`The session folder ${v.closed} was deleted, so it was closed.`, "error");
     if (newSession) {
       shownPath = v.session?.path ?? null;
+      shownOpenToken = v.session?.openToken ?? null;
       selected = null;
       for (const it of items()) snag()?.forget?.(it.id);
       epoch++;
@@ -338,8 +340,10 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
   async function onCaptured({ sessionId, ack, id, rel, kind = "image", label = "", problem = null }) {
+    const expectedSessionId = view?.session?.id;
+    const expectedOpenToken = view?.session?.openToken;
     const belongsHere = ack ? await call("capture_can_insert", { ack }).catch(() => false) : sessionId === view?.session?.id;
-    if (!belongsHere) {
+    if (!belongsHere || view?.session?.id !== expectedSessionId || view?.session?.openToken !== expectedOpenToken) {
       if (ack) await call("capture_filed", { ack, inserted: false });
       await refresh();
       return flash("The capture stayed in its original session.");
@@ -773,8 +777,17 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         const id = msg.itemId;
         try {
           if (id == null || selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken) throw new Error("the destination changed");
-          const rel = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
-          snag()?.mediaSaved(msg.reqId, rel);
+          const saved = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
+          if (selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken || !snag()?.mediaSaved(msg.reqId, saved.rel)) {
+            snag()?.mediaFailed(msg.reqId);
+            await call("capture_filed", { ack: saved.ack, inserted: false });
+            await refresh();
+            break;
+          }
+          const pending = pendingCaptureAcks.get(id) || [];
+          pending.push({ ack: saved.ack, sessionId: msg.sessionId, openToken: msg.openToken });
+          pendingCaptureAcks.set(id, pending);
+          await flush({ required: true });
           await refresh();
         } catch {
           snag()?.mediaFailed(msg.reqId);

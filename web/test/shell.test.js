@@ -8,13 +8,18 @@ import { rectFraction, formatElapsed } from "../src/rect.js";
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
 /// An in-memory stand-in for the app's commands.
-function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true } = {}) {
+function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowMedia = false } = {}) {
   const calls = [];
   const notes = new Map();
   let slowNote = null;
   let session = null;
   let nextHash = 1;
   let nextOpen = 1;
+  let nextMedia = 1;
+  let releaseCaptureCheck;
+  let releaseMedia;
+  const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
+  const mediaGate = slowMedia ? new Promise((resolve) => { releaseMedia = resolve; }) : null;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
   const list = [...sessions];
   const view = (extra = {}) => ({ config, session: session && JSON.parse(JSON.stringify(session)), loadError: null, closed: null, platform, ...extra });
@@ -27,7 +32,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     new_session: () => {
       const path = `~/Snagbook/${String(nextHash++).padStart(8, "0")}_25-09-2026`;
       session = { id: `id-${nextHash}`, openToken: `open-${nextOpen++}`, path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
-      list.unshift({ path, title: session.title, items: 1, created: "2026-09-25T16:00:00Z" });
+      list.unshift({ id: session.id, path, title: session.title, items: 1, created: "2026-09-25T16:00:00Z" });
       handlers.add_item({});
       return view();
     },
@@ -81,7 +86,15 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     update_config: ({ patch }) => (Object.assign(config, patch), view()),
     start_screenshot: () => null,
     capture_filed: () => null,
-    capture_can_insert: () => captureCanInsert,
+    capture_can_insert: async () => {
+      if (captureGate) await captureGate;
+      return captureCanInsert;
+    },
+    save_media: async ({ sessionId, openToken, id, mime }) => {
+      if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
+      if (mediaGate) await mediaGate;
+      return { sessionId, ack: `media-${nextMedia++}`, id, rel: mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png", kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
+    },
   };
   const invoke = async (cmd, args = {}) => {
     calls.push([cmd, args]);
@@ -92,6 +105,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     invoke,
     calls,
     notes,
+    releaseCaptureCheck: () => releaseCaptureCheck?.(),
+    releaseMedia: () => releaseMedia?.(),
     slowNoteFor(id) {
       slowNote = id;
     },
@@ -479,6 +494,20 @@ test("a delayed capture stays in its source session", async () => {
   assert.equal(inserted, 0);
 });
 
+test("a capture validation response cannot cross a session switch", async () => {
+  const t = await setup({ session: true, slowCaptureCheck: true });
+  let inserted = 0;
+  t.editor.insertMedia = () => { inserted++; };
+  const source = t.shell.view().session;
+  const filing = t.shell.onCaptured({ sessionId: source.id, ack: "slow-ack", id: 1, rel: "media/clip-001.mp4", kind: "video" });
+  await t.settle();
+  await t.shell.newSession();
+  t.app.releaseCaptureCheck();
+  await filing;
+  assert.equal(inserted, 0);
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "slow-ack", inserted: false }]);
+});
+
 test("an open session deleted from outside is closed with a message", async () => {
   const t = await setup({ session: true });
   const path = t.shell.view().session.path;
@@ -501,12 +530,15 @@ test("template buttons name their shortcut and Ctrl+1 types the first", async ()
 
 test("pasted bytes are saved into the shown item and handed back to the editor", async () => {
   const t = await setup({ session: true });
+  let pending = null;
+  t.editor.mediaSaved = (reqId, rel) => (pending = { id: 1, markdown: rel }, t.editor.log.push(["saved", reqId, rel]), true);
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
   const { id: sessionId, openToken } = t.shell.view().session;
   await t.shell.onEditorMessage({ type: "media", reqId: 7, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
-  // The fake app has no save_media: the editor is told it failed, and nothing breaks.
-  assert.deepEqual(t.editor.log.pop(), ["failed", 7]);
+  assert.deepEqual(t.editor.log.pop(), ["saved", 7, "media/image-001.png"]);
   assert.equal(t.app.calls.find(([c]) => c === "save_media")[1].sessionId, t.shell.view().session.id);
   assert.equal(t.app.calls.find(([c]) => c === "save_media")[1].openToken, t.shell.view().session.openToken);
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "media-1", inserted: true }]);
 });
 
 test("pasted bytes arriving after a session switch are refused", async () => {
@@ -517,6 +549,29 @@ test("pasted bytes arriving after a session switch are refused", async () => {
   await t.shell.onEditorMessage({ type: "media", reqId: 8, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
   assert.equal(t.app.calls.slice(oldCalls).some(([c]) => c === "save_media"), false);
   assert.deepEqual(t.editor.log.pop(), ["failed", 8]);
+});
+
+test("a pasted-media save response cannot cross an item switch", async () => {
+  const t = await setup({ session: true, slowMedia: true });
+  const { id: sessionId, openToken } = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 9, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  await t.shell.newItem();
+  t.app.releaseMedia();
+  await saving;
+  assert.equal(t.editor.log.some((entry) => entry[0] === "saved" && entry[1] === 9), false);
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "media-1", inserted: false }]);
+});
+
+test("reopening the same folder refreshes the editor's session token", async () => {
+  const t = await setup({ session: true });
+  const path = t.shell.view().session.path;
+  const before = t.shell.view().session.openToken;
+  await t.shell.openSession(path);
+  const after = t.shell.view().session.openToken;
+  const opened = t.editor.log.filter((entry) => entry[0] === "open").at(-1)[1];
+  assert.notEqual(after, before);
+  assert.equal(opened.openToken, after);
 });
 
 test("switching sessions forgets the old items in the editor", async () => {

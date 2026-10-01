@@ -71,10 +71,12 @@ export async function runSelfTest(shell, invoke) {
     check((await invoke("read_note", { id: 1 })).includes("**Bug:**"), "the Bug template inserts **Bug:**");
 
     // 5. a pasted picture is saved and shown through the snagbook: scheme
-    const rel1 = await invoke("save_media", { ...sessionArgs(1), base64: RED, mime: "image/png", name: "" });
+    const saved1 = await invoke("save_media", { ...sessionArgs(1), base64: RED, mime: "image/png", name: "" });
+    const rel1 = saved1.rel;
     check(rel1 === "media/image-001.png", "a pasted picture is saved as media/image-001.png: " + rel1);
     snag().insertMedia({ kind: "image", src: rel1 });
     await shell.flush();
+    await invoke("capture_filed", { ack: saved1.ack, inserted: true });
     await shell.refresh();
     const img = () => document.querySelector("#editor .img-wrap img");
     check(await imageLoaded(img()), "the picture loads in the editor");
@@ -86,9 +88,11 @@ export async function runSelfTest(shell, invoke) {
     // 6. New Item, and two items whose pictures share a name show their own
     $("new-item").click();
     check(await until(() => items().length === 2 && shell.selected() === 2), "New Item adds item 2 and selects it");
-    const rel2 = await invoke("save_media", { ...sessionArgs(2), base64: GREEN, mime: "image/png", name: "" });
+    const saved2 = await invoke("save_media", { ...sessionArgs(2), base64: GREEN, mime: "image/png", name: "" });
+    const rel2 = saved2.rel;
     snag().insertMedia({ kind: "image", src: rel2 });
     await shell.flush();
+    await invoke("capture_filed", { ack: saved2.ack, inserted: true });
     check(rel2 === rel1, "both items call their picture " + rel2);
     await shell.show(1);
     check(await until(() => /\/item\/1\.\d+\//.test(img()?.src || "")), "item 1 shows its own picture after switching back");
@@ -251,7 +255,9 @@ export async function runSelfTest(shell, invoke) {
     await invoke("finish_screenshot", { rect: { x: 0.2, y: 0.2, w: 0.4, h: 0.3 } });
     check(await until(async () => (await invoke("recording_started")) != null), "recording starts when the area is chosen");
     check(await until(() => $("rec").textContent === "Stop"), "the Record button turns into Stop");
-    const pasted = await invoke("save_media", { ...sessionArgs(1), base64: "AAAA", mime: "video/mp4", name: "" });
+    const pastedMedia = await invoke("save_media", { ...sessionArgs(1), base64: "AAAA", mime: "video/mp4", name: "" });
+    const pasted = pastedMedia.rel;
+    await invoke("capture_filed", { ack: pastedMedia.ack, inserted: false });
     check(pasted === "media/clip-002.mp4", "a video pasted during the recording gets its own name: " + pasted);
     // Renaming the item while it records: its folder keeps its name until the recording ends.
     const folderBefore = items().find((i) => i.id === 1)?.folder;

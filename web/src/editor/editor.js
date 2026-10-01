@@ -684,6 +684,7 @@ export const api = {
     const p = pending.get(reqId);
     pending.delete(reqId);
     if (!p) return false;
+    if (p.itemId !== currentId || p.sessionId !== currentSessionId || p.openToken !== currentOpenToken) return false;
     return api.insertMedia({ kind: p.kind, src, label: "", pos: p.pos });
   },
 
