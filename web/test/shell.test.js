@@ -1385,6 +1385,17 @@ test("a slow note of an item left behind does not open over the one chosen next"
   assert.equal(shell.selected(), 2, "and item 2 stays selected");
 });
 
+test("the visible editor is locked while its note reload is pending", async () => {
+  const t = await setup({ session: true });
+  t.app.holdNoteFor(1);
+  const showing = t.shell.show(1);
+  await t.settle();
+  assert.equal(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1)?.[1], true);
+  t.app.releaseNote();
+  await showing;
+  assert.equal(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1)?.[1], false);
+});
+
 test("a delayed note read cannot acquire a replacement item's token", async () => {
   const t = await setup({ session: true });
   t.app.notes.set(1, "original\n");

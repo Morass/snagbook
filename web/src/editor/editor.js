@@ -478,7 +478,7 @@ function sendFiles(files, pos) {
 
 // ---------------------------------------------------------------- the editor
 
-const cache = new Map(); // item id -> {state, memo, saved}
+const cache = new Map(); // item id -> {state, memo, saved, itemToken}
 let view = null;
 let currentId = null;
 let currentSessionId = null;
@@ -586,12 +586,12 @@ export const api = {
     const baseChanged = base != null && base !== mediaBase;
     if (base != null) mediaBase = base;
     const entry = cache.get(id);
-    if (entry && entry.saved === markdown) {
+    if (entry && entry.itemToken === itemToken && entry.saved === markdown) {
       view.updateState(entry.state);
     } else {
       const { doc, memo } = parseMarkdown(markdown);
       const state = makeState(doc);
-      cache.set(id, { state, memo, saved: serializeMarkdown(doc, memo) });
+      cache.set(id, { state, memo, saved: serializeMarkdown(doc, memo), itemToken });
       view.updateState(state);
     }
     if (baseChanged) for (const v of mediaViews) v.render();

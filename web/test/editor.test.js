@@ -126,6 +126,20 @@ test("an item changed on disk reloads instead of reusing the cached state", () =
   assert.equal(md(), "new from an agent\n");
 });
 
+test("a replacement item does not inherit the previous lifetime's undo history", () => {
+  api.open({ id: "10-life", itemToken: "old-life", markdown: "original\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  type(" changed");
+  api.flush();
+  const saved = changes().at(-1).markdown;
+  api.open({ id: "11-life", itemToken: "other-life", markdown: "other\n", focus: false });
+  api.open({ id: "10-life", itemToken: "replacement-life", markdown: saved, focus: false });
+
+  api.undo();
+
+  assert.equal(md(), saved);
+});
+
 test("pasted file bytes go to the app and come back as a picture", async () => {
   api.open({ id: "12", markdown: "", focus: false });
   const before = posted.length;

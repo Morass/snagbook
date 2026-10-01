@@ -87,12 +87,16 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let acknowledgementTail = Promise.resolve();
   let originTail = Promise.resolve();
   let editorLocks = 0;
+  let loadingUnlock = null;
   const s = { view: () => view, selected: () => selected };
 
   function lockEditor() {
     const ed = snag();
+    let held = true;
     if (++editorLocks === 1) ed?.setReadOnly?.(true);
     return () => {
+      if (!held) return;
+      held = false;
       if (editorLocks > 0 && --editorLocks === 0) ed?.setReadOnly?.(false);
     };
   }
@@ -256,29 +260,37 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const openToken = view.session.openToken;
     const itemToken = items().find((item) => item.id === id)?.itemToken;
     if (!itemToken) return;
-    const revisionKey = originRevisionKey({ sessionId, id });
-    let revision = originRevisions.get(revisionKey) || 0;
+    loadingUnlock?.();
+    const unlock = lockEditor();
+    loadingUnlock = unlock;
     try {
-      while (true) {
-        md = await call("read_note", { sessionId, openToken, itemToken, id });
-        const current = originRevisions.get(revisionKey) || 0;
-        if (current === revision) break;
-        revision = current;
+      const revisionKey = originRevisionKey({ sessionId, id });
+      let revision = originRevisions.get(revisionKey) || 0;
+      try {
+        while (true) {
+          md = await call("read_note", { sessionId, openToken, itemToken, id });
+          const current = originRevisions.get(revisionKey) || 0;
+          if (current === revision) break;
+          revision = current;
+        }
+      } catch {
+        await refresh();
+        if (turn === showing && selected === id && items().find((item) => item.id === id)?.itemToken !== itemToken) {
+          return show(id, { focus });
+        }
+        return;
       }
-    } catch {
-      await refresh();
-      if (turn === showing && selected === id && items().find((item) => item.id === id)?.itemToken !== itemToken) {
+      if (turn !== showing || selected !== id) return;
+      if (view.session?.id !== sessionId || view.session?.openToken !== openToken || items().find((item) => item.id === id)?.itemToken !== itemToken) {
         return show(id, { focus });
       }
-      return;
+      ed.open({ id, itemToken, markdown: md, base: mediaBase(platform(), id, epoch), sessionId, openToken, focus });
+      editorItem = id;
+      lockPendingOriginEditors();
+    } finally {
+      if (loadingUnlock === unlock) loadingUnlock = null;
+      unlock();
     }
-    if (turn !== showing || selected !== id) return;
-    if (view.session?.id !== sessionId || view.session?.openToken !== openToken || items().find((item) => item.id === id)?.itemToken !== itemToken) {
-      return show(id, { focus });
-    }
-    ed.open({ id, itemToken, markdown: md, base: mediaBase(platform(), id, epoch), sessionId, openToken, focus });
-    editorItem = id;
-    lockPendingOriginEditors();
   }
 
   async function newItem() {
