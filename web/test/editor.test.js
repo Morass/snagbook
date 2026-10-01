@@ -140,6 +140,22 @@ test("pasted file bytes go to the app and come back as a picture", async () => {
   assert.match(md(), /!\[\]\(media\/shot-002\.png\)/);
 });
 
+test("pasted bytes cannot enter a replacement item with the same number", async () => {
+  api.open({ id: "12", itemToken: "first-life", markdown: "original\n", focus: false });
+  let release;
+  const file = { name: "slow.png", type: "image/png", arrayBuffer: () => new Promise((resolve) => { release = resolve; }) };
+  const before = posted.length;
+  view.someProp("handlePaste", (f) => f(view, { clipboardData: { files: [file] }, preventDefault() {} }));
+  api.forget("12");
+  api.open({ id: "12", itemToken: "replacement-life", markdown: "replacement\n", focus: false });
+  release(new Uint8Array([137, 80, 78, 71]).buffer);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const msg = posted.slice(before).find((entry) => entry.type === "media");
+  assert.equal(msg.itemToken, "first-life");
+  assert.equal(api.mediaSaved(msg.reqId, "media/shot-003.png"), false);
+  assert.equal(md(), "replacement\n");
+});
+
 test("takePending hands over an unsaved change exactly once", () => {
   api.open({ id: "20", markdown: "a\n", focus: false });
   view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));

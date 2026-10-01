@@ -172,6 +172,19 @@ fn a_numbered_folder_left_on_disk_keeps_its_number() {
 }
 
 #[test]
+fn a_reused_item_number_has_a_new_folder_identity() {
+    let e = env();
+    let mut s = new(&e);
+    let first = add(&mut s);
+    let identity = s.item_identity(first.id).unwrap();
+    delete(&mut s, first.id);
+    let replacement = add(&mut s);
+
+    assert_eq!(replacement.id, first.id);
+    assert!(!s.matches_item_identity(replacement.id, &identity));
+}
+
+#[test]
 fn write_note_keeps_front_matter_and_updates_readme() {
     let e = env();
     let mut s = new(&e);

@@ -20,6 +20,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let nextHash = 1;
   let nextOpen = 1;
   let nextMedia = 1;
+  let nextItemToken = 1;
   let releaseCaptureCheck;
   let releaseCaptureFiling;
   let releaseMedia;
@@ -40,10 +41,16 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
   const captureOrigins = new Map();
   const sessionOrigins = new Map();
+  const itemOrigins = new Map();
   const list = [...sessions];
   const view = (extra = {}) => ({ config, session: session && JSON.parse(JSON.stringify(session)), loadError: null, closed: null, platform, ...extra });
   const settle = () => {
     session.nextItem = Math.max(0, ...session.items.map((i) => i.id)) + 1;
+  };
+  const makeItem = (id, title, folder) => {
+    const itemToken = `item-${nextItemToken++}`;
+    itemOrigins.set(itemToken, { sessionId: session.id, id, valid: true });
+    return { id, itemToken, title, folder, images: 0, videos: 0 };
   };
   const handlers = {
     state: () => view(),
@@ -62,7 +69,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     open_session: ({ path }) => {
       const s = list.find((x) => x.path === path);
       if (!s) throw "not a session";
-      session = { id: s.id || `id-${path}`, openToken: `open-${nextOpen++}`, path, title: s.title, header: null, items: [{ id: 1, title: "Old", folder: "01-old", images: 0, videos: 0 }], nextItem: 2 };
+      session = { id: s.id || `id-${path}`, openToken: `open-${nextOpen++}`, path, title: s.title, header: null, items: [], nextItem: 2 };
+      session.items.push(makeItem(1, "Old", "01-old"));
       sessionOrigins.set(session.openToken, { id: session.id, path: session.path });
       return view();
     },
@@ -70,13 +78,14 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (sessionGate) { await sessionGate; sessionGate = null; }
       if (cancelFolderPick) { cancelFolderPick = false; return null; }
       const path = "~/Snagbook/picked";
-      session = { id: "picked", openToken: `open-${nextOpen++}`, path, title: "Picked", header: null, items: [{ id: 1, title: "Picked item", folder: "01-picked-item", images: 0, videos: 0 }], nextItem: 2 };
+      session = { id: "picked", openToken: `open-${nextOpen++}`, path, title: "Picked", header: null, items: [], nextItem: 2 };
+      session.items.push(makeItem(1, "Picked item", "01-picked-item"));
       sessionOrigins.set(session.openToken, { id: session.id, path: session.path });
       return view();
     },
     add_item: ({ title }) => {
       const id = session.nextItem;
-      session.items.push({ id, title: title || `Item ${id}`, folder: `${String(id).padStart(2, "0")}-item-${id}`, images: 0, videos: 0 });
+      session.items.push(makeItem(id, title || `Item ${id}`, `${String(id).padStart(2, "0")}-item-${id}`));
       session.nextItem = id + 1;
       return view();
     },
@@ -88,6 +97,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     delete_item: ({ sessionId, openToken, id, permanently }) => {
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
       if (!permanently && !trash) throw "NOTRASH:the drive has no Trash";
+      const removed = session.items.find((i) => i.id === id);
+      if (removed) itemOrigins.get(removed.itemToken).valid = false;
       session.items = session.items.filter((i) => i.id !== id);
       settle();
       return view();
@@ -156,9 +167,11 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       const origin = captureOrigins.get(ack);
       return captureCanInsert && (!origin || (origin.sessionId === session?.id && origin.openToken === session?.openToken));
     },
-    save_media: async ({ sessionId, openToken, id, mime }) => {
+    save_media: async ({ sessionId, openToken, itemToken, id, mime }) => {
       const origin = sessionOrigins.get(openToken);
       if (!origin || origin.id !== sessionId) throw "The picture's source session is no longer known.";
+      const itemOrigin = itemOrigins.get(itemToken);
+      if (!itemOrigin?.valid || itemOrigin.sessionId !== sessionId || itemOrigin.id !== id) throw "The picture's source item is gone or was replaced.";
       if (mediaGate) await mediaGate;
       const ack = `media-${nextMedia++}`;
       const rel = mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png";
@@ -187,6 +200,12 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     allowCaptureFiling: () => { captureFilingBlocked = false; },
     failNextNoteRead: () => { noteReadFailures++; },
     addCaptureOrigin: (ack, origin) => { captureOrigins.set(ack, origin); },
+    replaceItem(id) {
+      const at = session.items.findIndex((item) => item.id === id);
+      const old = session.items[at];
+      itemOrigins.get(old.itemToken).valid = false;
+      session.items[at] = makeItem(id, old.title, old.folder);
+    },
     slowNoteFor(id) {
       slowNote = id;
     },
@@ -788,6 +807,7 @@ test("capture fallback protects the editor still visible during an item switch",
     type: "media",
     reqId: 17,
     itemId: 1,
+    itemToken: source.items.find((item) => item.id === 1).itemToken,
     sessionId: source.id,
     openToken: source.openToken,
     base64: "AA==",
@@ -885,8 +905,9 @@ test("markup targets the item still visible while another item loads", async () 
   t.app.holdNoteFor(2);
   const switching = t.shell.show(2);
   await t.settle();
-  await t.shell.onEditorMessage({ type: "annotate", itemId: 1, sessionId: source.id, openToken: source.openToken, src: "media/shot-001.png" });
-  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "open_markup").at(-1)[1], { sessionId: source.id, openToken: source.openToken, id: 1, rel: "media/shot-001.png" });
+  const itemToken = source.items.find((item) => item.id === 1).itemToken;
+  await t.shell.onEditorMessage({ type: "annotate", itemId: 1, itemToken, sessionId: source.id, openToken: source.openToken, src: "media/shot-001.png" });
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "open_markup").at(-1)[1], { sessionId: source.id, openToken: source.openToken, itemToken, id: 1, rel: "media/shot-001.png" });
   t.app.releaseNote();
   await switching;
 });
@@ -928,8 +949,8 @@ test("pasted bytes are saved into the shown item and handed back to the editor",
   let pending = null;
   t.editor.mediaSaved = (reqId, rel) => (pending = { id: 1, markdown: rel }, t.editor.log.push(["saved", reqId, rel]), true);
   t.editor.takePending = () => { const p = pending; pending = null; return p; };
-  const { id: sessionId, openToken } = t.shell.view().session;
-  await t.shell.onEditorMessage({ type: "media", reqId: 7, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  const source = t.shell.view().session;
+  await t.shell.onEditorMessage({ type: "media", reqId: 7, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
   assert.deepEqual(t.editor.log.pop(), ["saved", 7, "media/image-001.png"]);
   assert.equal(t.app.calls.find(([c]) => c === "save_media")[1].sessionId, t.shell.view().session.id);
   assert.equal(t.app.calls.find(([c]) => c === "save_media")[1].openToken, t.shell.view().session.openToken);
@@ -940,7 +961,7 @@ test("pasted bytes arriving after a session switch are filed in their source ses
   const t = await setup({ session: true, sessions: [{ path: "~/Snagbook/other", title: "Other", items: 1, created: "2026-09-25T16:00:00Z" }] });
   const source = t.shell.view().session;
   await t.shell.openSession("~/Snagbook/other");
-  await t.shell.onEditorMessage({ type: "media", reqId: 8, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.shell.onEditorMessage({ type: "media", reqId: 8, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
   assert.deepEqual(t.app.calls.filter(([c]) => c === "save_media").at(-1)[1].sessionId, source.id);
   assert.deepEqual(t.editor.log.pop(), ["failed", 8]);
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").at(-1)[1], { ack: "media-1", inserted: false });
@@ -951,17 +972,26 @@ test("pasted bytes arriving after their session is reopened reload the visible n
   const t = await setup({ session: true });
   const source = t.shell.view().session;
   await t.shell.openSession(source.path);
-  await t.shell.onEditorMessage({ type: "media", reqId: 19, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.shell.onEditorMessage({ type: "media", reqId: 19, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
   const shown = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown;
   assert.match(shown, /!\[\]\(media\/image-001\.png\)/);
   await t.shell.onEditorMessage({ type: "changed", id: 1, markdown: `${shown}\nnext edit\n` });
   assert.match(t.app.notes.get(1), /!\[\]\(media\/image-001\.png\)/);
 });
 
+test("pasted bytes refuse a replacement item with the same number", async () => {
+  const t = await setup({ session: true });
+  const source = t.shell.view().session;
+  t.app.replaceItem(1);
+  await t.shell.onEditorMessage({ type: "media", reqId: 20, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  assert.deepEqual(t.editor.log.pop(), ["failed", 20]);
+  assert.equal(t.app.calls.some(([cmd]) => cmd === "capture_filed"), false);
+});
+
 test("a pasted-media save response cannot cross an item switch", async () => {
   const t = await setup({ session: true, slowMedia: true });
-  const { id: sessionId, openToken } = t.shell.view().session;
-  const saving = t.shell.onEditorMessage({ type: "media", reqId: 9, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  const source = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 9, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
   await t.settle();
   await t.shell.newItem();
   t.app.releaseMedia();
@@ -974,7 +1004,7 @@ test("pasted bytes finishing conversion after an item switch stay with their sou
   const t = await setup({ session: true });
   const source = t.shell.view().session;
   await t.shell.newItem();
-  await t.shell.onEditorMessage({ type: "media", reqId: 17, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.shell.onEditorMessage({ type: "media", reqId: 17, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
   assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "save_media").at(-1)[1].id, 1);
   assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "capture_filed").at(-1)[1], { ack: "media-1", inserted: false });
   assert.match(t.app.notes.get(1), /!\[\]\(media\/image-001\.png\)/);
@@ -984,7 +1014,7 @@ test("a stale item read retries when fallback filing changes its note", async ()
   const t = await setup({ session: true, slowMedia: true });
   t.editor.mediaSaved = () => false;
   const source = t.shell.view().session;
-  const saving = t.shell.onEditorMessage({ type: "media", reqId: 18, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 18, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
   await t.settle();
   await t.shell.newItem();
   t.app.holdStaleNoteFor(1);
@@ -1002,8 +1032,9 @@ test("a paste reply cannot enter an old editor after the backend switched sessio
   let pending = null;
   t.editor.mediaSaved = (_reqId, rel) => (pending = { id: 1, markdown: rel }, true);
   t.editor.takePending = () => { const p = pending; pending = null; return p; };
-  const { id: sessionId, openToken } = t.shell.view().session;
-  const saving = t.shell.onEditorMessage({ type: "media", reqId: 11, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  const source = t.shell.view().session;
+  const { id: sessionId, openToken } = source;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 11, itemId: 1, itemToken: source.items[0].itemToken, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
   await t.settle();
   t.app.holdNextSessionReply();
   const switching = t.shell.newSession();
@@ -1020,8 +1051,9 @@ test("a paste filed during a cancelled folder picker reloads its source note", a
   const t = await setup({ session: true, slowMedia: true });
   t.editor.mediaSaved = () => false;
   t.app.notes.set(1, "original\n");
-  const { id: sessionId, openToken } = t.shell.view().session;
-  const saving = t.shell.onEditorMessage({ type: "media", reqId: 12, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  const source = t.shell.view().session;
+  const { id: sessionId, openToken } = source;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 12, itemId: 1, itemToken: source.items[0].itemToken, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
   await t.settle();
   t.app.cancelNextFolderPick();
   const picking = t.shell.pickFolder();
@@ -1037,8 +1069,9 @@ test("a paste filed during a cancelled folder picker reloads its source note", a
 
 test("failed filing of delayed pasted media is retried", async () => {
   const t = await setup({ session: true, slowMedia: true, failCaptureFiling: true });
-  const { id: sessionId, openToken } = t.shell.view().session;
-  const saving = t.shell.onEditorMessage({ type: "media", reqId: 10, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  const source = t.shell.view().session;
+  const { id: sessionId, openToken } = source;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 10, itemId: 1, itemToken: source.items[0].itemToken, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
   await t.settle();
   await t.shell.newItem();
   t.app.releaseMedia();
@@ -1056,8 +1089,9 @@ test("a successful filing retry reloads the source note before another edit", as
   const t = await setup({ session: true, failCaptureFiling: true });
   t.editor.mediaSaved = () => false;
   t.app.notes.set(1, "original\n");
-  const { id: sessionId, openToken } = t.shell.view().session;
-  await t.shell.onEditorMessage({ type: "media", reqId: 13, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  const source = t.shell.view().session;
+  const { id: sessionId, openToken } = source;
+  await t.shell.onEditorMessage({ type: "media", reqId: 13, itemId: 1, itemToken: source.items[0].itemToken, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
   let pending = { id: 1, markdown: "typed while filing was blocked\n" };
   t.editor.takePending = () => {
     const value = pending;
@@ -1075,8 +1109,9 @@ test("a successful filing retry reloads the source note before another edit", as
 test("immediate fallback waits for pending source edits before appending its link", async () => {
   const t = await setup({ session: true, slowMedia: true, slowWrite: true });
   t.editor.mediaSaved = () => false;
-  const { id: sessionId, openToken } = t.shell.view().session;
-  const saving = t.shell.onEditorMessage({ type: "media", reqId: 14, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  const source = t.shell.view().session;
+  const { id: sessionId, openToken } = source;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 14, itemId: 1, itemToken: source.items[0].itemToken, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
   await t.settle();
   const autosaving = t.shell.onEditorMessage({ type: "changed", id: 1, markdown: "first edit\n" });
   await t.settle();
@@ -1101,8 +1136,9 @@ test("immediate fallback waits for pending source edits before appending its lin
 test("a failed reload after fallback filing keeps the source editor locked until retry", async () => {
   const t = await setup({ session: true, failCaptureFiling: true });
   t.editor.mediaSaved = () => false;
-  const { id: sessionId, openToken } = t.shell.view().session;
-  await t.shell.onEditorMessage({ type: "media", reqId: 15, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  const source = t.shell.view().session;
+  const { id: sessionId, openToken } = source;
+  await t.shell.onEditorMessage({ type: "media", reqId: 15, itemId: 1, itemToken: source.items[0].itemToken, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
   t.app.allowCaptureFiling();
   t.app.failNextNoteRead();
   await t.shell.refresh();
@@ -1119,7 +1155,7 @@ test("fallback reload follows the same folder across a new open token", async ()
   const t = await setup({ session: true, slowMedia: true });
   t.editor.mediaSaved = () => false;
   const source = t.shell.view().session;
-  const saving = t.shell.onEditorMessage({ type: "media", reqId: 16, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 16, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
   await t.settle();
   await t.shell.openSession(source.path);
   t.app.releaseMedia();

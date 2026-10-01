@@ -282,7 +282,7 @@ class ImageView {
     this.handle.addEventListener("mousedown", (e) => this.startResize(e));
     this.dom.addEventListener("dblclick", (e) => {
       e.preventDefault();
-      post({ type: "annotate", itemId: currentId, sessionId: currentSessionId, openToken: currentOpenToken, src: this.node.attrs.src });
+      post({ type: "annotate", itemId: currentId, itemToken: currentItemToken, sessionId: currentSessionId, openToken: currentOpenToken, src: this.node.attrs.src });
     });
     this.render();
     mediaViews.add(this);
@@ -465,7 +465,7 @@ function fileToBase64(file) {
 
 function sendFiles(files, pos) {
   let any = false;
-  const destination = { itemId: currentId, sessionId: currentSessionId, openToken: currentOpenToken };
+  const destination = { itemId: currentId, itemToken: currentItemToken, sessionId: currentSessionId, openToken: currentOpenToken };
   for (const file of files) {
     if (!/^(image|video)\//.test(file.type)) continue;
     any = true;
@@ -483,6 +483,7 @@ let view = null;
 let currentId = null;
 let currentSessionId = null;
 let currentOpenToken = null;
+let currentItemToken = null;
 let openGeneration = 0;
 let readOnly = false;
 let saveTimer = null;
@@ -579,7 +580,7 @@ export function mount(place, opts = {}) {
 
 export const api = {
   /** Show item `id`. Keeps undo history when coming back to an item whose file did not change. */
-  open({ id, markdown, base, sessionId = null, openToken = null, focus = true }) {
+  open({ id, markdown, base, sessionId = null, openToken = null, itemToken = null, focus = true }) {
     persistNow();
     openGeneration++;
     const baseChanged = base != null && base !== mediaBase;
@@ -597,6 +598,7 @@ export const api = {
     currentId = id;
     currentSessionId = sessionId;
     currentOpenToken = openToken;
+    currentItemToken = itemToken;
     onToolbar(view.state);
     if (focus) api.focus();
     return true;
@@ -702,7 +704,7 @@ export const api = {
     const p = pending.get(reqId);
     pending.delete(reqId);
     if (!p) return false;
-    if (p.itemId !== currentId || p.sessionId !== currentSessionId || p.openToken !== currentOpenToken) return false;
+    if (p.itemId !== currentId || p.itemToken !== currentItemToken || p.sessionId !== currentSessionId || p.openToken !== currentOpenToken) return false;
     return api.insertMedia({ kind: p.kind, src, label: "", pos: p.pos });
   },
 

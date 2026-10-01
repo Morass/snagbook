@@ -222,7 +222,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const md = await call("read_note", { id: origin.id });
     if (!originIsOpen(origin)) return;
     if (view.session.openToken !== openToken) throw new Error("The source session changed while its note was reloading.");
-    snag()?.open({ id: origin.id, markdown: md, base: mediaBase(platform(), origin.id, epoch), sessionId: origin.sessionId, openToken, focus: false });
+    const itemToken = items().find((item) => item.id === origin.id)?.itemToken;
+    snag()?.open({ id: origin.id, itemToken, markdown: md, base: mediaBase(platform(), origin.id, epoch), sessionId: origin.sessionId, openToken, focus: false });
     editorItem = origin.id;
   }
 
@@ -262,7 +263,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return refresh();
     }
     if (turn !== showing || selected !== id) return;
-    ed.open({ id, markdown: md, base: mediaBase(platform(), id, epoch), sessionId: view.session.id, openToken: view.session.openToken, focus });
+    ed.open({ id, itemToken: items().find((item) => item.id === id)?.itemToken, markdown: md, base: mediaBase(platform(), id, epoch), sessionId: view.session.id, openToken: view.session.openToken, focus });
     editorItem = id;
     lockPendingOriginEditors();
   }
@@ -972,7 +973,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         const id = msg.itemId;
         try {
           if (id == null) throw new Error("the destination changed");
-          const saved = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
+          const saved = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, itemToken: msg.itemToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
           const sessionPath = saved.sessionPath || (view?.session?.id === msg.sessionId && view?.session?.openToken === msg.openToken ? view.session.path : null);
           const canInsert = await call("capture_can_insert", { ack: saved.ack }).catch(() => false);
           if (!canInsert || selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken || !snag()?.mediaSaved(msg.reqId, saved.rel)) {
@@ -996,7 +997,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         break;
       case "annotate":
         if (msg.itemId != null && msg.src && !msg.src.includes("://")) {
-          await call("open_markup", { sessionId: msg.sessionId, openToken: msg.openToken, id: msg.itemId, rel: msg.src }).catch(() => {});
+          await call("open_markup", { sessionId: msg.sessionId, openToken: msg.openToken, itemToken: msg.itemToken, id: msg.itemId, rel: msg.src }).catch(() => {});
         }
         break;
     }

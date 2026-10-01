@@ -97,7 +97,7 @@ fn names_in(dir: &Path) -> Vec<String> {
 }
 
 /// One test session: a folder holding session.json, README.md and a folder per item.
-#[derive(Clone)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct FolderIdentity(Arc<same_file::Handle>);
 
 pub struct Session {
@@ -198,6 +198,14 @@ impl Session {
 
     pub fn matches_folder_identity(&self, expected: &FolderIdentity) -> bool {
         same_file::Handle::from_path(&self.dir).ok().is_some_and(|current| current == *expected.0)
+    }
+
+    pub fn item_identity(&self, id: i64) -> Result<FolderIdentity> {
+        Ok(FolderIdentity(Arc::new(same_file::Handle::from_path(self.item_dir(id)?)?)))
+    }
+
+    pub fn matches_item_identity(&self, id: i64, expected: &FolderIdentity) -> bool {
+        self.item_dir(id).ok().and_then(|dir| same_file::Handle::from_path(dir).ok()).is_some_and(|current| current == *expected.0)
     }
 
     /// Folders may have been renamed or removed by hand: drop records whose folder is gone,

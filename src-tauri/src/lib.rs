@@ -27,11 +27,13 @@ pub struct App {
     /// Global shortcuts that could not be registered, in words.
     pub shortcut_errors: Vec<String>,
     origins: HashMap<String, SessionOrigin>,
+    item_origins: HashMap<FolderIdentity, String>,
 }
 
 #[derive(Clone)]
 struct SessionOrigin {
     session: PathBuf,
+    display_path: String,
     session_identity: FolderIdentity,
     session_id: String,
 }
@@ -47,6 +49,7 @@ fn err(e: SnagError) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct ItemView {
     id: i64,
+    item_token: String,
     title: String,
     folder: String,
     images: usize,
@@ -103,7 +106,7 @@ impl App {
     fn load() -> App {
         let store = ConfigStore::new(&config_path());
         let session = store.config.last_session.as_deref().and_then(|p| Session::open(p, &store.config.header).ok());
-        let mut app = App { store, session, selected: None, shortcut_errors: vec![], origins: HashMap::new() };
+        let mut app = App { store, session, selected: None, shortcut_errors: vec![], origins: HashMap::new(), item_origins: HashMap::new() };
         app.remember_current();
         app
     }
@@ -128,7 +131,10 @@ impl App {
                 .iter()
                 .map(|r| {
                     let c = s.media_count(r.id);
-                    ItemView { id: r.id, title: r.title.clone(), folder: r.folder.clone(), images: c.images, videos: c.videos }
+                    let item_token = s.item_identity(r.id).ok().map(|identity| {
+                        self.item_origins.entry(identity).or_insert_with(|| uuid::Uuid::new_v4().to_string()).clone()
+                    }).unwrap_or_default();
+                    ItemView { id: r.id, item_token, title: r.title.clone(), folder: r.folder.clone(), images: c.images, videos: c.videos }
                 })
                 .collect(),
         });
@@ -151,6 +157,7 @@ impl App {
         let path = s.display_path.clone();
         self.origins.insert(s.open_token.clone(), SessionOrigin {
             session: s.dir.clone(),
+            display_path: s.display_path.clone(),
             session_identity: s.folder_identity(),
             session_id: s.manifest.id.clone(),
         });
@@ -162,6 +169,7 @@ impl App {
         let Some(s) = self.session.as_ref() else { return };
         self.origins.entry(s.open_token.clone()).or_insert_with(|| SessionOrigin {
             session: s.dir.clone(),
+            display_path: s.display_path.clone(),
             session_identity: s.folder_identity(),
             session_id: s.manifest.id.clone(),
         });
@@ -338,7 +346,7 @@ fn write_note(st: St, session_id: String, open_token: String, id: i64, markdown:
 /// Bytes pasted or dropped into the editor. The acknowledgement keeps the item protected
 /// until the page has durably linked the file, or asks native code to append the link.
 #[tauri::command]
-fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String, open_token: String, id: i64, base64: String, mime: String, name: String) -> Res<capture::Captured> {
+fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String, open_token: String, item_token: String, id: i64, base64: String, mime: String, name: String) -> Res<capture::Captured> {
     if window.label() != "main" { return Err("Pictures and videos are pasted into the notebook window.".into()); }
     let data = base64::engine::general_purpose::STANDARD.decode(base64.as_bytes()).map_err(|e| e.to_string())?;
     let (prefix, ext) = media::name_for(&mime, &name);
@@ -348,6 +356,10 @@ fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String,
     let mut source = Session::open(&origin.session.to_string_lossy(), &a.store.config.header).map_err(err)?;
     if !source.matches_folder_identity(&origin.session_identity) || source.manifest.id != session_id {
         return Err("The picture's source session is gone or was replaced.".into());
+    }
+    let item_identity = a.item_origins.iter().find_map(|(identity, token)| (token == &item_token).then(|| identity.clone())).ok_or("The picture's source item is no longer known.")?;
+    if !source.matches_item_identity(id, &item_identity) {
+        return Err("The picture's source item is gone or was replaced.".into());
     }
     let s = &mut source;
     let rel = s.save_media(id, &data, prefix, &ext).map_err(err)?;
@@ -365,7 +377,7 @@ fn save_media(app: AppHandle, window: tauri::Window, st: St, session_id: String,
     app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), pending);
     Ok(capture::Captured {
         session_id: Some(session_id),
-        session_path: s.display_path.clone(),
+        session_path: origin.display_path,
         ack: Some(ack),
         id,
         rel,
@@ -1037,11 +1049,15 @@ fn open_markup_now(app: &AppHandle, id: i64, rel: String, is_new: bool, auto: Op
 
 /// Mark up a picture already in a note (double-click it).
 #[tauri::command]
-async fn open_markup(app: AppHandle, st: St<'_>, session_id: String, open_token: String, id: i64, rel: String) -> Res<()> {
+async fn open_markup(app: AppHandle, st: St<'_>, session_id: String, open_token: String, item_token: String, id: i64, rel: String) -> Res<()> {
     let p = {
         let mut a = st.lock().unwrap();
         if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
             return Err("The picture's session is no longer open.".into());
+        }
+        let item_identity = a.item_origins.iter().find_map(|(identity, token)| (token == &item_token).then(|| identity.clone())).ok_or("The picture's source item is no longer known.")?;
+        if a.session.as_ref().is_none_or(|s| !s.matches_item_identity(id, &item_identity)) {
+            return Err("The picture's source item is gone or was replaced.".into());
         }
         pending_markup(&mut a, id, rel, false, None, None)?
     };
