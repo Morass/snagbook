@@ -234,6 +234,7 @@ final class CaptureController: ObservableObject {
         let settings = model.config.capture
         let startup = recordingStartup
         Task {
+            var filed = false
             await startup?.value
             guard recorder === rec else { return }
             defer {
@@ -241,14 +242,15 @@ final class CaptureController: ObservableObject {
                 recordingStarted = nil
                 recordingSession = nil
                 recordingStartup = nil
-                try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
+                if filed { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
             }
             do {
                 let duration = try await rec.stop()
                 let saved = try await fileRecording(file, into: item, session: session, target: t, settings: settings, duration: duration)
-                model.recordingSaved(session: session, item: item, relative: saved, duration: duration)
+                filed = true
+                model.recordingSaved(session: saved.session, item: item, relative: saved.relative, duration: duration)
             } catch {
-                showCaptureError(error)
+                showCaptureError(RecordingRecoveryError(cause: error, folder: file.deletingLastPathComponent()))
             }
             phase = .idle
             target = nil
@@ -258,8 +260,10 @@ final class CaptureController: ObservableObject {
     }
 
     /// Name the recording, write its stills beside it, and move all of it into the item.
-    func fileRecording(_ recording: URL, into item: Int, session: Session, target t: CaptureTarget, settings: CaptureSettings, duration: Double) async throws -> String {
-        let reserved = try session.reserveMediaName(item, prefix: "clip", ext: "mp4")
+    func fileRecording(_ recording: URL, into item: Int, session: Session, target t: CaptureTarget, settings: CaptureSettings, duration: Double) async throws -> (session: Session, relative: String) {
+        let current = try Session.open(session.url.path, fallbackHeader: model.config.header)
+        guard current.isSameSession(as: session) else { throw SnagError.notASession(session.displayPath) }
+        let reserved = try current.reserveMediaName(item, prefix: "clip", ext: "mp4")
         let name = reserved.url.lastPathComponent
         let work = recording.deletingLastPathComponent()
         let named = work.appendingPathComponent(name)
@@ -271,11 +275,19 @@ final class CaptureController: ObservableObject {
                      (work.appendingPathComponent(n.frames), media.appendingPathComponent(n.frames))]
         if info.contactSheet != nil { moves.append((work.appendingPathComponent(n.sheet), media.appendingPathComponent(n.sheet))) }
         for (from, to) in moves {
-            guard session.matchesDiskIdentity else { throw SnagError.notASession(session.displayPath) }
+            guard current.matchesDiskIdentity else { throw SnagError.notASession(current.displayPath) }
             try? FileManager.default.removeItem(at: to)
             try FileManager.default.moveItem(at: from, to: to)
         }
-        return reserved.relative
+        return (current, reserved.relative)
+    }
+}
+
+private struct RecordingRecoveryError: LocalizedError {
+    let cause: Error
+    let folder: URL
+    var errorDescription: String? {
+        "The recording could not be filed (\(cause.localizedDescription)). A recovery copy remains in \(folder.path)."
     }
 }
 

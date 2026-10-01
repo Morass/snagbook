@@ -66,7 +66,7 @@ enum SelfTest {
         let before = model.session?.url
         model.newSession()
         for _ in 0..<50 where model.session?.url == before || model.selectedID == nil { await settle(100) }
-        guard let session = model.session, session.url != before, let first = model.selectedID else {
+        guard var session = model.session, session.url != before, let first = model.selectedID else {
             return check(false, "new session creates a session with a first item")
         }
         check(session.url.lastPathComponent.range(of: #"^[0-9a-f]{8}_\d\d-\d\d-\d{4}$"#, options: .regularExpression) != nil, "session folder is hash_dd-mm-yyyy: \(session.url.lastPathComponent)")
@@ -155,19 +155,28 @@ enum SelfTest {
             }
             let duration = try await w.finish()
             let target = CaptureTarget(rect: CGRect(x: 0, y: 0, width: 320, height: 180), displayID: CGMainDisplayID(), screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), scale: 2, kind: "region")
-            let rel = try await model.capture.fileRecording(file, into: first, session: session, target: target, settings: model.config.capture, duration: duration)
+            let recordingSession = session
+            model.openSession(session.displayPath)
+            for _ in 0..<30 where model.session === recordingSession { await settle(100) }
+            model.rename(first, to: "Renamed while recording")
+            await settle()
+            let saved = try await model.capture.fileRecording(file, into: first, session: session, target: target, settings: model.config.capture, duration: duration)
+            let rel = saved.relative
             let elsewhere = try model.addItem(title: "Capture switched away", focusTitle: false)
             await settle()
-            model.recordingSaved(session: session, item: first, relative: rel, duration: duration)
+            model.recordingSaved(session: saved.session, item: first, relative: rel, duration: duration)
             try? FileManager.default.removeItem(at: work)
             await settle()
             await model.editor.flush()
-            let media = try! session.mediaURL(first)
+            let media = try! saved.session.mediaURL(first)
             check(rel == "media/clip-001.mp4" && exists(media.appendingPathComponent("clip-001.mp4")), "recording saved as media/clip-001.mp4")
             check(exists(media.appendingPathComponent("clip-001-frames/0003.jpg")), "one still per second beside it")
             check(exists(media.appendingPathComponent("clip-001-contact.jpg")), "contact sheet beside it")
             check(read(media.appendingPathComponent("clip-001.json")).contains("\"duration\""), "clip-001.json describes it")
-            check(read(noteURL).contains("[Video 0:03](media/clip-001.mp4)"), "a recording is linked to its original item after the selection changes")
+            check(read(try! saved.session.noteURL(first)).contains("[Video 0:03](media/clip-001.mp4)"), "a recording uses the current item folder and is linked there after the selection changes")
+            model.rename(first, to: "Main menu")
+            await settle()
+            if let current = model.session { session = current }
             model.delete(elsewhere, confirm: false)
             await settle()
         } catch {
