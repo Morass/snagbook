@@ -79,6 +79,15 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try reopened.addItem().id, 3)
     }
 
+    func testASessionDeletedFromOutsideIsNeverRecreatedByAWrite() throws {
+        let s = try Session.create(root: root, config: Config())
+        try s.addItem()
+        try FileManager.default.removeItem(at: s.url)
+
+        XCTAssertThrowsError(try s.addItem())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: s.url.path))
+    }
+
     func testANumberedFolderLeftOnDiskKeepsItsNumber() throws {
         let s = try Session.create(root: root, config: Config())
         for _ in 1...2 { try s.addItem() }

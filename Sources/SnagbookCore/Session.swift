@@ -71,7 +71,7 @@ public final class Session {
         let s = Session(url: url, displayPath: Paths.abbreviate(Paths.expand(display)),
                         manifest: Manifest(id: hash, created: now, title: nil, header: nil, items: [], nextItem: 1))
         s.fallbackHeader = config.header
-        try s.save()
+        try s.save(requireManifest: false)
         return s
     }
 
@@ -107,6 +107,12 @@ public final class Session {
             out.append(Summary(path: Paths.abbreviate(Paths.expand(display)), title: m.title ?? defaultTitle(m.created), created: m.created, items: m.items.count, firstTitles: m.items.prefix(3).map(\.title)))
         }
         return out.sorted { $0.created > $1.created }
+    }
+
+    /// Whether the session is still present on disk. Its folder can disappear while the
+    /// app has it open.
+    public var exists: Bool {
+        fm.fileExists(atPath: url.appendingPathComponent(Self.manifestName).path)
     }
 
     /// Folders may have been renamed or removed by hand: drop records whose folder is gone,
@@ -159,6 +165,7 @@ public final class Session {
     /// Add an item after the others. With no title it is "Item N".
     @discardableResult
     public func addItem(title: String? = nil, now: Date = Date()) throws -> ItemRecord {
+        try requireExists()
         let id = manifest.nextItem
         let t = (title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "Item \(id)"
         let folder = Naming.itemFolder(id: id, title: t)
@@ -283,6 +290,7 @@ public final class Session {
     /// Save bytes into the item's media folder under the next free "prefix-NNN.ext".
     /// Returns the path relative to the item folder ("media/shot-001.png").
     public func saveMedia(_ id: Int, data: Data, prefix: String, ext: String) throws -> String {
+        try requireExists()
         let media = try mediaURL(id)
         try fm.createDirectory(at: media, withIntermediateDirectories: true)
         let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
@@ -292,6 +300,7 @@ public final class Session {
 
     /// A free name in the item's media folder, for a file that will be written later.
     public func reserveMediaName(_ id: Int, prefix: String, ext: String) throws -> (relative: String, url: URL) {
+        try requireExists()
         let media = try mediaURL(id)
         try fm.createDirectory(at: media, withIntermediateDirectories: true)
         let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
@@ -370,12 +379,17 @@ public final class Session {
 
     // MARK: - persistence
 
-    func save() throws {
+    func save(requireManifest: Bool = true) throws {
+        if requireManifest { try requireExists() }
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         enc.dateEncodingStrategy = .iso8601
         try enc.encode(manifest).write(to: url.appendingPathComponent(Self.manifestName), options: .atomic)
         try writeReadme()
+    }
+
+    private func requireExists() throws {
+        guard exists else { throw SnagError.notASession(displayPath) }
     }
 
     static var decoder: JSONDecoder {
