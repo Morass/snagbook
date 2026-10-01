@@ -556,6 +556,8 @@ final class AppModel: ObservableObject {
 
     func itemTitle(_ id: Int) -> String { items.first { $0.id == id }?.title ?? "Item \(id)" }
 
+    func openedItemIdentity(_ id: Int) -> String? { itemIdentities[id] }
+
     func openLink(_ href: String) {
         if let u = URL(string: href), u.scheme != nil, u.scheme != MediaSchemeHandler.scheme {
             NSWorkspace.shared.open(u)

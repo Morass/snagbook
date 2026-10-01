@@ -372,6 +372,42 @@ public final class Session {
         fileprivate let identity: String
     }
 
+    public struct FileBinding {
+        public let url: URL
+        fileprivate let identity: String
+    }
+
+    public static func bindFile(_ url: URL) throws -> FileBinding {
+        guard let identity = identity(of: url) else { throw SnagError.mediaChanged(url.lastPathComponent) }
+        return FileBinding(url: url, identity: identity)
+    }
+
+    public static func write(_ data: Data, to binding: FileBinding) throws {
+        guard identity(of: binding.url) == binding.identity else { throw SnagError.mediaChanged(binding.url.lastPathComponent) }
+        let output = try FileHandle(forWritingTo: binding.url)
+        defer { try? output.close() }
+        guard identity(of: binding.url) == binding.identity else { throw SnagError.mediaChanged(binding.url.lastPathComponent) }
+        try output.truncate(atOffset: 0)
+        try output.write(contentsOf: data)
+        try output.synchronize()
+        guard identity(of: binding.url) == binding.identity else { throw SnagError.mediaChanged(binding.url.lastPathComponent) }
+    }
+
+    public static func read(_ binding: FileBinding) throws -> Data {
+        guard identity(of: binding.url) == binding.identity else { throw SnagError.mediaChanged(binding.url.lastPathComponent) }
+        let input = try FileHandle(forReadingFrom: binding.url)
+        defer { try? input.close() }
+        guard identity(of: binding.url) == binding.identity else { throw SnagError.mediaChanged(binding.url.lastPathComponent) }
+        let data = try input.readToEnd() ?? Data()
+        guard identity(of: binding.url) == binding.identity else { throw SnagError.mediaChanged(binding.url.lastPathComponent) }
+        return data
+    }
+
+    public static func remove(_ binding: FileBinding) throws {
+        guard identity(of: binding.url) == binding.identity else { throw SnagError.mediaChanged(binding.url.lastPathComponent) }
+        try FileManager.default.removeItem(at: binding.url)
+    }
+
     /// Hold a free name in the item's media folder for a file that will be written later.
     public func reserveMediaName(_ id: Int, prefix: String, ext: String) throws -> MediaReservation {
         try requireExists()

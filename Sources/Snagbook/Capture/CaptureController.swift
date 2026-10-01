@@ -101,11 +101,7 @@ final class CaptureController: ObservableObject {
             overlay.hideAll()
             let destination: (Session, Int, String)
             do {
-                let id = try model.ensureItem()
-                guard let source = model.session else { throw SnagError.noSuchItem(id) }
-                let session = try liveSession(for: source, item: id, identity: nil)
-                guard let identity = try session.itemIdentity(id) else { throw SnagError.noSuchItem(id) }
-                destination = (session, id, identity)
+                destination = try destinationForOpenedItem()
             } catch {
                 phase = .idle
                 target = nil
@@ -155,11 +151,7 @@ final class CaptureController: ObservableObject {
             } else if phase == .recording, let recordingSession, let recordingItem, let recordingItemIdentity {
                 destination = (recordingSession, recordingItem, recordingItemIdentity)
             } else {
-                let id = try model.ensureItem()
-                guard let source = model.session else { throw SnagError.noSuchItem(id) }
-                let session = try liveSession(for: source, item: id, identity: nil)
-                guard let identity = try session.itemIdentity(id) else { throw SnagError.noSuchItem(id) }
-                destination = (session, id, identity)
+                destination = try destinationForOpenedItem()
             }
         } catch {
             if finishesStandaloneCapture { phase = .idle; target = nil }
@@ -195,22 +187,14 @@ final class CaptureController: ObservableObject {
     func startRecording(_ t: CaptureTarget) {
         guard phase == .idle else { return }
         saveFailed = false
-        let id: Int
-        do { id = try model.ensureItem() } catch {
-            target = nil
-            return showCaptureError(error)
-        }
-        guard let sourceSession = model.session else { return }
-        let session: Session
-        let itemIdentity: String
+        let destination: (Session, Int, String)
         do {
-            session = try liveSession(for: sourceSession, item: id, identity: nil)
-            guard let identity = try session.itemIdentity(id) else { throw SnagError.noSuchItem(id) }
-            itemIdentity = identity
+            destination = try destinationForOpenedItem()
         } catch {
             target = nil
             return showCaptureError(error)
         }
+        let (session, id, itemIdentity) = destination
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Snagbook-recording-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("recording.mp4")
@@ -319,6 +303,14 @@ final class CaptureController: ObservableObject {
             return current
         }
         return try source.reopenedMatchingItem(item, identity: identity, fallbackHeader: model.config.header)
+    }
+
+    func destinationForOpenedItem() throws -> (Session, Int, String) {
+        let id = try model.ensureItem()
+        guard let source = model.session, let identity = model.openedItemIdentity(id) else {
+            throw SnagError.noSuchItem(id)
+        }
+        return (try liveSession(for: source, item: id, identity: identity), id, identity)
     }
 }
 

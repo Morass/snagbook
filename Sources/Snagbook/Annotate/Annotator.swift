@@ -16,6 +16,9 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     unowned let model: AppModel
     let session: Session
     let itemIdentity: String
+    let pictureBinding: Session.FileBinding
+    let origBinding: Session.FileBinding?
+    let marksBinding: Session.FileBinding?
     let original: CGImage
     private let previousApp: NSRunningApplication?
 
@@ -72,33 +75,43 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     // MARK: - open
 
     static func open(item: Int, relative: String, isNew: Bool, model: AppModel) {
-        guard let session = model.session, let itemDir = try? session.itemURL(item),
-              let itemIdentity = try? session.itemIdentity(item) else { return }
-        let fileURL = itemDir.appendingPathComponent(relative)
-        let comp = MarkDocument.companions(of: relative)
-        let origURL = itemDir.appendingPathComponent(comp.orig)
-        let marksURL = itemDir.appendingPathComponent(comp.marks)
-        let hasOrig = FileManager.default.fileExists(atPath: origURL.path)
-        guard let original = ImageFile.load(hasOrig ? origURL : fileURL) else {
+        do {
+            guard let source = model.session, let itemIdentity = model.openedItemIdentity(item) else {
+                throw SnagError.noSuchItem(item)
+            }
+            let session = try source.reopenedMatchingItem(item, identity: itemIdentity, fallbackHeader: model.config.header)
+            let itemDir = try session.itemURL(item)
+            let fileURL = itemDir.appendingPathComponent(relative)
+            let comp = MarkDocument.companions(of: relative)
+            let origURL = itemDir.appendingPathComponent(comp.orig)
+            let marksURL = itemDir.appendingPathComponent(comp.marks)
+            let pictureBinding = try Session.bindFile(fileURL)
+            let origBinding = FileManager.default.fileExists(atPath: origURL.path) ? try Session.bindFile(origURL) : nil
+            let marksBinding = FileManager.default.fileExists(atPath: marksURL.path) ? try Session.bindFile(marksURL) : nil
+            let originalData = try Session.read(origBinding ?? pictureBinding)
+            guard let original = ImageFile.load(originalData) else { throw VideoErrorLike("read") }
+            var doc = MarkDocument(width: original.width, height: original.height)
+            if let marksBinding, let d = try? MarkDocument.decode(Session.read(marksBinding)), d.width == original.width, d.height == original.height {
+                doc = d
+            }
+            let a = Annotator(item: item, relative: relative, isNew: isNew, model: model, session: session, itemIdentity: itemIdentity, pictureBinding: pictureBinding, origBinding: origBinding, marksBinding: marksBinding, original: original, doc: doc)
+            open.append(a)
+            a.show()
+        } catch {
             model.alert = .init(title: "Cannot open picture", message: "\(relative) could not be read.")
-            return
         }
-        var doc = MarkDocument(width: original.width, height: original.height)
-        if hasOrig, let data = try? Data(contentsOf: marksURL), let d = try? MarkDocument.decode(data), d.width == original.width, d.height == original.height {
-            doc = d
-        }
-        let a = Annotator(item: item, relative: relative, isNew: isNew, model: model, session: session, itemIdentity: itemIdentity, original: original, doc: doc)
-        open.append(a)
-        a.show()
     }
 
-    init(item: Int, relative: String, isNew: Bool, model: AppModel, session: Session, itemIdentity: String, original: CGImage, doc: MarkDocument) {
+    init(item: Int, relative: String, isNew: Bool, model: AppModel, session: Session, itemIdentity: String, pictureBinding: Session.FileBinding, origBinding: Session.FileBinding?, marksBinding: Session.FileBinding?, original: CGImage, doc: MarkDocument) {
         self.item = item
         self.relative = relative
         self.isNew = isNew
         self.model = model
         self.session = session
         self.itemIdentity = itemIdentity
+        self.pictureBinding = pictureBinding
+        self.origBinding = origBinding
+        self.marksBinding = marksBinding
         self.original = original
         self.doc = doc
         let front = NSWorkspace.shared.frontmostApplication
@@ -179,51 +192,61 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
         do {
             let live = try liveSession()
             let itemDir = try live.itemURL(item)
-            let fileURL = itemDir.appendingPathComponent(relative)
             let comp = MarkDocument.companions(of: relative)
             let origURL = itemDir.appendingPathComponent(comp.orig)
             let marksURL = itemDir.appendingPathComponent(comp.marks)
-            let fm = FileManager.default
+            if origBinding == nil, FileManager.default.fileExists(atPath: origURL.path) {
+                throw SnagError.mediaChanged(origURL.lastPathComponent)
+            }
+            if marksBinding == nil, FileManager.default.fileExists(atPath: marksURL.path) {
+                throw SnagError.mediaChanged(marksURL.lastPathComponent)
+            }
             if doc.marks.isEmpty && doc.crop == nil {
-                if fm.fileExists(atPath: origURL.path) {
-                    let previousPicture = try Data(contentsOf: fileURL)
-                    let originalPicture = try Data(contentsOf: origURL)
-                    var removedOriginal = false
+                if let origBinding {
+                    let previousPicture = try Session.read(pictureBinding)
+                    let originalPicture = try Session.read(origBinding)
+                    let previousMarks = try marksBinding.map(Session.read)
+                    var removedMarks = false
                     do {
-                        try originalPicture.write(to: fileURL, options: .atomic)
-                        try fm.removeItem(at: origURL)
-                        removedOriginal = true
-                        if fm.fileExists(atPath: marksURL.path) { try fm.removeItem(at: marksURL) }
+                        try Session.write(originalPicture, to: pictureBinding)
+                        if let marksBinding {
+                            try Session.remove(marksBinding)
+                            removedMarks = true
+                        }
+                        try Session.remove(origBinding)
                     } catch {
-                        try? previousPicture.write(to: fileURL, options: .atomic)
-                        if removedOriginal { try? originalPicture.write(to: origURL, options: .atomic) }
+                        try? Session.write(previousPicture, to: pictureBinding)
+                        if removedMarks, let previousMarks { try? previousMarks.write(to: marksURL, options: .withoutOverwriting) }
                         throw error
                     }
-                } else if fm.fileExists(atPath: marksURL.path) {
-                    try fm.removeItem(at: marksURL)
+                } else if let marksBinding {
+                    try Session.remove(marksBinding)
                 }
             } else {
-                let hadOrig = fm.fileExists(atPath: origURL.path)
-                let hadMarks = fm.fileExists(atPath: marksURL.path)
-                let previousMarks = hadMarks ? try Data(contentsOf: marksURL) : nil
-                var createdOrig = false
-                var wroteMarks = false
+                let previousPicture = try Session.read(pictureBinding)
+                let previousMarks = try marksBinding.map(Session.read)
+                guard let rendered = MarkRenderer.render(doc, original: original), let picture = ImageFile.pngData(rendered),
+                      let pristine = ImageFile.pngData(original) else { throw VideoErrorLike("render") }
+                let encoded = try doc.encoded()
+                var createdOrig: Session.FileBinding?
+                var createdMarks: Session.FileBinding?
                 do {
-                    if !hadOrig {
-                        guard let png = ImageFile.pngData(original) else { throw VideoErrorLike("encode") }
-                        try png.write(to: origURL, options: .atomic)
-                        createdOrig = true
+                    if origBinding == nil {
+                        try pristine.write(to: origURL, options: .withoutOverwriting)
+                        createdOrig = try Session.bindFile(origURL)
                     }
-                    try doc.encoded().write(to: marksURL, options: .atomic)
-                    wroteMarks = true
-                    guard let out = MarkRenderer.render(doc, original: original), let png = ImageFile.pngData(out) else { throw VideoErrorLike("render") }
-                    try png.write(to: fileURL, options: .atomic)
+                    if let marksBinding {
+                        try Session.write(encoded, to: marksBinding)
+                    } else {
+                        try encoded.write(to: marksURL, options: .withoutOverwriting)
+                        createdMarks = try Session.bindFile(marksURL)
+                    }
+                    try Session.write(picture, to: pictureBinding)
                 } catch {
-                    if wroteMarks {
-                        if let previousMarks { try? previousMarks.write(to: marksURL, options: .atomic) }
-                        else { try? fm.removeItem(at: marksURL) }
-                    }
-                    if createdOrig { try? fm.removeItem(at: origURL) }
+                    try? Session.write(previousPicture, to: pictureBinding)
+                    if let marksBinding, let previousMarks { try? Session.write(previousMarks, to: marksBinding) }
+                    if let createdMarks { try? Session.remove(createdMarks) }
+                    if let createdOrig { try? Session.remove(createdOrig) }
                     throw error
                 }
             }
@@ -251,8 +274,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     func discard() {
         do {
             if isNew {
-                let live = try liveSession()
-                try FileManager.default.removeItem(at: try live.itemURL(item).appendingPathComponent(relative))
+                _ = try liveSession()
+                try Session.remove(pictureBinding)
                 model.flash("Screenshot discarded")
             }
             finished = true

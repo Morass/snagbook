@@ -255,6 +255,24 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: source), Data("ours".utf8))
     }
 
+    func testBoundMediaRejectsAReplacementAtTheSamePath() throws {
+        let s = try Session.create(root: root, config: Config())
+        try s.addItem()
+        let relative = try s.saveMedia(1, data: Data("original".utf8), prefix: "shot", ext: "png")
+        let url = try s.itemURL(1).appendingPathComponent(relative)
+        let binding = try Session.bindFile(url)
+        XCTAssertEqual(try Session.read(binding), Data("original".utf8))
+
+        let held = url.deletingLastPathComponent().appendingPathComponent(".held.png")
+        try FileManager.default.moveItem(at: url, to: held)
+        try Data("replacement".utf8).write(to: url)
+
+        XCTAssertThrowsError(try Session.read(binding))
+        XCTAssertThrowsError(try Session.write(Data("ours".utf8), to: binding))
+        XCTAssertThrowsError(try Session.remove(binding))
+        XCTAssertEqual(try Data(contentsOf: url), Data("replacement".utf8))
+    }
+
     func testOpenRepairsFoldersRemovedOrAddedByHand() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem(title: "Keep")

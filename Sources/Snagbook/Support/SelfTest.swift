@@ -423,6 +423,27 @@ enum SelfTest {
             check(false, "the validation-failure mark-up window opens")
         }
 
+        let replacedRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.2))!, prefix: "shot", ext: "png")) ?? ""
+        Annotator.open(item: id, relative: replacedRel, isNew: false, model: model)
+        await settle()
+        if let replaced = Annotator.open.last {
+            let picture = try! session.itemURL(id).appendingPathComponent(replacedRel)
+            let heldPicture = picture.deletingLastPathComponent().appendingPathComponent(".picture.selftest.png")
+            try? FileManager.default.moveItem(at: picture, to: heldPicture)
+            let stranger = Data("replacement picture".utf8)
+            try? stranger.write(to: picture)
+            replaced.commit { $0.marks.append(Mark(tool: .rect, points: [Pt(10, 10), Pt(80, 60)], color: "#ff3b30", width: 4)) }
+            replaced.done()
+            check(Annotator.open.contains(where: { $0 === replaced }), "mark-up refuses a replacement picture at the same path")
+            check((try? Data(contentsOf: picture)) == stranger, "mark-up does not overwrite a replacement picture")
+            try? FileManager.default.removeItem(at: picture)
+            try? FileManager.default.moveItem(at: heldPicture, to: picture)
+            replaced.skip()
+            await settle()
+        } else {
+            check(false, "the replacement-picture mark-up window opens")
+        }
+
         let liveNote = try! session.noteURL(id)
         let heldNote = liveNote.deletingLastPathComponent().appendingPathComponent(".notes.selftest.md")
         try? FileManager.default.moveItem(at: liveNote, to: heldNote)
@@ -450,6 +471,12 @@ enum SelfTest {
         model.delete(id, confirm: false)
         await settle()
         check(exists(liveItem), "delete refuses a replacement item folder")
+        do {
+            _ = try model.capture.destinationForOpenedItem()
+            check(false, "capture refuses a replacement item folder")
+        } catch {
+            check(true, "capture refuses a replacement item folder")
+        }
         try? FileManager.default.removeItem(at: liveItem)
         try? FileManager.default.moveItem(at: heldItem, to: liveItem)
 
