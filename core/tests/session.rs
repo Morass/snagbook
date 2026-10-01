@@ -252,6 +252,25 @@ fn a_session_deleted_from_outside_is_never_recreated_by_a_write() {
 }
 
 #[test]
+fn deleting_a_session_discards_the_whole_folder() {
+    let e = env();
+    let mut s = Session::create(&e.root, &Config::default(), date("2026-09-25T10:00:00Z"), "12345678").unwrap();
+    s.add_item(None, date("2026-09-25T10:01:00Z")).unwrap();
+    let path = s.dir.clone();
+    let mut discarded = None;
+
+    s.delete(|p| {
+        discarded = Some(p.to_path_buf());
+        std::fs::remove_dir_all(p).map_err(Into::into)
+    })
+    .unwrap();
+
+    assert_eq!(discarded.as_deref(), Some(path.as_path()));
+    assert!(!path.exists());
+    assert!(!Session::list(&e.root).iter().any(|x| x.path == s.display_path));
+}
+
+#[test]
 fn open_rejects_a_folder_without_manifest() {
     let e = env();
     assert_eq!(Session::open(&e.home, "").err(), Some(SnagError::NotASession(e.home.clone())));

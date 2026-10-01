@@ -229,6 +229,29 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     await apply(v, { select: selected === id ? neighbour(rest, Math.max(0, index - 1)) : selected });
   }
 
+  async function deleteSession() {
+    if (!view?.session) return;
+    const title = view.session.title;
+    const ok = await confirm(`Delete “${title}”?`, "The whole session folder, with every item, note, picture and video, goes to the Trash.", "Move to Trash");
+    if (!ok) return;
+    await flush();
+    let v;
+    try {
+      v = await call("delete_session", { permanently: false });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (!msg.startsWith("NOTRASH:")) return;
+      const again = await confirm(
+        `Delete “${title}” permanently?`,
+        `It could not go to the Trash (${msg.slice(8) || "this drive has none"}), so the whole session folder would be deleted for good.`,
+        "Delete Permanently"
+      );
+      if (!again) return;
+      v = await call("delete_session", { permanently: true });
+    }
+    await apply(v);
+  }
+
   async function moveItem(id, index) {
     await apply(await call("move_item", { id, index }));
   }
@@ -466,6 +489,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     }
     entries.push({ label: "Open Another Folder…", run: pickFolder });
     if (view?.session) entries.push({ label: "Show in Files", run: () => call("reveal", { id: null }) });
+    if (view?.session) entries.push("-", { label: "Delete This Session…", danger: true, run: deleteSession });
     entries.push("-", { label: "Settings…", sub: key("Mod+,"), run: settings });
     popup(b.left + 4, b.bottom + 2, entries);
   }
@@ -767,6 +791,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     newSession,
     openSession,
     deleteItem,
+    deleteSession,
     moveItem,
     renameSelected,
     insertTemplate,

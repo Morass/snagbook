@@ -307,6 +307,11 @@ impl Session {
         self.save()
     }
 
+    /// Remove the whole session using the front end's Trash policy.
+    pub fn delete(&self, discard: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+        discard(&self.dir)
+    }
+
     /// A `discard` for delete_item: move the folder to the Trash, and when its drive has none
     /// delete it outright only if `delete_permanently` agrees. Declining is `Cancelled`.
     pub fn trash_or_delete<'a>(

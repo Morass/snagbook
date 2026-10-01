@@ -233,6 +233,38 @@ fn delete_item(app: AppHandle, window: tauri::Window, st: St, id: i64, permanent
 }
 
 #[tauri::command]
+fn delete_session(app: AppHandle, window: tauri::Window, st: St, permanently: bool) -> Res<View> {
+    if window.label() != "main" {
+        return Err("Sessions are deleted from the notebook window.".into());
+    }
+    let mut a = st.lock().unwrap();
+    let dir = a.session.as_ref().ok_or_else(|| "No session is open.".to_string())?.dir.clone();
+    if app.state::<Busy>().has_session(&dir) {
+        return Err("A recording is still being saved into this session. Delete it once the recording is in its note.".into());
+    }
+    let r = if permanently {
+        a.session.as_ref().unwrap().delete(|p| std::fs::remove_dir_all(p).map_err(Into::into))
+    } else {
+        let mut reason = String::new();
+        let r = a.session.as_ref().unwrap().delete(|p| {
+            trash::delete(p).map_err(|e| {
+                reason = e.to_string();
+                SnagError::NoTrash
+            })
+        });
+        if r == Err(SnagError::NoTrash) {
+            return Err(format!("NOTRASH:{reason}"));
+        }
+        r
+    };
+    r.map_err(err)?;
+    a.session = None;
+    a.selected = None;
+    let _ = a.store.update(|c| c.last_session = None);
+    Ok(a.view())
+}
+
+#[tauri::command]
 fn move_item(st: St, id: i64, index: usize) -> Res<View> {
     let mut a = st.lock().unwrap();
     a.session()?.move_item(id, index).map_err(err)?;
@@ -462,6 +494,10 @@ impl Busy {
     }
     fn has(&self, session: Option<&Path>, id: i64) -> bool {
         session.is_some_and(|s| self.0.lock().unwrap().contains_key(&(s.to_path_buf(), id)))
+    }
+
+    fn has_session(&self, session: &Path) -> bool {
+        self.0.lock().unwrap().keys().any(|(s, _)| s == session)
     }
 }
 
@@ -1056,6 +1092,7 @@ pub fn run() {
             add_item,
             rename_item,
             delete_item,
+            delete_session,
             move_item,
             read_note,
             write_note,

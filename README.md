@@ -51,7 +51,7 @@ Or build it yourself; see [Building from source](#building-from-source).
 
 ### Sessions
 
-A session is one sitting of testing. The name at the top of the list (click it) switches between recent sessions, starts a new one, renames this one, or opens a session folder from anywhere else, for example one a colleague shared. A session is named after the time it started until you give it a name.
+A session is one sitting of testing. The name at the top of the list (click it) switches between recent sessions, starts a new one, renames or deletes this one, or opens a session folder from anywhere else, for example one a colleague shared. The recent list is read from disk each time you open it, so sessions removed elsewhere disappear. A session is named after the time it started until you give it a name. Deleting a session moves its whole folder to the Trash; on a drive without a Trash, Snagbook asks before deleting it for good.
 
 ### Items and notes
 
@@ -153,7 +153,7 @@ The settings are a JSON file you can also edit by hand: `~/.config/Snagbook/conf
 
   Folders renamed or removed by hand are noticed the next time the session opens; a session whose folder is deleted while it is open is closed, never written back.
 - **Its settings file** (above).
-- **The Trash**, when you delete an item.
+- **The Trash**, when you delete an item or a session.
 - **The clipboard**, only when you press Copy Hand-off.
 - **The screen**, only when you take a screenshot or record, and only the monitor under the mouse. For a screenshot the picture stays in memory until you choose the rectangle, and only the part you chose is saved; a recording reads only while its timer runs, and keeps only the area you chose. No sound is recorded.
 

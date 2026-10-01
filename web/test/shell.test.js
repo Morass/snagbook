@@ -53,6 +53,13 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
       settle();
       return view();
     },
+    delete_session: ({ permanently }) => {
+      if (!permanently && !trash) throw "NOTRASH:the drive has no Trash";
+      const at = list.findIndex((s) => s.path === session.path);
+      if (at >= 0) list.splice(at, 1);
+      session = null;
+      return view();
+    },
     move_item: ({ id, index }) => {
       const at = session.items.findIndex((i) => i.id === id);
       const [it] = session.items.splice(at, 1);
@@ -274,6 +281,31 @@ test("the session menu reads the folder each time it opens", async () => {
   await t.shell.sessionMenu();
   assert.doesNotMatch(t.$("menu").textContent, /Other run/, "a session deleted from outside is not offered");
   assert.equal(t.app.calls.filter(([c]) => c === "list_sessions").length >= 3, true);
+});
+
+test("a session can be deleted from its menu", async () => {
+  const t = await setup({ session: true });
+  await t.shell.sessionMenu();
+  assert.match(t.$("menu").textContent, /Delete This Session/);
+
+  const p = t.shell.deleteSession();
+  await t.answer(true);
+  await p;
+
+  assert.equal(t.shell.view().session, null);
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "delete_session").map(([, a]) => a.permanently), [false]);
+});
+
+test("deleting a session asks again when its drive has no Trash", async () => {
+  const t = await setup({ session: true, trash: false });
+  const p = t.shell.deleteSession();
+  await t.answer(true);
+  assert.match(t.$("modal").textContent, /permanently/);
+  await t.answer(true);
+  await p;
+
+  assert.equal(t.shell.view().session, null);
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "delete_session").map(([, a]) => a.permanently), [false, true]);
 });
 
 test("an open session deleted from outside is closed with a message", async () => {
