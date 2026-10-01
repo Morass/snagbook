@@ -197,7 +197,11 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function apply(v, { select } = {}) {
     const newSession = v.session?.path !== shownPath || v.session?.openToken !== shownOpenToken;
     const oldIds = items().map((i) => i.id);
+    const oldSelected = selected;
+    const oldItemToken = items().find((item) => item.id === oldSelected)?.itemToken;
     view = v;
+    const newItemToken = items().find((item) => item.id === oldSelected)?.itemToken;
+    const itemChanged = !newSession && oldSelected != null && oldItemToken !== newItemToken;
     if (v.closed) flash(`The session folder ${v.closed} was deleted, so it was closed.`, "error");
     if (newSession) {
       shownPath = v.session?.path ?? null;
@@ -206,12 +210,16 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       for (const id of oldIds) snag()?.forget?.(id);
       editorItem = null;
       epoch++;
+    } else if (itemChanged) {
+      snag()?.forget?.(oldSelected);
+      editorItem = null;
+      epoch++;
     }
     const ids = items().map((i) => i.id);
     let want = select ?? selected;
     if (want == null || !ids.includes(want)) want = newSession ? ids[ids.length - 1] ?? null : neighbour(items(), Math.max(0, ids.indexOf(selected)));
     render();
-    if (want !== selected || newSession) await show(want, { focus: false });
+    if (want !== selected || newSession || itemChanged) await show(want, { focus: false });
     else renderTitle();
     await retryOriginCaptures();
   }
@@ -563,7 +571,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return;
     }
     await apply(await call("state"), { select: id });
-    if (!stillHere()) {
+    const stillValid = !ack || await call("capture_can_insert", { ack }).catch(() => false);
+    if (!stillValid || !stillHere()) {
       const filed = await leaveCaptureInOrigin(ack, origin);
       if (filed) flash("The capture stayed in its original session.");
       return;

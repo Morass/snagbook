@@ -30,6 +30,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let holdSessionReply = false;
   let cancelFolderPick = false;
   let sessionGate = null;
+  let stateGate = null;
+  let releaseState = null;
   let captureFilingBlocked = failCaptureFiling;
   let noteReadFailures = 0;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
@@ -42,18 +44,24 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   const captureOrigins = new Map();
   const sessionOrigins = new Map();
   const itemOrigins = new Map();
+  const itemLifetimeTokens = new Map();
   const list = [...sessions];
   const view = (extra = {}) => ({ config, session: session && JSON.parse(JSON.stringify(session)), loadError: null, closed: null, platform, ...extra });
   const settle = () => {
     session.nextItem = Math.max(0, ...session.items.map((i) => i.id)) + 1;
   };
-  const makeItem = (id, title, folder) => {
-    const itemToken = `item-${nextItemToken++}`;
+  const makeItem = (id, title, folder, forceNew = false) => {
+    const key = `${session.folderToken}\u0000${id}`;
+    const itemToken = !forceNew && itemLifetimeTokens.get(key) || `item-${nextItemToken++}`;
+    itemLifetimeTokens.set(key, itemToken);
     itemOrigins.set(itemToken, { sessionId: session.id, id, valid: true });
     return { id, itemToken, title, folder, images: 0, videos: 0 };
   };
   const handlers = {
-    state: () => view(),
+    state: async () => {
+      if (stateGate) { await stateGate; stateGate = null; }
+      return view();
+    },
     list_sessions: () => list.map((s) => ({ ...s })),
     new_session: async () => {
       if (sessionGate && !holdSessionReply) { await sessionGate; sessionGate = null; }
@@ -99,7 +107,10 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (session.items.find((item) => item.id === id)?.itemToken !== itemToken) throw "The item changed, so it was not deleted.";
       if (!permanently && !trash) throw "NOTRASH:the drive has no Trash";
       const removed = session.items.find((i) => i.id === id);
-      if (removed) itemOrigins.get(removed.itemToken).valid = false;
+      if (removed) {
+        itemOrigins.get(removed.itemToken).valid = false;
+        itemLifetimeTokens.delete(`${session.folderToken}\u0000${id}`);
+      }
       session.items = session.items.filter((i) => i.id !== id);
       settle();
       return view();
@@ -164,7 +175,9 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
         await captureFilingGate;
       }
       const origin = captureOrigins.get(ack);
-      if (!inserted && origin) {
+      const sameOpenFolder = origin?.folderToken === session?.folderToken;
+      const currentItemToken = session?.items.find((item) => item.id === origin?.id)?.itemToken;
+      if (!inserted && origin && (!origin.itemToken || !sameOpenFolder || currentItemToken === origin.itemToken)) {
         const body = notes.get(origin.id) || "";
         notes.set(origin.id, `${body.trimEnd()}${body.trim() ? "\n\n" : ""}![](${origin.rel})\n`);
       }
@@ -176,7 +189,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (captureGate) await captureGate;
       const origin = captureOrigins.get(ack);
       return captureCanInsert && (!origin || (origin.sessionId === session?.id
-        && (origin.folderToken ? origin.folderToken === session?.folderToken : origin.openToken === session?.openToken)));
+        && (origin.folderToken ? origin.folderToken === session?.folderToken : origin.openToken === session?.openToken)
+        && (!origin.itemToken || session.items.find((item) => item.id === origin.id)?.itemToken === origin.itemToken)));
     },
     save_media: async ({ sessionId, openToken, itemToken, id, mime }) => {
       const origin = sessionOrigins.get(openToken);
@@ -186,7 +200,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (mediaGate) await mediaGate;
       const ack = `media-${nextMedia++}`;
       const rel = mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png";
-      captureOrigins.set(ack, { sessionId, openToken, folderToken: origin.folderToken, id, rel });
+      captureOrigins.set(ack, { sessionId, openToken, folderToken: origin.folderToken, itemToken, id, rel });
       return { sessionId, sessionPath: origin.path, ack, id, rel, kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
     },
   };
@@ -205,6 +219,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseWrite: () => releaseWrite?.(),
     releaseDelete: () => releaseDelete?.(),
     holdNextSession: () => { sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
+    holdNextState: () => { stateGate = new Promise((resolve) => { releaseState = resolve; }); },
+    releaseState: () => releaseState?.(),
     holdNextSessionReply: () => { holdSessionReply = true; sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     cancelNextFolderPick: () => { cancelFolderPick = true; sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     releaseSession: () => releaseSession?.(),
@@ -215,7 +231,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       const at = session.items.findIndex((item) => item.id === id);
       const old = session.items[at];
       itemOrigins.get(old.itemToken).valid = false;
-      session.items[at] = makeItem(id, old.title, old.folder);
+      session.items[at] = makeItem(id, old.title, old.folder, true);
     },
     slowNoteFor(id) {
       slowNote = id;
@@ -481,6 +497,19 @@ test("opening the session menu closes a current session deleted from outside", a
   await t.shell.sessionMenu();
   assert.equal(t.shell.view().session, null);
   assert.doesNotMatch(t.$("menu").textContent, /Delete This Session/);
+});
+
+test("refresh replaces the visible editor when the item lifetime changed", async () => {
+  const t = await setup({ session: true });
+  const oldToken = t.shell.view().session.items[0].itemToken;
+  t.app.notes.set(1, "replacement\n");
+  t.app.replaceItem(1);
+
+  await t.shell.refresh();
+
+  const opened = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1];
+  assert.notEqual(opened.itemToken, oldToken);
+  assert.equal(opened.markdown, "replacement\n");
 });
 
 test("a session can be deleted from its menu", async () => {
@@ -807,6 +836,32 @@ test("a capture validation response cannot cross a session switch", async () => 
   await filing;
   assert.equal(inserted, 0);
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "slow-ack", inserted: false }]);
+});
+
+test("capture insertion revalidates the item after refreshed state arrives", async () => {
+  const t = await setup({ session: true });
+  await t.shell.newItem();
+  await t.shell.show(2);
+  const source = t.shell.view().session;
+  const item = source.items.find((candidate) => candidate.id === 1);
+  t.app.addCaptureOrigin("replacement-capture", { sessionId: source.id, openToken: source.openToken, folderToken: source.folderToken, itemToken: item.itemToken, id: 1, rel: "media/shot-old-life.png" });
+  let current = null;
+  let pending = null;
+  const open = t.editor.open;
+  t.editor.open = (value) => { current = value; open(value); };
+  t.editor.insertMedia = ({ src }) => { pending = { id: current.id, itemToken: current.itemToken, markdown: `![](${src})\n` }; };
+  t.editor.takePending = () => { const value = pending; pending = null; return value; };
+  t.app.holdNextState();
+  const filing = t.shell.onCaptured({ sessionId: source.id, ack: "replacement-capture", id: 1, rel: "media/shot-old-life.png" });
+  await t.settle();
+  t.app.notes.set(1, "replacement\n");
+  t.app.replaceItem(1);
+  const replacementToken = t.shell.view().session.items.find((candidate) => candidate.id === 1).itemToken;
+  t.app.releaseState();
+  await filing;
+
+  assert.equal(t.app.notes.get(1), "replacement\n");
+  assert.equal(t.app.calls.some(([cmd, args]) => cmd === "write_note" && args.itemToken === replacementToken && args.markdown.includes("shot-old-life")), false);
 });
 
 test("capture fallback reload follows the same session folder after reopening it", async () => {
