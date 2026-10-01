@@ -513,7 +513,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   function originRevisionKey(origin) {
-    return `${origin.path || origin.sessionId}\u0000${origin.id}`;
+    return `${origin.sessionId}\u0000${origin.id}`;
   }
 
   function bumpOriginRevision(origin) {

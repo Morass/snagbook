@@ -433,10 +433,6 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
                     r = commit_encoded(&temp, &dir.join(&name), &destination).map(|_| name.clone());
                 }
                 let _ = std::fs::remove_file(&temp);
-                // A video that did not finish is not a video: nothing would play it.
-                if r.is_err() {
-                    if destination_current(&destination) { let _ = std::fs::remove_file(dir.join(&name)); }
-                }
                 r
                 })();
                 let _ = done_tx.send(r);
@@ -895,6 +891,43 @@ mod tests {
 
         assert!(result.err().unwrap().contains("replaced"));
         assert_eq!(std::fs::read(replacement_video).unwrap(), b"replacement");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refusing_a_nonempty_reserved_video_does_not_delete_it() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = snagbook_core::Session::create_now(&root.path().to_string_lossy(), &snagbook_core::Config::default()).unwrap();
+        let id = session.add_item(None, chrono::Utc::now()).unwrap().id;
+        let item_dir = session.item_dir(id).unwrap();
+        let identity = session.item_identity(id).unwrap();
+        let media = session.media_dir(id).unwrap();
+        std::fs::create_dir(&media).unwrap();
+        let video = media.join("clip-001.mp4");
+        std::fs::write(&video, b"").unwrap();
+        let started = root.path().join("occupied-encoder-started");
+        let release = root.path().join("occupied-encoder-release");
+        let ffmpeg = root.path().join("occupied-delayed-ffmpeg");
+        std::fs::write(&ffmpeg, format!("#!/bin/sh\ncase \"$*\" in *-encoders*) echo ' V....D libx264  H.264'; exit 0;; esac\nfor a; do out=$a; done\n: > '{}'\nwhile [ ! -e '{}' ]; do sleep 0.01; done\nprintf encoded-video > \"$out\"\ncat > /dev/null\n", started.display(), release.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stop = Stop::new();
+        let request = stop.clone();
+        let mut occupied = false;
+        let plan = Plan { dir: media, stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(ffmpeg), source: "test".into(), destination: Some((item_dir, identity)), finish_timeout: Duration::from_secs(5) };
+
+        let finished = run(|| {
+            if started.exists() && !occupied {
+                std::fs::write(&video, b"replacement").unwrap();
+                std::fs::write(&release, b"").unwrap();
+                request.request();
+                occupied = true;
+            }
+            Ok(RgbaImage::from_pixel(64, 48, Rgba([1, 2, 3, 255])))
+        }, plan, stop).unwrap();
+
+        assert!(finished.video.is_none());
+        assert_eq!(std::fs::read(video).unwrap(), b"replacement");
     }
 
     fn plan(dir: &std::path::Path, ffmpeg: Option<PathBuf>) -> Plan {

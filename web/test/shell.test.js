@@ -1206,6 +1206,25 @@ test("fallback reload recognizes the source reopened through another path", asyn
   assert.match(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, /!\[\]\(media\/image-001\.png\)/);
 });
 
+test("a pending note read through another path retries after fallback filing", async () => {
+  const t = await setup({ session: true, slowMedia: true });
+  t.editor.mediaSaved = () => false;
+  const source = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 18, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  await t.shell.newSession();
+  t.app.list.push({ id: source.id, path: "~/second-alias-to-the-source", folderToken: source.folderToken, title: "Same session", items: 1 });
+  t.app.holdStaleNoteFor(1);
+  const reopening = t.shell.openSession("~/second-alias-to-the-source");
+  await t.settle();
+  t.app.releaseMedia();
+  await saving;
+  t.app.releaseNote();
+  await reopening;
+
+  assert.match(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, /!\[\]\(media\/image-001\.png\)/);
+});
+
 test("a capture finishing while the editor is locked is filed by the backend", async () => {
   const t = await setup({ session: true });
   const source = t.shell.view().session;
