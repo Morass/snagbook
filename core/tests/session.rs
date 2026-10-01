@@ -451,3 +451,16 @@ fn an_item_being_recorded_keeps_its_folder_until_the_recording_ends() {
     assert_ne!(moved.folder, item.folder, "afterwards the same title moves it");
     assert!(s.dir.join(&moved.folder).is_dir() && !before.exists());
 }
+
+#[test]
+fn an_unreadable_note_is_never_treated_as_empty_and_overwritten() {
+    let e = env();
+    let mut s = new(&e);
+    let item = add(&mut s);
+    let note = s.note_path(item.id).unwrap();
+    fs::remove_file(&note).unwrap();
+    fs::create_dir(&note).unwrap();
+    assert!(s.read_note(item.id).is_err());
+    assert!(s.write_note(item.id, "replacement").is_err());
+    assert!(note.is_dir());
+}

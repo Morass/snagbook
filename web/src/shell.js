@@ -82,6 +82,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   const pendingOriginAcks = new Set();
   const editorWrites = new Set();
   let flushTail = Promise.resolve();
+  let noteTail = Promise.resolve();
+  let acknowledgementTail = Promise.resolve();
   const s = { view: () => view, selected: () => selected };
 
   const platform = () => view?.platform || "linux";
@@ -120,28 +122,41 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function flushOnce({ required = false } = {}) {
     const ed = snag();
     if (!ed || !editorReady) return;
-    if (editorWrites.size) await Promise.allSettled([...editorWrites]);
-    const p = ed.takePending?.();
     let ackItem = editorItem;
-    if (p && p.id != null) {
+    while (true) {
+      while (editorWrites.size) await Promise.allSettled([...editorWrites]);
+      const p = ed.takePending?.();
+      if (!p || p.id == null) {
+        if (editorWrites.size) continue;
+        break;
+      }
       ackItem = p.id;
-      let writing;
       try {
-        writing = call("write_note", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id: p.id, markdown: p.markdown });
-        editorWrites.add(writing);
-        await writing;
+        await saveNote({ sessionId: view?.session?.id, openToken: view?.session?.openToken, id: p.id, markdown: p.markdown });
       } catch (e) {
         ed.restorePending?.(p);
         if (required) throw e;
         return;
-      } finally {
-        if (writing) editorWrites.delete(writing);
       }
     }
     if (ackItem != null) {
-      try { await acknowledgeCapture(ackItem); }
+      try { await serializeAcknowledgement(ackItem); }
       catch (e) { if (required) throw e; }
     }
+  }
+
+  function saveNote(args) {
+    const writing = noteTail.then(() => call("write_note", args));
+    noteTail = writing.catch(() => {});
+    editorWrites.add(writing);
+    writing.then(() => editorWrites.delete(writing), () => editorWrites.delete(writing));
+    return writing;
+  }
+
+  function serializeAcknowledgement(id) {
+    const work = acknowledgementTail.then(() => acknowledgeCapture(id));
+    acknowledgementTail = work.catch(() => {});
+    return work;
   }
 
   async function acknowledgeCapture(id) {
@@ -833,20 +848,13 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         break;
       case "changed":
         if (msg.id != null) {
-          let writing;
           try {
             const sessionId = view?.session?.id;
             const openToken = view?.session?.openToken;
-            writing = (async () => {
-              await call("write_note", { sessionId, openToken, id: msg.id, markdown: msg.markdown });
-              await acknowledgeCapture(msg.id);
-            })();
-            editorWrites.add(writing);
-            await writing;
+            await saveNote({ sessionId, openToken, id: msg.id, markdown: msg.markdown });
+            await serializeAcknowledgement(msg.id);
           } catch {
             snag()?.restorePending?.(msg);
-          } finally {
-            if (writing) editorWrites.delete(writing);
           }
         }
         break;

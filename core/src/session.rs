@@ -414,7 +414,7 @@ impl Session {
 
     /// The note's Markdown without its front matter.
     pub fn read_note(&self, id: i64) -> Result<String> {
-        let text = fs::read_to_string(self.note_path(id)?).unwrap_or_default();
+        let text = fs::read_to_string(self.note_path(id)?)?;
         Ok(FrontMatter::split(&text).body)
     }
 
@@ -426,7 +426,7 @@ impl Session {
         if !path.parent().is_some_and(Path::is_dir) {
             return Err(SnagError::Io(format!("The folder of item {id} is gone.")));
         }
-        let old = fs::read_to_string(&path).unwrap_or_default();
+        let old = fs::read_to_string(&path)?;
         let parts = FrontMatter::split(&old);
         let rec = self.item(id)?.clone();
         let created = iso_local(rec.created);

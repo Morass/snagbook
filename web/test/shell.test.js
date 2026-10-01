@@ -491,6 +491,28 @@ test("a session switch waits for an autosave already in flight", async () => {
   assert.deepEqual(pending, { type: "changed", id: 1, markdown: "not lost" });
 });
 
+test("a required flush also waits for autosaves that arrive while it is waiting", async () => {
+  const t = await setup({ session: true, slowWrite: true });
+  let pending = null;
+  t.editor.restorePending = (p) => { pending = p; };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  const set = t.app.notes.set.bind(t.app.notes);
+  let writes = 0;
+  t.app.notes.set = (id, markdown) => {
+    if (++writes > 1) throw new Error("disk full");
+    return set(id, markdown);
+  };
+  const before = t.shell.view().session.openToken;
+  const first = t.shell.onEditorMessage({ type: "changed", id: 1, markdown: "first" });
+  const switching = t.shell.newSession();
+  await t.settle();
+  const latest = t.shell.onEditorMessage({ type: "changed", id: 1, markdown: "first plus latest" });
+  t.app.releaseWrite();
+  await Promise.all([first, latest, switching]);
+  assert.equal(t.shell.view().session.openToken, before);
+  assert.deepEqual(pending, { type: "changed", id: 1, markdown: "first plus latest" });
+});
+
 test("a session switch waits for a required flush already in flight", async () => {
   const t = await setup({ session: true, slowWrite: true });
   let pending = { id: 1, markdown: "not lost" };
@@ -586,10 +608,11 @@ test("overlapping flushes cannot retry an acknowledgement already being consumed
   const filing = t.shell.onCaptured({ sessionId, ack: "one-shot", id: 1, rel: "media/shot-001.png" });
   await t.settle();
   const overlapping = t.shell.flush({ required: true });
+  const autosave = t.shell.onEditorMessage({ type: "changed", id: 1, markdown: "saved while filing" });
   await t.settle();
   assert.equal(t.app.calls.filter(([c]) => c === "capture_filed").length, 1);
   t.app.releaseCaptureFiling();
-  await Promise.all([filing, overlapping]);
+  await Promise.all([filing, overlapping, autosave]);
   await assert.doesNotReject(t.shell.flush({ required: true }));
   assert.equal(t.app.calls.filter(([c]) => c === "capture_filed").length, 1);
 });

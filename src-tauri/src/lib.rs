@@ -830,7 +830,7 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
 }
 
 fn append_capture_link(s: &mut Session, item: i64, link: &str) -> Res<()> {
-    let body = s.read_note(item).unwrap_or_default();
+    let body = s.read_note(item).map_err(err)?;
     let body = body.trim_end();
     s.write_note(item, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") }).map_err(err)?;
     Ok(())
