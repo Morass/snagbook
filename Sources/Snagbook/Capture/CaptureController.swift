@@ -273,11 +273,11 @@ final class CaptureController: ObservableObject {
                 let duration = try await rec.stop()
                 let saved = try await fileRecording(file, into: item, session: session, itemIdentity: itemIdentity, target: t, settings: settings, duration: duration)
                 filed = true
+                try model.recordingSaved(session: saved.session, item: item, relative: saved.relative, duration: duration)
                 saveFailed = false
-                model.recordingSaved(session: saved.session, item: item, relative: saved.relative, duration: duration)
             } catch {
                 saveFailed = true
-                showCaptureError(RecordingRecoveryError(cause: error, folder: file.deletingLastPathComponent()))
+                showCaptureError(filed ? error : RecordingRecoveryError(cause: error, folder: file.deletingLastPathComponent()))
             }
             phase = .idle
             target = nil

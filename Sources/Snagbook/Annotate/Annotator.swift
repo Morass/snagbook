@@ -176,28 +176,44 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     /// Save the marks and the rendered picture, then close.
     func done() {
         canvas?.endTextEditing(commit: true)
-        guard let live = liveSession(), let itemDir = try? live.itemURL(item) else { return close() }
-        let fileURL = itemDir.appendingPathComponent(relative)
-        let comp = MarkDocument.companions(of: relative)
-        let origURL = itemDir.appendingPathComponent(comp.orig)
-        let marksURL = itemDir.appendingPathComponent(comp.marks)
-        let fm = FileManager.default
         do {
+            let live = try liveSession()
+            let itemDir = try live.itemURL(item)
+            let fileURL = itemDir.appendingPathComponent(relative)
+            let comp = MarkDocument.companions(of: relative)
+            let origURL = itemDir.appendingPathComponent(comp.orig)
+            let marksURL = itemDir.appendingPathComponent(comp.marks)
+            let fm = FileManager.default
             if doc.marks.isEmpty && doc.crop == nil {
-                // Nothing drawn: the picture is just the original, with no companions.
                 if fm.fileExists(atPath: origURL.path) {
-                    try? fm.removeItem(at: fileURL)
-                    try fm.moveItem(at: origURL, to: fileURL)
+                    try Data(contentsOf: origURL).write(to: fileURL, options: .atomic)
+                    try fm.removeItem(at: origURL)
                 }
                 try? fm.removeItem(at: marksURL)
             } else {
-                if !fm.fileExists(atPath: origURL.path) {
-                    guard let png = ImageFile.pngData(original) else { throw VideoErrorLike("encode") }
-                    try png.write(to: origURL, options: .atomic)
+                let hadOrig = fm.fileExists(atPath: origURL.path)
+                let hadMarks = fm.fileExists(atPath: marksURL.path)
+                let previousMarks = hadMarks ? try Data(contentsOf: marksURL) : nil
+                var createdOrig = false
+                var wroteMarks = false
+                do {
+                    if !hadOrig {
+                        guard let png = ImageFile.pngData(original) else { throw VideoErrorLike("encode") }
+                        try png.write(to: origURL, options: .atomic)
+                        createdOrig = true
+                    }
+                    try doc.encoded().write(to: marksURL, options: .atomic)
+                    wroteMarks = true
+                    guard let out = MarkRenderer.render(doc, original: original), let png = ImageFile.pngData(out) else { throw VideoErrorLike("render") }
+                    try png.write(to: fileURL, options: .atomic)
+                } catch {
+                    if wroteMarks {
+                        if let previousMarks { try? previousMarks.write(to: marksURL, options: .atomic) }
+                        else { try? fm.removeItem(at: marksURL) }
+                    }
+                    if createdOrig { try? fm.removeItem(at: origURL) }
+                    throw error
                 }
-                guard let out = MarkRenderer.render(doc, original: original), let png = ImageFile.pngData(out) else { throw VideoErrorLike("render") }
-                try png.write(to: fileURL, options: .atomic)
-                try doc.encoded().write(to: marksURL, options: .atomic)
             }
             finished = true
             model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
@@ -210,23 +226,32 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
 
     /// New screenshot: keep it without marks. Existing picture: leave it as it was.
     func skip() {
-        finished = true
-        if isNew, let live = liveSession() { model.annotationFinished(session: live, item: item, relative: relative, isNew: true, kept: true) }
-        close()
+        do {
+            if isNew { model.annotationFinished(session: try liveSession(), item: item, relative: relative, isNew: true, kept: true) }
+            finished = true
+            close()
+        } catch {
+            model.show(error)
+        }
     }
 
     /// New screenshot only: throw it away.
     func discard() {
-        finished = true
-        if isNew, let live = liveSession(), let itemDir = try? live.itemURL(item) {
-            try? FileManager.default.removeItem(at: itemDir.appendingPathComponent(relative))
-            model.flash("Screenshot discarded")
+        do {
+            if isNew {
+                let live = try liveSession()
+                try FileManager.default.removeItem(at: try live.itemURL(item).appendingPathComponent(relative))
+                model.flash("Screenshot discarded")
+            }
+            finished = true
+            close()
+        } catch {
+            model.show(error)
         }
-        close()
     }
 
-    private func liveSession() -> Session? {
-        try? session.reopenedMatchingItem(item, identity: itemIdentity, fallbackHeader: model.config.header)
+    private func liveSession() throws -> Session {
+        try session.reopenedMatchingItem(item, identity: itemIdentity, fallbackHeader: model.config.header)
     }
 
     private func close() {

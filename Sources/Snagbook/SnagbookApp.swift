@@ -79,8 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .terminateLater
             }
             Task {
-                await model.editor.flush()
-                sender.reply(toApplicationShouldTerminate: true)
+                sender.reply(toApplicationShouldTerminate: await model.editor.flush())
             }
             return .terminateLater
         }
@@ -91,8 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let shouldQuit = Self.terminationDecision(phase: capture.phase, saveFailed: capture.saveFailed) {
             guard shouldQuit else { return app.reply(toApplicationShouldTerminate: false) }
             Task {
-                await AppModel.shared.editor.flush()
-                app.reply(toApplicationShouldTerminate: true)
+                app.reply(toApplicationShouldTerminate: await AppModel.shared.editor.flush())
             }
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.waitForSave(app) }

@@ -80,10 +80,14 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     func sessionChanged() { epoch += 1 }
 
     /// Write out any change the editor has not reported yet, and wait for it.
-    func flush() async {
+    func flush() async -> Bool {
         guard ready, let r = await evaluate("snag.takePending()") as? [String: Any],
-              let id = r["id"] as? Int, let md = r["markdown"] as? String else { return }
-        model?.noteChanged(id: id, markdown: md)
+              let id = r["id"] as? Int, let md = r["markdown"] as? String else { return true }
+        guard model?.noteChanged(id: id, markdown: md) == true else {
+            call("snag.restorePending(\(Self.json(r)))")
+            return false
+        }
+        return true
     }
 
     func insertMarkdown(_ text: String) { call("snag.insertMarkdown(\(Self.json(text)))") }
@@ -111,7 +115,10 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             for js in pending { webView.evaluateJavaScript(js, completionHandler: nil) }
             model?.editorReady()
         case "changed":
-            if let id = body["id"] as? Int, let md = body["markdown"] as? String { model?.noteChanged(id: id, markdown: md) }
+            if let id = body["id"] as? Int, let md = body["markdown"] as? String,
+               model?.noteChanged(id: id, markdown: md) == false {
+                call("snag.restorePending(\(Self.json(body)))")
+            }
         case "media":
             guard let req = body["reqId"] as? Int else { return }
             let data = (body["base64"] as? String).flatMap { Data(base64Encoded: $0) }

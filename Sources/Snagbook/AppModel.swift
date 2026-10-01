@@ -76,7 +76,7 @@ final class AppModel: ObservableObject {
 
     func newSession() {
         Task {
-            await editor.flush()
+            guard await editor.flush() else { return }
             do {
                 let s = try Session.create(root: config.sessionsFolder, config: config)
                 use(s)
@@ -91,7 +91,7 @@ final class AppModel: ObservableObject {
 
     func openSession(_ path: String) {
         Task {
-            await editor.flush()
+            guard await editor.flush() else { return }
             do { use(try Session.open(path, fallbackHeader: config.header)) } catch { show(error) }
         }
     }
@@ -153,7 +153,7 @@ final class AppModel: ObservableObject {
             guard a.runModal() == .alertFirstButtonReturn else { return }
         }
         Task {
-            await editor.flush()
+            guard await editor.flush() else { return flash("The note could not be saved, so the session was not deleted") }
             guard self.session === session,
                   capture.phase == .idle,
                   !Annotator.open.contains(where: { $0.session.isSameSession(as: session) }) else {
@@ -217,7 +217,7 @@ final class AppModel: ObservableObject {
 
     func newItemFromMenu() {
         Task {
-            await editor.flush()
+            guard await editor.flush() else { return }
             do { try addItem() } catch { show(error) }
         }
     }
@@ -225,7 +225,7 @@ final class AppModel: ObservableObject {
     func select(_ id: Int?) {
         guard let id, id != selectedID else { return }
         Task {
-            await editor.flush()
+            guard await editor.flush() else { return }
             show(id)
         }
     }
@@ -245,7 +245,7 @@ final class AppModel: ObservableObject {
 
     func goBack() {
         Task {
-            await editor.flush()
+            guard await editor.flush() else { return }
             while let id = back.popLast() {
                 guard items.contains(where: { $0.id == id }) else { continue }
                 if let cur = selectedID { forward.append(cur) }
@@ -258,7 +258,7 @@ final class AppModel: ObservableObject {
 
     func goForward() {
         Task {
-            await editor.flush()
+            guard await editor.flush() else { return }
             while let id = forward.popLast() {
                 guard items.contains(where: { $0.id == id }) else { continue }
                 if let cur = selectedID { back.append(cur) }
@@ -324,7 +324,7 @@ final class AppModel: ObservableObject {
             guard a.runModal() == .alertFirstButtonReturn else { return }
         }
         Task {
-            await editor.flush()
+            guard await editor.flush() else { return flash("The note could not be saved, so the item was not deleted") }
             guard self.session?.isSameSession(as: session) == true,
                   !capture.isUsing(session, item: id),
                   !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: session) }) else {
@@ -373,9 +373,16 @@ final class AppModel: ObservableObject {
 
     // MARK: - notes (called by the editor)
 
-    func noteChanged(id: Int, markdown: String) {
-        guard let session else { return }
-        do { try session.writeNote(id, body: markdown) } catch { show(error) }
+    @discardableResult
+    func noteChanged(id: Int, markdown: String) -> Bool {
+        guard let session else { return false }
+        do {
+            try session.writeNote(id, body: markdown)
+            return true
+        } catch {
+            show(error)
+            return false
+        }
     }
 
     func editorReady() {
@@ -485,13 +492,13 @@ final class AppModel: ObservableObject {
     }
 
     /// A finished recording, already in the item's media folder.
-    func recordingSaved(session sourceSession: Session, item id: Int, relative: String, duration: Double) {
+    func recordingSaved(session sourceSession: Session, item id: Int, relative: String, duration: Double) throws {
         let label = "Video \(CaptureMath.duration(duration))"
         if adoptIfOpen(sourceSession), selectedID == id {
             editor.insertMedia(kind: "video", src: relative, label: label)
             flash("Recording (\(CaptureMath.duration(duration))) saved to \(itemTitle(id))")
         } else {
-            try? appendMedia("[\(label)](\(relative))", to: sourceSession, item: id)
+            try appendMedia("[\(label)](\(relative))", to: sourceSession, item: id)
         }
     }
 
@@ -547,7 +554,7 @@ final class AppModel: ObservableObject {
 
     func copyHandoff() {
         Task {
-            await editor.flush()
+            guard await editor.flush() else { return }
             guard let session else { return flash("No session open") }
             try? session.writeReadme()
             let text = session.handoff(style: config.handoff)

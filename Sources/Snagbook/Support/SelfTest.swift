@@ -88,7 +88,7 @@ enum SelfTest {
         if let bug = model.config.templates.first(where: { $0.label == "Bug" }) {
             model.insertTemplate(bug)
             _ = await js(model, "snag.typeText('menu flickers')")
-            await model.editor.flush()
+            _ = await model.editor.flush()
             check(read(noteURL).contains("**Bug:** menu flickers"), "the Bug template inserts **Bug:**")
         } else {
             check(false, "default templates include Bug")
@@ -98,7 +98,7 @@ enum SelfTest {
         let png = ImageFile.pngData(testImage(320, 200, hue: 0.6))!
         model.insertImageData(png)
         await settle()
-        await model.editor.flush()
+        _ = await model.editor.flush()
         check(exists(try! session.mediaURL(first).appendingPathComponent("image-001.png")), "pasted picture saved as media/image-001.png")
         check(read(noteURL).contains("![](media/image-001.png)"), "pasted picture is linked in the note")
 
@@ -118,7 +118,7 @@ enum SelfTest {
             a.commit { $0.marks.append(Mark(tool: .text, points: [Pt(220, 60)], color: "#ff3b30", width: 24, text: "here")) }
             a.done()
             await settle()
-            await model.editor.flush()
+            _ = await model.editor.flush()
             let media = try! session.mediaURL(first)
             check(exists(media.appendingPathComponent("shot-001.png")), "marked-up screenshot saved")
             check(exists(media.appendingPathComponent("shot-001.orig.png")), "original kept beside it")
@@ -165,10 +165,10 @@ enum SelfTest {
             let rel = saved.relative
             let elsewhere = try model.addItem(title: "Capture switched away", focusTitle: false)
             await settle()
-            model.recordingSaved(session: saved.session, item: first, relative: rel, duration: duration)
+            try model.recordingSaved(session: saved.session, item: first, relative: rel, duration: duration)
             try? FileManager.default.removeItem(at: work)
             await settle()
-            await model.editor.flush()
+            _ = await model.editor.flush()
             let media = try! saved.session.mediaURL(first)
             check(rel == "media/clip-001.mp4" && exists(media.appendingPathComponent("clip-001.mp4")), "recording saved as media/clip-001.mp4")
             check(exists(media.appendingPathComponent("clip-001-frames/0003.jpg")), "one still per second beside it")
@@ -194,7 +194,7 @@ enum SelfTest {
         if let current = model.session { session = current }
         check(second != first, "New Item selects the new item")
         _ = await js(model, "snag.focus(); snag.typeText('Second item text')")
-        await model.editor.flush()
+        _ = await model.editor.flush()
         model.goBack()
         await settle()
         check(model.selectedID == first, "Back returns to the first item")
@@ -216,7 +216,7 @@ enum SelfTest {
         check(shown2.contains("Edited by an agent"), "an outside edit is picked up")
 
         // 11. README and hand-off.
-        await model.editor.flush()
+        _ = await model.editor.flush()
         model.copyHandoff()
         await settle()
         let readme = read(session.url.appendingPathComponent("README.md"))
@@ -384,18 +384,48 @@ enum SelfTest {
         await settle()
         if let failed = Annotator.open.last {
             let failedURL = try! session.itemURL(id).appendingPathComponent(failedRel)
-            try? FileManager.default.removeItem(at: failedURL)
-            try? FileManager.default.createDirectory(at: failedURL, withIntermediateDirectories: false)
+            let before = try? Data(contentsOf: failedURL)
+            let failedStem = ((failedRel as NSString).lastPathComponent as NSString).deletingPathExtension
+            let marksURL = try! session.mediaURL(id).appendingPathComponent(failedStem + ".marks.json")
+            try? FileManager.default.createDirectory(at: marksURL, withIntermediateDirectories: false)
             failed.commit { $0.marks.append(Mark(tool: .ellipse, points: [Pt(10, 10), Pt(80, 60)], color: "#ff3b30", width: 4)) }
             failed.done()
             check(Annotator.open.contains(where: { $0 === failed }), "a failed mark-up save keeps the picture open")
-            try? FileManager.default.removeItem(at: failedURL)
-            try? ImageFile.pngData(failed.original)?.write(to: failedURL)
+            check((try? Data(contentsOf: failedURL)) == before, "a partially failed mark-up save leaves the picture unchanged")
+            try? FileManager.default.removeItem(at: marksURL)
             failed.skip()
             await settle()
         } else {
             check(false, "the failure-path mark-up window opens")
         }
+
+        let validationRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.5))!, prefix: "shot", ext: "png")) ?? ""
+        Annotator.open(item: id, relative: validationRel, isNew: true, model: model)
+        await settle()
+        if let validation = Annotator.open.last {
+            validation.commit { $0.marks.append(Mark(tool: .rect, points: [Pt(10, 10), Pt(80, 60)], color: "#ff3b30", width: 4)) }
+            let manifest = session.url.appendingPathComponent(Session.manifestName)
+            let heldManifest = session.url.appendingPathComponent(".session.selftest.json")
+            try? FileManager.default.moveItem(at: manifest, to: heldManifest)
+            validation.done()
+            check(Annotator.open.contains(where: { $0 === validation }), "a failed session validation keeps unsaved marks open")
+            try? FileManager.default.moveItem(at: heldManifest, to: manifest)
+            validation.discard()
+            await settle()
+        } else {
+            check(false, "the validation-failure mark-up window opens")
+        }
+
+        let liveNote = try! session.noteURL(id)
+        let heldNote = liveNote.deletingLastPathComponent().appendingPathComponent(".notes.selftest.md")
+        try? FileManager.default.moveItem(at: liveNote, to: heldNote)
+        try? FileManager.default.createDirectory(at: liveNote, withIntermediateDirectories: false)
+        _ = await js(model, "snag.typeText(' retained after failed save')")
+        check(await model.editor.flush() == false, "a failed editor flush refuses to discard the pending note")
+        try? FileManager.default.removeItem(at: liveNote)
+        try? FileManager.default.moveItem(at: heldNote, to: liveNote)
+        check(await model.editor.flush(), "the pending note retries after its folder is repaired")
+        check(read(liveNote).contains("retained after failed save"), "the retried note keeps the text from the failed save")
 
         // Closing the notebook window and showing it again brings it back.
         WindowPlacement.notebook?.performClose(nil)
