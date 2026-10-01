@@ -214,6 +214,14 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     await apply(await call("state"));
   }
 
+  async function reloadCurrentItem(id, sessionId, openToken) {
+    if (selected !== id || view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
+    const md = await call("read_note", { id });
+    if (selected !== id || view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
+    snag()?.open({ id, markdown: md, base: mediaBase(platform(), id, epoch), sessionId, openToken, focus: false });
+    editorItem = id;
+  }
+
   // ------------------------------------------------------------ items
 
   let showing = 0;
@@ -891,8 +899,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
           const canInsert = await call("capture_can_insert", { ack: saved.ack }).catch(() => false);
           if (!canInsert || selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken || !snag()?.mediaSaved(msg.reqId, saved.rel)) {
             snag()?.mediaFailed(msg.reqId);
-            await leaveCaptureInOrigin(saved.ack);
+            const filed = await leaveCaptureInOrigin(saved.ack);
             await refresh();
+            if (filed) await reloadCurrentItem(id, msg.sessionId, msg.openToken);
             break;
           }
           const pending = pendingCaptureAcks.get(id) || [];

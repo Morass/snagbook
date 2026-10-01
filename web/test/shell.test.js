@@ -26,6 +26,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let releaseDelete;
   let releaseSession;
   let holdSessionReply = false;
+  let cancelFolderPick = false;
   let sessionGate = null;
   let captureFilingBlocked = failCaptureFiling;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
@@ -62,6 +63,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     },
     pick_session_folder: async () => {
       if (sessionGate) { await sessionGate; sessionGate = null; }
+      if (cancelFolderPick) { cancelFolderPick = false; return null; }
       const path = "~/Snagbook/picked";
       session = { id: "picked", openToken: `open-${nextOpen++}`, path, title: "Picked", header: null, items: [{ id: 1, title: "Picked item", folder: "01-picked-item", images: 0, videos: 0 }], nextItem: 2 };
       return view();
@@ -119,12 +121,17 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     set_selected: () => null,
     update_config: ({ patch }) => (Object.assign(config, patch), view()),
     start_screenshot: () => null,
-    capture_filed: async ({ ack }) => {
+    capture_filed: async ({ ack, inserted }) => {
       if (captureFilingBlocked) throw "The capture could not be filed.";
       if (captureFilingGate) {
         if (captureFilingUsed) throw "That capture is not waiting to be filed.";
         captureFilingUsed = true;
         await captureFilingGate;
+      }
+      const origin = captureOrigins.get(ack);
+      if (!inserted && origin) {
+        const body = notes.get(origin.id) || "";
+        notes.set(origin.id, `${body.trimEnd()}${body.trim() ? "\n\n" : ""}![](${origin.rel})\n`);
       }
       captureOrigins.delete(ack);
       return null;
@@ -138,8 +145,9 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
       if (mediaGate) await mediaGate;
       const ack = `media-${nextMedia++}`;
-      captureOrigins.set(ack, { sessionId, openToken });
-      return { sessionId, ack, id, rel: mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png", kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
+      const rel = mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png";
+      captureOrigins.set(ack, { sessionId, openToken, id, rel });
+      return { sessionId, ack, id, rel, kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
     },
   };
   const invoke = async (cmd, args = {}) => {
@@ -158,6 +166,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseDelete: () => releaseDelete?.(),
     holdNextSession: () => { sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     holdNextSessionReply: () => { holdSessionReply = true; sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
+    cancelNextFolderPick: () => { cancelFolderPick = true; sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     releaseSession: () => releaseSession?.(),
     allowCaptureFiling: () => { captureFilingBlocked = false; },
     slowNoteFor(id) {
@@ -854,6 +863,25 @@ test("a paste reply cannot enter an old editor after the backend switched sessio
   t.app.releaseSession();
   await switching;
   assert.notEqual(t.shell.view().session.openToken, openToken);
+});
+
+test("a paste filed during a cancelled folder picker reloads its source note", async () => {
+  const t = await setup({ session: true, slowMedia: true });
+  t.editor.mediaSaved = () => false;
+  t.app.notes.set(1, "original\n");
+  const { id: sessionId, openToken } = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 12, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  t.app.cancelNextFolderPick();
+  const picking = t.shell.pickFolder();
+  await t.settle();
+  t.app.releaseMedia();
+  await saving;
+  const reopened = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1];
+  assert.match(reopened.markdown, /!\[\]\(media\/image-001\.png\)/);
+  t.app.releaseSession();
+  await picking;
+  assert.equal(t.shell.view().session.openToken, openToken);
 });
 
 test("failed filing of delayed pasted media is retried", async () => {
