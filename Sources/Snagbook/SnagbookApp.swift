@@ -87,7 +87,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor private func waitForSave(_ app: NSApplication) {
-        if AppModel.shared.capture.phase == .idle {
+        let capture = AppModel.shared.capture
+        if let shouldQuit = Self.terminationDecision(phase: capture.phase, saveFailed: capture.saveFailed) {
+            guard shouldQuit else { return app.reply(toApplicationShouldTerminate: false) }
             Task {
                 await AppModel.shared.editor.flush()
                 app.reply(toApplicationShouldTerminate: true)
@@ -95,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.waitForSave(app) }
         }
+    }
+
+    static func terminationDecision(phase: CaptureController.Phase, saveFailed: Bool) -> Bool? {
+        phase == .idle ? !saveFailed : nil
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {

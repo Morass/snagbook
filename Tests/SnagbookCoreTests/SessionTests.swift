@@ -89,6 +89,7 @@ final class SessionTests: XCTestCase {
         try repaired.addItem(now: date("2026-09-24T10:00:01Z"))
 
         XCTAssertFalse(repaired.isSameItem(1, identity: identity))
+        XCTAssertThrowsError(try opened.reopenedMatchingItem(1, identity: identity, fallbackHeader: Config.defaultHeader))
     }
 
     func testAnExternalItemRenameKeepsTheSameItemLifetime() throws {
@@ -100,6 +101,7 @@ final class SessionTests: XCTestCase {
         let repaired = try Session.open(s.url.path)
 
         XCTAssertTrue(repaired.isSameItem(1, identity: identity))
+        XCTAssertEqual(try opened.reopenedMatchingItem(1, identity: identity, fallbackHeader: Config.defaultHeader).item(1).folder, "01-renamed-outside")
     }
 
     func testASessionDeletedFromOutsideIsNeverRecreatedByAWrite() throws {
@@ -207,8 +209,10 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try s.saveMedia(1, data: Data([1]), prefix: "shot", ext: "png"), "media/shot-003.png")
         let clip = try s.reserveMediaName(1, prefix: "clip", ext: "mp4")
         XCTAssertEqual(clip.relative, "media/clip-001.mp4")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: clip.url.path))
+        XCTAssertEqual(try s.saveMedia(1, data: Data([2]), prefix: "clip", ext: "mp4"), "media/clip-002.mp4")
         try Data([0]).write(to: clip.url)
-        XCTAssertEqual(s.mediaCount(1), Session.MediaCount(images: 2, videos: 1))
+        XCTAssertEqual(s.mediaCount(1), Session.MediaCount(images: 2, videos: 2))
     }
 
     func testOpenRepairsFoldersRemovedOrAddedByHand() throws {

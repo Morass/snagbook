@@ -159,8 +159,8 @@ enum SelfTest {
             guard let recordingItemIdentity = try recordingSession.itemIdentity(first) else { throw SnagError.noSuchItem(first) }
             model.openSession(session.displayPath)
             for _ in 0..<30 where model.session === session { await settle(100) }
-            model.rename(first, to: "Renamed while recording")
-            await settle()
+            let renamedOutside = recordingSession.url.appendingPathComponent("01-renamed-outside")
+            try FileManager.default.moveItem(at: try recordingSession.itemURL(first), to: renamedOutside)
             let saved = try await model.capture.fileRecording(file, into: first, session: recordingSession, itemIdentity: recordingItemIdentity, target: target, settings: model.config.capture, duration: duration)
             let rel = saved.relative
             let elsewhere = try model.addItem(title: "Capture switched away", focusTitle: false)
@@ -175,18 +175,21 @@ enum SelfTest {
             check(exists(media.appendingPathComponent("clip-001-contact.jpg")), "contact sheet beside it")
             check(read(media.appendingPathComponent("clip-001.json")).contains("\"duration\""), "clip-001.json describes it")
             check(read(try! saved.session.noteURL(first)).contains("[Video 0:03](media/clip-001.mp4)"), "a recording uses the current item folder and is linked there after the selection changes")
+            check(model.session?.manifest.items.first(where: { $0.id == first })?.folder == "01-renamed-outside", "an external item rename is adopted before the recording enters the editor")
+            model.rename(first, to: "Main menu restored")
             model.rename(first, to: "Main menu")
             await settle()
             if let current = model.session { session = current }
             model.delete(elsewhere, confirm: false)
-            await settle()
+            for _ in 0..<30 where model.items.contains(where: { $0.id == elsewhere }) { await settle(100) }
         } catch {
             check(false, "recording pipeline: \(error.localizedDescription)")
         }
 
         // 9. Back and forward between items.
+        let itemCount = model.items.count
         model.newItemFromMenu()
-        for _ in 0..<30 where model.selectedID == first { await settle(100) }
+        for _ in 0..<30 where model.items.count == itemCount { await settle(100) }
         let second = model.selectedID ?? -1
         check(second != first, "New Item selects the new item")
         _ = await js(model, "snag.focus(); snag.typeText('Second item text')")
@@ -332,6 +335,7 @@ enum SelfTest {
         controls.controller = c
         controls.showRecording(CaptureTarget.screen(screen))
         check(controls.stopControlAcceptsClick, "the floating recording controls accept the first click")
+        check(AppDelegate.terminationDecision(phase: .idle, saveFailed: true) == false, "a failed Stop and Save cancels quitting so its recovery message remains visible")
         controls.hideAll()
 
         // The mark-up canvas: drags draw, keys switch tools, Return saves.

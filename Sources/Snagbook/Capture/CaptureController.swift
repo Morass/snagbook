@@ -26,6 +26,7 @@ final class CaptureController: ObservableObject {
     private var recordingStartup: Task<Void, Never>?
     private var savingItem: Int?
     private var savingSession: Session?
+    private(set) var saveFailed = false
     /// The notebook stepped aside for this capture and comes back when it is filed.
     private var restoreNotebook = false
 
@@ -95,6 +96,7 @@ final class CaptureController: ObservableObject {
             startRecording(t)
             if phase == .recording { bringNotebookBack(activate: false) }
         case .shoot:
+            saveFailed = false
             phase = .saving
             overlay.hideAll()
             let destination: (Session, Int)
@@ -182,6 +184,7 @@ final class CaptureController: ObservableObject {
                 let waitsForAnnotator = model.screenshotTaken(image, source: t.summary, session: live, item: destination.1)
                 if !waitsForAnnotator { bringNotebookBack() }
             } catch {
+                saveFailed = true
                 showCaptureError(error)
             }
         }
@@ -191,6 +194,7 @@ final class CaptureController: ObservableObject {
 
     func startRecording(_ t: CaptureTarget) {
         guard phase == .idle else { return }
+        saveFailed = false
         let id: Int
         do { id = try model.ensureItem() } catch {
             target = nil
@@ -231,6 +235,7 @@ final class CaptureController: ObservableObject {
                 try await rec.start(t, settings: model.config.capture, to: file)
             } catch {
                 guard recorder === rec else { return }
+                saveFailed = true
                 recorder = nil
                 recordingSession = nil
                 recordingItemIdentity = nil
@@ -268,8 +273,10 @@ final class CaptureController: ObservableObject {
                 let duration = try await rec.stop()
                 let saved = try await fileRecording(file, into: item, session: session, itemIdentity: itemIdentity, target: t, settings: settings, duration: duration)
                 filed = true
+                saveFailed = false
                 model.recordingSaved(session: saved.session, item: item, relative: saved.relative, duration: duration)
             } catch {
+                saveFailed = true
                 showCaptureError(RecordingRecoveryError(cause: error, folder: file.deletingLastPathComponent()))
             }
             phase = .idle
@@ -305,11 +312,13 @@ final class CaptureController: ObservableObject {
     }
 
     private func liveSession(for source: Session, item: Int, identity: String?) throws -> Session {
-        let current = try Session.open(source.url.path, fallbackHeader: model.config.header)
-        guard current.isSameSession(as: source) else { throw SnagError.notASession(source.displayPath) }
-        _ = try current.item(item)
-        if let identity, !current.isSameItem(item, identity: identity) { throw SnagError.noSuchItem(item) }
-        return current
+        guard let identity else {
+            let current = try Session.open(source.url.path, fallbackHeader: model.config.header)
+            guard current.isSameSession(as: source) else { throw SnagError.notASession(source.displayPath) }
+            _ = try current.item(item)
+            return current
+        }
+        return try source.reopenedMatchingItem(item, identity: identity, fallbackHeader: model.config.header)
     }
 }
 

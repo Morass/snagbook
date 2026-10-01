@@ -15,6 +15,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     let isNew: Bool
     unowned let model: AppModel
     let session: Session
+    let itemIdentity: String
     let original: CGImage
     private let previousApp: NSRunningApplication?
 
@@ -71,7 +72,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     // MARK: - open
 
     static func open(item: Int, relative: String, isNew: Bool, model: AppModel) {
-        guard let session = model.session, let itemDir = try? session.itemURL(item) else { return }
+        guard let session = model.session, let itemDir = try? session.itemURL(item),
+              let itemIdentity = try? session.itemIdentity(item) else { return }
         let fileURL = itemDir.appendingPathComponent(relative)
         let comp = MarkDocument.companions(of: relative)
         let origURL = itemDir.appendingPathComponent(comp.orig)
@@ -85,17 +87,18 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
         if hasOrig, let data = try? Data(contentsOf: marksURL), let d = try? MarkDocument.decode(data), d.width == original.width, d.height == original.height {
             doc = d
         }
-        let a = Annotator(item: item, relative: relative, isNew: isNew, model: model, session: session, original: original, doc: doc)
+        let a = Annotator(item: item, relative: relative, isNew: isNew, model: model, session: session, itemIdentity: itemIdentity, original: original, doc: doc)
         open.append(a)
         a.show()
     }
 
-    init(item: Int, relative: String, isNew: Bool, model: AppModel, session: Session, original: CGImage, doc: MarkDocument) {
+    init(item: Int, relative: String, isNew: Bool, model: AppModel, session: Session, itemIdentity: String, original: CGImage, doc: MarkDocument) {
         self.item = item
         self.relative = relative
         self.isNew = isNew
         self.model = model
         self.session = session
+        self.itemIdentity = itemIdentity
         self.original = original
         self.doc = doc
         let front = NSWorkspace.shared.frontmostApplication
@@ -173,7 +176,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     /// Save the marks and the rendered picture, then close.
     func done() {
         canvas?.endTextEditing(commit: true)
-        guard session.matchesDiskIdentity, let itemDir = try? session.itemURL(item) else { return close() }
+        guard let live = liveSession(), let itemDir = try? live.itemURL(item) else { return close() }
         let fileURL = itemDir.appendingPathComponent(relative)
         let comp = MarkDocument.companions(of: relative)
         let origURL = itemDir.appendingPathComponent(comp.orig)
@@ -197,8 +200,8 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                 try doc.encoded().write(to: marksURL, options: .atomic)
             }
             finished = true
-            model.annotationFinished(session: session, item: item, relative: relative, isNew: isNew, kept: true)
-            try? session.writeReadme()
+            model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
+            try? live.writeReadme()
         } catch {
             model.show(error)
         }
@@ -208,18 +211,22 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     /// New screenshot: keep it without marks. Existing picture: leave it as it was.
     func skip() {
         finished = true
-        if isNew { model.annotationFinished(session: session, item: item, relative: relative, isNew: true, kept: true) }
+        if isNew, let live = liveSession() { model.annotationFinished(session: live, item: item, relative: relative, isNew: true, kept: true) }
         close()
     }
 
     /// New screenshot only: throw it away.
     func discard() {
         finished = true
-        if isNew, session.matchesDiskIdentity, let itemDir = try? session.itemURL(item) {
+        if isNew, let live = liveSession(), let itemDir = try? live.itemURL(item) {
             try? FileManager.default.removeItem(at: itemDir.appendingPathComponent(relative))
             model.flash("Screenshot discarded")
         }
         close()
+    }
+
+    private func liveSession() -> Session? {
+        try? session.reopenedMatchingItem(item, identity: itemIdentity, fallbackHeader: model.config.header)
     }
 
     private func close() {

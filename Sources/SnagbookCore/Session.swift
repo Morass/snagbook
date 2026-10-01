@@ -190,6 +190,14 @@ public final class Session {
         (try? itemIdentity(id)) == identity
     }
 
+    public func reopenedMatchingItem(_ id: Int, identity: String, fallbackHeader: String) throws -> Session {
+        let current = try Session.open(url.path, fallbackHeader: fallbackHeader)
+        guard current.isSameSession(as: self), current.isSameItem(id, identity: identity) else {
+            throw SnagError.noSuchItem(id)
+        }
+        return current
+    }
+
     /// Add an item after the others. With no title it is "Item N".
     @discardableResult
     public func addItem(title: String? = nil, now: Date = Date()) throws -> ItemRecord {
@@ -339,13 +347,21 @@ public final class Session {
         return Self.mediaName + "/" + name
     }
 
-    /// A free name in the item's media folder, for a file that will be written later.
+    /// Hold a free name in the item's media folder for a file that will be written later.
     public func reserveMediaName(_ id: Int, prefix: String, ext: String) throws -> (relative: String, url: URL) {
         try requireExists()
         let media = try mediaURL(id)
         try ensureDirectory(media)
-        let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
-        return (Self.mediaName + "/" + name, media.appendingPathComponent(name))
+        while true {
+            let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set((try? fm.contentsOfDirectory(atPath: media.path)) ?? []))
+            let url = media.appendingPathComponent(name)
+            do {
+                try Data().write(to: url, options: .withoutOverwriting)
+                return (Self.mediaName + "/" + name, url)
+            } catch let e as CocoaError where e.code == .fileWriteFileExists {
+                continue
+            }
+        }
     }
 
     public struct MediaCount: Equatable {

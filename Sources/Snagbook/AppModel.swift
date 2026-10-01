@@ -431,6 +431,7 @@ final class AppModel: ObservableObject {
                 insertImageData(url.pathExtension.lowercased() == "png" ? data : (ImageFile.load(data).flatMap(ImageFile.pngData) ?? data))
             case .video:
                 let target = try session.reserveMediaName(id, prefix: "clip", ext: url.pathExtension.isEmpty ? "mp4" : url.pathExtension)
+                try FileManager.default.removeItem(at: target.url)
                 try FileManager.default.copyItem(at: url, to: target.url)
                 editor.insertMedia(kind: "video", src: target.relative, label: url.lastPathComponent)
             case nil:
@@ -448,10 +449,11 @@ final class AppModel: ObservableObject {
             let id = try sourceItem ?? ensureItem()
             guard let session = sourceSession ?? session, let png = ImageFile.pngData(image) else { return false }
             let rel = try session.saveMedia(id, data: png, prefix: "shot", ext: "png")
-            if config.capture.annotateScreenshots, self.session?.isSameSession(as: session) == true, selectedID == id {
+            let isOpen = adoptIfOpen(session)
+            if config.capture.annotateScreenshots, isOpen, selectedID == id {
                 Annotator.open(item: id, relative: rel, isNew: true, model: self)
                 return true
-            } else if self.session?.isSameSession(as: session) == true, selectedID == id {
+            } else if isOpen, selectedID == id {
                 editor.insertMedia(kind: "image", src: rel, label: "")
                 flash("Screenshot saved to \(itemTitle(id))")
             } else {
@@ -466,16 +468,17 @@ final class AppModel: ObservableObject {
 
     /// The mark-up window finished with a picture.
     func annotationFinished(session sourceSession: Session, item id: Int, relative: String, isNew: Bool, kept: Bool) {
+        let isOpen = adoptIfOpen(sourceSession)
         if isNew {
             if kept {
-                if session?.isSameSession(as: sourceSession) == true, selectedID == id {
+                if isOpen, selectedID == id {
                     editor.insertMedia(kind: "image", src: relative, label: "")
                     flash("Screenshot saved to \(itemTitle(id))")
                 } else {
                     try? appendMedia("![](\(relative))", to: sourceSession, item: id)
                 }
             }
-        } else if session?.isSameSession(as: sourceSession) == true {
+        } else if isOpen {
             editor.refreshMedia(relative)
         }
     }
@@ -488,7 +491,7 @@ final class AppModel: ObservableObject {
     /// A finished recording, already in the item's media folder.
     func recordingSaved(session sourceSession: Session, item id: Int, relative: String, duration: Double) {
         let label = "Video \(CaptureMath.duration(duration))"
-        if session?.isSameSession(as: sourceSession) == true, selectedID == id {
+        if adoptIfOpen(sourceSession), selectedID == id {
             editor.insertMedia(kind: "video", src: relative, label: label)
             flash("Recording (\(CaptureMath.duration(duration))) saved to \(itemTitle(id))")
         } else {
@@ -499,6 +502,13 @@ final class AppModel: ObservableObject {
     private func appendMedia(_ markdown: String, to session: Session, item id: Int) throws {
         let old = try session.readNote(id).trimmingCharacters(in: .whitespacesAndNewlines)
         try session.writeNote(id, body: old.isEmpty ? markdown + "\n" : old + "\n\n" + markdown + "\n")
+    }
+
+    private func adoptIfOpen(_ refreshed: Session) -> Bool {
+        guard session?.isSameSession(as: refreshed) == true else { return false }
+        session = refreshed
+        items = refreshed.manifest.items
+        return true
     }
 
     func itemTitle(_ id: Int) -> String { items.first { $0.id == id }?.title ?? "Item \(id)" }
