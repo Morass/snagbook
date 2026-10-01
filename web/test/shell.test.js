@@ -465,6 +465,23 @@ test("a failed autosave prevents switching to a new session", async () => {
   assert.deepEqual(pending, { type: "changed", id: 1, markdown: "not lost" });
 });
 
+test("a session switch waits for an autosave already in flight", async () => {
+  const t = await setup({ session: true, slowWrite: true });
+  let pending = null;
+  t.editor.restorePending = (p) => { pending = p; };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.app.notes.set = () => { throw new Error("disk full"); };
+  const before = t.shell.view().session.openToken;
+  const autosave = t.shell.onEditorMessage({ type: "changed", id: 1, markdown: "not lost" });
+  const switching = t.shell.newSession();
+  await t.settle();
+  assert.equal(t.shell.view().session.openToken, before);
+  t.app.releaseWrite();
+  await Promise.all([autosave, switching]);
+  assert.equal(t.shell.view().session.openToken, before);
+  assert.deepEqual(pending, { type: "changed", id: 1, markdown: "not lost" });
+});
+
 test("a failed autosave prevents switching items", async () => {
   const t = await setup({ session: true });
   await t.shell.newItem();
@@ -688,6 +705,23 @@ test("a pasted-media save response cannot cross an item switch", async () => {
   await saving;
   assert.equal(t.editor.log.some((entry) => entry[0] === "saved" && entry[1] === 9), false);
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "media-1", inserted: false }]);
+});
+
+test("failed filing of delayed pasted media is retried", async () => {
+  const t = await setup({ session: true, slowMedia: true, failCaptureFiling: true });
+  const { id: sessionId, openToken } = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 10, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  await t.shell.newItem();
+  t.app.releaseMedia();
+  await saving;
+  t.app.allowCaptureFiling();
+  await t.shell.refresh();
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [
+    { ack: "media-1", inserted: false },
+    { ack: "media-1", inserted: false },
+    { ack: "media-1", inserted: false },
+  ]);
 });
 
 test("reopening the same folder refreshes the editor's session token", async () => {

@@ -80,6 +80,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let statusTimer = null;
   const pendingCaptureAcks = new Map();
   const pendingOriginAcks = new Set();
+  const editorWrites = new Set();
   const s = { view: () => view, selected: () => selected };
 
   const platform = () => view?.platform || "linux";
@@ -112,6 +113,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function flush({ required = false } = {}) {
     const ed = snag();
     if (!ed || !editorReady) return;
+    if (editorWrites.size) await Promise.allSettled([...editorWrites]);
     const p = ed.takePending?.();
     let ackItem = editorItem;
     if (p && p.id != null) {
@@ -819,12 +821,20 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         break;
       case "changed":
         if (msg.id != null) {
+          let writing;
           try {
-            await call("write_note", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id: msg.id, markdown: msg.markdown });
-            await acknowledgeCapture(msg.id);
+            const sessionId = view?.session?.id;
+            const openToken = view?.session?.openToken;
+            writing = (async () => {
+              await call("write_note", { sessionId, openToken, id: msg.id, markdown: msg.markdown });
+              await acknowledgeCapture(msg.id);
+            })();
+            editorWrites.add(writing);
+            await writing;
           } catch {
             snag()?.restorePending?.(msg);
-            await refresh();
+          } finally {
+            if (writing) editorWrites.delete(writing);
           }
         }
         break;
@@ -835,7 +845,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
           const saved = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
           if (selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken || !snag()?.mediaSaved(msg.reqId, saved.rel)) {
             snag()?.mediaFailed(msg.reqId);
-            await call("capture_filed", { ack: saved.ack, inserted: false });
+            await leaveCaptureInOrigin(saved.ack);
             await refresh();
             break;
           }
