@@ -137,9 +137,10 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (slowNote === id) await new Promise((resolve) => setTimeout(resolve, 30));
       return notes.get(id) ?? "";
     },
-    write_note: async ({ sessionId, openToken, id, markdown }) => {
+    write_note: async ({ sessionId, openToken, itemToken, id, markdown }) => {
       if (writeGate) await writeGate;
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed before the note could be saved.";
+      if (itemToken != null && session.items.find((item) => item.id === id)?.itemToken !== itemToken) throw "The note's item is gone or was replaced.";
       notes.set(id, markdown);
       return true;
     },
@@ -1000,6 +1001,15 @@ test("pasted bytes refuse a replacement item with the same number", async () => 
   await t.shell.onEditorMessage({ type: "media", reqId: 20, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
   assert.deepEqual(t.editor.log.pop(), ["failed", 20]);
   assert.equal(t.app.calls.some(([cmd]) => cmd === "capture_filed"), false);
+});
+
+test("an editor save refuses a replacement item with the same number", async () => {
+  const t = await setup({ session: true });
+  const source = t.shell.view().session;
+  t.app.notes.set(1, "replacement\n");
+  t.app.replaceItem(1);
+  await t.shell.onEditorMessage({ type: "changed", id: 1, itemToken: source.items[0].itemToken, markdown: "old editor text\n" });
+  assert.equal(t.app.notes.get(1), "replacement\n");
 });
 
 test("a pasted-media save response cannot cross an item switch", async () => {

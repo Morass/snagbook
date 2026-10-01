@@ -37,7 +37,7 @@ test("open, type, flush posts the new Markdown once", () => {
   api.flush();
   const c = changes();
   assert.equal(c.length, 1);
-  assert.deepEqual(c[0], { type: "changed", id: "01", markdown: "Hello world\n" });
+  assert.deepEqual(c[0], { type: "changed", id: "01", itemToken: null, markdown: "Hello world\n" });
 });
 
 test("input rules: heading, bullets, checklist, bold", () => {
@@ -160,7 +160,7 @@ test("takePending hands over an unsaved change exactly once", () => {
   api.open({ id: "20", markdown: "a\n", focus: false });
   view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
   type("b");
-  assert.deepEqual(api.takePending(), { id: "20", markdown: "ab\n" });
+  assert.deepEqual(api.takePending(), { id: "20", itemToken: null, markdown: "ab\n" });
   assert.equal(api.takePending(), null);
   const before = changes().length;
   api.flush();

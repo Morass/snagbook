@@ -182,6 +182,8 @@ fn a_reused_item_number_has_a_new_folder_identity() {
 
     assert_eq!(replacement.id, first.id);
     assert!(!s.matches_item_identity(replacement.id, &identity));
+    assert!(s.write_note_matching(replacement.id, &identity, "old editor text").is_err());
+    assert_eq!(s.read_note(replacement.id).unwrap(), "");
 }
 
 #[test]

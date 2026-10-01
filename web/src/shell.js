@@ -143,7 +143,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       }
       ackItem = p.id;
       try {
-        await saveNote({ sessionId: view?.session?.id, openToken: view?.session?.openToken, id: p.id, markdown: p.markdown });
+        await saveNote({ sessionId: view?.session?.id, openToken: view?.session?.openToken, itemToken: p.itemToken, id: p.id, markdown: p.markdown });
       } catch (e) {
         ed.restorePending?.(p);
         if (required) throw e;
@@ -963,7 +963,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
           try {
             const sessionId = view?.session?.id;
             const openToken = view?.session?.openToken;
-            await saveNote({ sessionId, openToken, id: msg.id, markdown: msg.markdown });
+            await saveNote({ sessionId, openToken, itemToken: msg.itemToken, id: msg.id, markdown: msg.markdown });
             await serializeAcknowledgement(msg.id);
           } catch {
             snag()?.restorePending?.(msg);

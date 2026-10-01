@@ -100,6 +100,12 @@ fn names_in(dir: &Path) -> Vec<String> {
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct FolderIdentity(Arc<same_file::Handle>);
 
+impl FolderIdentity {
+    pub fn matches_path(&self, path: &Path) -> bool {
+        same_file::Handle::from_path(path).ok().is_some_and(|current| current == *self.0)
+    }
+}
+
 pub struct Session {
     pub dir: PathBuf,
     /// How to spell the folder for people and other programs ("~/…").
@@ -197,7 +203,7 @@ impl Session {
     }
 
     pub fn matches_folder_identity(&self, expected: &FolderIdentity) -> bool {
-        same_file::Handle::from_path(&self.dir).ok().is_some_and(|current| current == *expected.0)
+        expected.matches_path(&self.dir)
     }
 
     pub fn item_identity(&self, id: i64) -> Result<FolderIdentity> {
@@ -205,7 +211,7 @@ impl Session {
     }
 
     pub fn matches_item_identity(&self, id: i64, expected: &FolderIdentity) -> bool {
-        self.item_dir(id).ok().and_then(|dir| same_file::Handle::from_path(dir).ok()).is_some_and(|current| current == *expected.0)
+        self.item_dir(id).ok().is_some_and(|dir| expected.matches_path(&dir))
     }
 
     /// Folders may have been renamed or removed by hand: drop records whose folder is gone,
@@ -428,6 +434,13 @@ impl Session {
 
     /// Store the note's Markdown, keeping its front matter. False when the file already held
     /// exactly this.
+    pub fn write_note_matching(&mut self, id: i64, identity: &FolderIdentity, body: &str) -> Result<bool> {
+        if !self.matches_item_identity(id, identity) {
+            return Err(SnagError::Io(format!("The folder of item {id} is gone or was replaced.")));
+        }
+        self.write_note(id, body)
+    }
+
     pub fn write_note(&mut self, id: i64, body: &str) -> Result<bool> {
         self.require_exists()?;
         let path = self.note_path(id)?;

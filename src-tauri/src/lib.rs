@@ -339,12 +339,16 @@ fn read_note(st: St, id: i64) -> Res<String> {
 }
 
 #[tauri::command]
-fn write_note(st: St, session_id: String, open_token: String, id: i64, markdown: String) -> Res<bool> {
+fn write_note(st: St, session_id: String, open_token: String, item_token: String, id: i64, markdown: String) -> Res<bool> {
     let mut a = st.lock().unwrap();
     if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
         return Err("The open session changed before the note could be saved.".into());
     }
-    a.session()?.write_note(id, &markdown).map_err(err)
+    let item_identity = a.item_origins.iter().find_map(|(identity, token)| (token == &item_token).then(|| identity.clone())).ok_or("The note's item is no longer known.")?;
+    if a.session.as_ref().is_none_or(|s| !s.matches_item_identity(id, &item_identity)) {
+        return Err("The note's item is gone or was replaced.".into());
+    }
+    a.session()?.write_note_matching(id, &item_identity, &markdown).map_err(err)
 }
 
 /// Bytes pasted or dropped into the editor. The acknowledgement keeps the item protected
@@ -681,6 +685,7 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
         max_stills: cap.max_stills,
         ffmpeg: record::find_ffmpeg(),
         source: format!("region {w}×{h} at {x},{y}"),
+        destination: Some((path.parent().and_then(Path::parent).ok_or("no item folder")?.to_path_buf(), item_identity.clone())),
         finish_timeout: std::time::Duration::from_secs(60),
     };
     let stop = record::Stop::new();

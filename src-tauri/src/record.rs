@@ -5,7 +5,7 @@
 
 use image::{codecs::jpeg::JpegEncoder, imageops, Rgba, RgbaImage};
 use serde::Serialize;
-use snagbook_core::capture_math;
+use snagbook_core::{capture_math, FolderIdentity};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -310,8 +310,17 @@ pub struct Plan {
     pub max_stills: i64,
     pub ffmpeg: Option<PathBuf>,
     pub source: String,
+    pub destination: Option<(PathBuf, FolderIdentity)>,
     /// How long ffmpeg may take to finish after Stop before it is given up on.
     pub finish_timeout: Duration,
+}
+
+fn destination_current(destination: &Option<(PathBuf, FolderIdentity)>) -> bool {
+    destination.as_ref().is_none_or(|(path, identity)| identity.matches_path(path))
+}
+
+fn require_destination(destination: &Option<(PathBuf, FolderIdentity)>) -> Result<(), String> {
+    destination_current(destination).then_some(()).ok_or_else(|| "the recording's item folder is gone or was replaced".into())
 }
 
 pub struct Finished {
@@ -338,8 +347,9 @@ fn thin(thumbs: &mut Vec<(f64, RgbaImage)>) {
 /// recording leaves nothing behind: not the empty file holding its name, not its frames.
 pub fn run(grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Arc<Stop>) -> Result<Finished, String> {
     let (dir, stem) = (plan.dir.clone(), plan.stem.clone());
+    let destination = plan.destination.clone();
     let result = record(grab, plan, stop);
-    if result.is_err() {
+    if result.is_err() && destination_current(&destination) {
         let placeholder = dir.join(format!("{stem}.mp4"));
         if std::fs::metadata(&placeholder).map(|m| m.len() == 0).unwrap_or(false) {
             let _ = std::fs::remove_file(&placeholder);
@@ -350,6 +360,7 @@ pub fn run(grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Ar
 }
 
 fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Arc<Stop>) -> Result<Finished, String> {
+    require_destination(&plan.destination)?;
     let first = grab()?;
     let src = first.dimensions();
     let dst = capture_math::output_size(src.0 as f64, src.1 as f64, plan.max_long_edge);
@@ -370,6 +381,7 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
         }
         Some(ff) => {
             let (dir, stem) = (plan.dir.clone(), plan.stem.clone());
+            let destination = plan.destination.clone();
             let slot = killer.clone();
             let limit = plan.finish_timeout;
             let (done_tx, done_rx) = std::sync::mpsc::channel();
@@ -378,13 +390,14 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
                 let encoders = encoder_list(&ff, Duration::from_secs(20))?;
                 let (ext, args) = pick_codec(&encoders, bit_rate(dst.0, dst.1, fps)).ok_or("this ffmpeg has no H.264 or VP9 encoder")?;
                 let name = format!("{stem}.{ext}");
+                require_destination(&destination)?;
                 let mut enc = Encoder::start(&ff, &args, src, dst, fps, &dir.join(&name))?;
                 *slot.lock().unwrap() = Some(enc.killer());
                 let mut failed = None;
                 for (frame, times) in rx {
                     for _ in 0..times {
                         if failed.is_none() {
-                            if let Err(e) = enc.frame(frame.as_raw()) {
+                            if let Err(e) = require_destination(&destination).and_then(|_| enc.frame(frame.as_raw())) {
                                 failed = Some(e);
                             }
                         }
@@ -397,7 +410,7 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
                 };
                 // A video that did not finish is not a video: nothing would play it.
                 if r.is_err() {
-                    let _ = std::fs::remove_file(dir.join(&name));
+                    if destination_current(&destination) { let _ = std::fs::remove_file(dir.join(&name)); }
                 }
                 r
                 })();
@@ -407,6 +420,7 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
         }
     };
     let frames_dir = plan.dir.join(format!("{}-frames", plan.stem));
+    require_destination(&plan.destination)?;
     let _ = std::fs::remove_dir_all(&frames_dir);
     std::fs::create_dir_all(&frames_dir).map_err(|e| e.to_string())?;
     let mut stills: Vec<(f64, PathBuf)> = vec![];
@@ -433,6 +447,7 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
         }
     };
     loop {
+        require_destination(&plan.destination)?;
         let t = start.elapsed().as_secs_f64();
         if frame.dimensions() == src {
             // The video keeps the wall clock: a slow grab repeats the frame instead of
@@ -509,21 +524,24 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
     }
 
     // The stills that are kept: the macOS app's times, each from the nearest second taken.
+    require_destination(&plan.destination)?;
     let have: Vec<f64> = stills.iter().map(|s| s.0).collect();
     let mut kept = vec![];
     for (i, want) in capture_math::still_times(duration, plan.max_stills).into_iter().enumerate() {
+        require_destination(&plan.destination)?;
         let Some(j) = nearest(&have, want) else { continue };
         let name = format!("{:04}.jpg", i + 1);
         std::fs::copy(&stills[j].1, frames_dir.join(&name)).map_err(|e| e.to_string())?;
         kept.push(Still { time: (have[j] * 10.0).round() / 10.0, file: format!("{}-frames/{name}", plan.stem) });
     }
     for (_, p) in &stills {
-        let _ = std::fs::remove_file(p);
+        if destination_current(&plan.destination) { let _ = std::fs::remove_file(p); }
     }
 
     // The app reserves "<stem>.mp4" with an empty file while recording; drop it unless it is
     // the video.
     let placeholder = plan.dir.join(format!("{}.mp4", plan.stem));
+    require_destination(&plan.destination)?;
     if video_name.as_deref() != Some(&format!("{}.mp4", plan.stem)) && std::fs::metadata(&placeholder).map(|m| m.len() == 0).unwrap_or(false) {
         let _ = std::fs::remove_file(&placeholder);
     }
@@ -536,6 +554,7 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
     let sheet_name = format!("{}-contact.jpg", plan.stem);
     let sheet = match contact_sheet(&tiles) {
         Some(img) => {
+            require_destination(&plan.destination)?;
             std::fs::write(plan.dir.join(&sheet_name), jpeg(&img, 75)?).map_err(|e| e.to_string())?;
             Some(sheet_name)
         }
@@ -555,6 +574,7 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
         app: Some("Snagbook".into()),
     };
     let json = serde_json::to_string_pretty(&info).map_err(|e| e.to_string())?;
+    require_destination(&plan.destination)?;
     std::fs::write(plan.dir.join(format!("{}.json", plan.stem)), json).map_err(|e| e.to_string())?;
     Ok(Finished { video: video_name, sheet, duration, problem })
 }
@@ -623,7 +643,7 @@ mod tests {
             s2.request();
         });
         let ff = with_ffmpeg();
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: ff.clone(), source: "test".into(), finish_timeout: Duration::from_secs(60) };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: ff.clone(), source: "test".into(), destination: None, finish_timeout: Duration::from_secs(60) };
         let f = run(grab, plan, stop).unwrap();
         assert!((2.3..3.2).contains(&f.duration), "{}", f.duration);
         let info: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("clip-001.json")).unwrap()).unwrap();
@@ -660,7 +680,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(3000));
             s2.request();
         });
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(slow), source: "test".into(), finish_timeout: Duration::from_secs(60) };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(slow), source: "test".into(), destination: None, finish_timeout: Duration::from_secs(60) };
         // Big frames fill the pipe at once, so a blocking write would stall the grab loop.
         let f = run(|| Ok(RgbaImage::from_pixel(1280, 720, Rgba([200, 30, 30, 255]))), plan, stop).unwrap();
         assert_eq!(f.video.as_deref(), Some("clip-001.mp4"), "{:?}", f.problem);
@@ -686,7 +706,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(3000));
             s2.request();
         });
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(slow), source: "test".into(), finish_timeout: Duration::from_secs(60) };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(slow), source: "test".into(), destination: None, finish_timeout: Duration::from_secs(60) };
         let f = run(|| Ok(RgbaImage::from_pixel(320, 240, Rgba([30, 30, 200, 255]))), plan, stop).unwrap();
         assert!(f.duration >= 2.8, "the clip is {}s long, not 3", f.duration);
         assert_eq!(f.video.as_deref(), Some("clip-001.mp4"), "{:?}", f.problem);
@@ -709,7 +729,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(12000));
             s2.request();
         });
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(stuck), source: "test".into(), finish_timeout: Duration::from_secs(2) };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(stuck), source: "test".into(), destination: None, finish_timeout: Duration::from_secs(2) };
         let t0 = Instant::now();
         // Big frames: the pipe and then the queue fill within the 12 seconds.
         let f = run(|| Ok(RgbaImage::from_pixel(1280, 720, Rgba([9, 9, 9, 255]))), plan, stop).unwrap();
@@ -740,7 +760,7 @@ mod tests {
             }
             Ok(RgbaImage::from_pixel(64, 48, Rgba([1, 2, 3, 255])))
         };
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), finish_timeout: Duration::from_secs(60) };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), destination: None, finish_timeout: Duration::from_secs(60) };
         let f = run(grab, plan, stop).unwrap();
         assert!(f.duration < 1.0, "the clip runs {}s past a Stop during a slow grab", f.duration);
     }
@@ -764,7 +784,7 @@ mod tests {
         std::fs::write(dir.path().join("clip-004.mp4"), b"").unwrap();
         let stop = Stop::new();
         stop.request();
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-004".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), finish_timeout: Duration::from_secs(60) };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-004".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), destination: None, finish_timeout: Duration::from_secs(60) };
         run(|| Ok(RgbaImage::from_pixel(10, 10, Rgba([1, 2, 3, 255]))), plan, stop).unwrap();
         assert!(!dir.path().join("clip-004.mp4").exists(), "no ffmpeg: the empty reservation goes");
     }
@@ -774,15 +794,46 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stop = Stop::new();
         stop.request();
-        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-002".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), finish_timeout: Duration::from_secs(60) };
+        let plan = Plan { dir: dir.path().to_path_buf(), stem: "clip-002".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), destination: None, finish_timeout: Duration::from_secs(60) };
         let f = run(|| Ok(RgbaImage::from_pixel(10, 10, Rgba([1, 2, 3, 255]))), plan, stop).unwrap();
         assert!(f.video.is_none());
         assert!(f.problem.unwrap().contains("ffmpeg"));
         assert!(dir.path().join("clip-002-frames/0001.jpg").is_file());
     }
 
+    #[test]
+    fn a_replacement_item_stops_recording_without_cleaning_its_files() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = snagbook_core::Session::create_now(&root.path().to_string_lossy(), &snagbook_core::Config::default()).unwrap();
+        let id = session.add_item(None, chrono::Utc::now()).unwrap().id;
+        let item_dir = session.item_dir(id).unwrap();
+        let identity = session.item_identity(id).unwrap();
+        let media = session.media_dir(id).unwrap();
+        std::fs::create_dir(&media).unwrap();
+        let stop = Stop::new();
+        let request = stop.clone();
+        let held = session.dir.join("held-recording-item");
+        let replacement_frames = media.join("clip-001-frames");
+        let mut grabs = 0;
+        let plan = Plan { dir: media, stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), destination: Some((item_dir.clone(), identity)), finish_timeout: Duration::from_secs(60) };
+
+        let result = run(|| {
+            grabs += 1;
+            if grabs == 2 {
+                std::fs::rename(&item_dir, &held).unwrap();
+                std::fs::create_dir_all(&replacement_frames).unwrap();
+                std::fs::write(replacement_frames.join("keep.jpg"), b"replacement").unwrap();
+                request.request();
+            }
+            Ok(RgbaImage::from_pixel(10, 10, Rgba([1, 2, 3, 255])))
+        }, plan, stop);
+
+        assert!(result.err().unwrap().contains("replaced"));
+        assert_eq!(std::fs::read(replacement_frames.join("keep.jpg")).unwrap(), b"replacement");
+    }
+
     fn plan(dir: &std::path::Path, ffmpeg: Option<PathBuf>) -> Plan {
-        Plan { dir: dir.to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg, source: "test".into(), finish_timeout: Duration::from_secs(20) }
+        Plan { dir: dir.to_path_buf(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg, source: "test".into(), destination: None, finish_timeout: Duration::from_secs(20) }
     }
 
     /// The screen cannot be read at all: nothing is left behind, not even the file holding

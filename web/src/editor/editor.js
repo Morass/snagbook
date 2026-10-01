@@ -497,7 +497,7 @@ function persistNow() {
   const markdown = serializeMarkdown(view.state.doc, entry?.memo);
   if (entry && markdown === entry.saved) return;
   if (entry) entry.saved = markdown;
-  post({ type: "changed", id: currentId, markdown });
+  post({ type: "changed", id: currentId, itemToken: currentItemToken, markdown });
 }
 
 function schedulePersist() {
@@ -625,7 +625,7 @@ export const api = {
     view.setProps({ editable: () => !readOnly });
   },
 
-  /** A change not yet reported, as {id, markdown}, marked as reported; or null. */
+  /** A change not yet reported, with its item lifetime, marked as reported; or null. */
   takePending() {
     if (!view || currentId == null) return null;
     clearTimeout(saveTimer);
@@ -634,7 +634,7 @@ export const api = {
     const markdown = serializeMarkdown(view.state.doc, entry?.memo);
     if (entry && markdown === entry.saved) return null;
     if (entry) entry.saved = markdown;
-    return { id: currentId, markdown };
+    return { id: currentId, itemToken: currentItemToken, markdown };
   },
 
   restorePending(p) {
