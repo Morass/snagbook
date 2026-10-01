@@ -252,7 +252,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function newSession() {
     try { await flush({ required: true }); }
     catch { return flash("The note could not be saved, so the session was not changed.", "error"); }
-    await apply(await call("new_session"));
+    await changeSession(() => call("new_session"));
     flash(`New session: ${view.session.path}`);
     $("item-title").focus();
     $("item-title").select();
@@ -261,7 +261,14 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function openSession(path) {
     try { await flush({ required: true }); }
     catch { return flash("The note could not be saved, so the session was not changed.", "error"); }
-    await apply(await call("open_session", { path }));
+    await changeSession(() => call("open_session", { path }));
+  }
+
+  async function changeSession(request) {
+    const ed = snag();
+    ed?.setReadOnly?.(true);
+    try { await apply(await request()); }
+    finally { ed?.setReadOnly?.(false); }
   }
 
   /// Save the title field into the item it shows. That is `titleFor`, not `selected`: the

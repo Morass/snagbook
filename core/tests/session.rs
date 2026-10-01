@@ -464,3 +464,16 @@ fn an_unreadable_note_is_never_treated_as_empty_and_overwritten() {
     assert!(s.write_note(item.id, "replacement").is_err());
     assert!(note.is_dir());
 }
+
+#[test]
+fn rename_does_not_overwrite_an_unreadable_note() {
+    let e = env();
+    let mut s = new(&e);
+    let item = add(&mut s);
+    let note = s.note_path(item.id).unwrap();
+    fs::remove_file(&note).unwrap();
+    fs::create_dir(&note).unwrap();
+    assert!(s.retitle_item(item.id, "Renamed", true).is_err());
+    assert_eq!(s.manifest.items[0].title, "Item 1");
+    assert!(note.is_dir());
+}

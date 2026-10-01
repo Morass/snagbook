@@ -23,6 +23,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let releaseCaptureFiling;
   let releaseMedia;
   let releaseWrite;
+  let releaseSession;
+  let sessionGate = null;
   let captureFilingBlocked = failCaptureFiling;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
   const captureFilingGate = slowCaptureFiling ? new Promise((resolve) => { releaseCaptureFiling = resolve; }) : null;
@@ -38,7 +40,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   const handlers = {
     state: () => view(),
     list_sessions: () => list.map((s) => ({ ...s })),
-    new_session: () => {
+    new_session: async () => {
+      if (sessionGate) { await sessionGate; sessionGate = null; }
       const path = `~/Snagbook/${String(nextHash++).padStart(8, "0")}_25-09-2026`;
       session = { id: `id-${nextHash}`, openToken: `open-${nextOpen++}`, path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
       list.unshift({ id: session.id, path, title: session.title, items: 1, created: "2026-09-25T16:00:00Z" });
@@ -134,6 +137,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseCaptureFiling: () => releaseCaptureFiling?.(),
     releaseMedia: () => releaseMedia?.(),
     releaseWrite: () => releaseWrite?.(),
+    holdNextSession: () => { sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
+    releaseSession: () => releaseSession?.(),
     allowCaptureFiling: () => { captureFilingBlocked = false; },
     slowNoteFor(id) {
       slowNote = id;
@@ -164,6 +169,7 @@ function fakeEditor() {
     focus: () => {},
     mediaSaved: (r, s) => log.push(["saved", r, s]),
     mediaFailed: (r) => log.push(["failed", r]),
+    setReadOnly: (v) => log.push(["readOnly", v]),
   };
 }
 
@@ -230,6 +236,17 @@ test("a new session starts on Item 1 with its title ready to type", async () => 
   assert.match(t.$("session-button").textContent, /1 item$/);
   const opened = t.editor.log.filter((l) => l[0] === "open").pop()[1];
   assert.match(opened.base, /^snagbook:\/\/localhost\/item\/1\.\d+\/$/);
+});
+
+test("the editor is read-only while a session switch is in flight", async () => {
+  const t = await setup({ session: true });
+  t.app.holdNextSession();
+  const switching = t.shell.newSession();
+  await t.settle();
+  assert.deepEqual(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1), ["readOnly", true]);
+  t.app.releaseSession();
+  await switching;
+  assert.deepEqual(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1), ["readOnly", false]);
 });
 
 test("Ctrl+N adds an item on Linux and ⌘N does on macOS; the hint says which", async () => {

@@ -608,6 +608,10 @@ export const api = {
     view.focus();
   },
 
+  setReadOnly(value) {
+    view.setProps({ editable: () => !value });
+  },
+
   /** A change not yet reported, as {id, markdown}, marked as reported; or null. */
   takePending() {
     if (!view || currentId == null) return null;

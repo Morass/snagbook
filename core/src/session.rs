@@ -305,6 +305,7 @@ impl Session {
         }
         let i = self.manifest.items.iter().position(|r| r.id == id).ok_or(SnagError::NoSuchItem(id))?;
         let mut rec = self.manifest.items[i].clone();
+        let text = fs::read_to_string(self.dir.join(&rec.folder).join(NOTE_NAME))?;
         let new_folder = Naming::item_folder(id, &t);
         if rec.title == t && (!move_folder || new_folder == rec.folder || self.dir.join(&new_folder).exists()) {
             return Ok(rec);
@@ -319,7 +320,6 @@ impl Session {
         rec.title = t.clone();
         self.manifest.items[i] = rec.clone();
         let note = self.dir.join(&rec.folder).join(NOTE_NAME);
-        let text = fs::read_to_string(&note).unwrap_or_default();
         let parts = FrontMatter::split(&text);
         write_atomic(&note, FrontMatter::join(&parts.raw, &[("title", &t)], &parts.body).as_bytes())?;
         self.save()?;
