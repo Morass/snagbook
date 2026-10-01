@@ -436,9 +436,11 @@ enum SelfTest {
 
         // A session removed elsewhere closes instead of being recreated by the next write.
         let deletedPath = session.displayPath
+        _ = await js(model, "snag.typeText(' pending in removed session')")
         try? FileManager.default.removeItem(at: session.url)
         model.refreshSessionFromDisk()
         check(model.session == nil && !exists(session.url), "an open session deleted outside Snagbook is closed and stays deleted: \(deletedPath)")
+        check(await model.editor.flush(), "an externally deleted session cannot leave an impossible save blocking recovery")
     }
 
     /// Run an async function body in the page and return its value.

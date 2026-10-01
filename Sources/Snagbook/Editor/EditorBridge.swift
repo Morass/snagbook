@@ -79,8 +79,19 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     /// Another session is open: its items reuse the ids and picture names of this one.
     func sessionChanged() { epoch += 1 }
 
+    /// The current session vanished, so its unsavable editor state must not block recovery.
+    func sessionClosed() {
+        if let shownItem { forget(item: shownItem) }
+        shownItem = nil
+        epoch += 1
+    }
+
     /// Write out any change the editor has not reported yet, and wait for it.
     func flush() async -> Bool {
+        guard model?.session != nil else {
+            sessionClosed()
+            return true
+        }
         guard ready, let r = await evaluate("snag.takePending()") as? [String: Any],
               let id = r["id"] as? Int, let md = r["markdown"] as? String else { return true }
         guard model?.noteChanged(id: id, markdown: md) == true else {

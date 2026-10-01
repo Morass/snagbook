@@ -322,7 +322,7 @@ public final class Session {
 
     /// The note's Markdown without its front matter.
     public func readNote(_ id: Int) throws -> String {
-        let text = (try? String(contentsOf: try noteURL(id), encoding: .utf8)) ?? ""
+        let text = try String(contentsOf: try noteURL(id), encoding: .utf8)
         return FrontMatter.split(text).body
     }
 
@@ -332,7 +332,7 @@ public final class Session {
     public func writeNote(_ id: Int, body: String) throws -> Bool {
         try requireExists()
         let u = try noteURL(id)
-        let old = (try? String(contentsOf: u, encoding: .utf8)) ?? ""
+        let old = try String(contentsOf: u, encoding: .utf8)
         let parts = FrontMatter.split(old)
         let rec = try item(id)
         let new = FrontMatter.join(raw: parts.raw, updates: parts.fields.isEmpty ? [("title", rec.title), ("created", Self.iso(rec.created))] : [], body: body)

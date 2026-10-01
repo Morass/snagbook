@@ -186,10 +186,22 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
             let fm = FileManager.default
             if doc.marks.isEmpty && doc.crop == nil {
                 if fm.fileExists(atPath: origURL.path) {
-                    try Data(contentsOf: origURL).write(to: fileURL, options: .atomic)
-                    try fm.removeItem(at: origURL)
+                    let previousPicture = try Data(contentsOf: fileURL)
+                    let originalPicture = try Data(contentsOf: origURL)
+                    var removedOriginal = false
+                    do {
+                        try originalPicture.write(to: fileURL, options: .atomic)
+                        try fm.removeItem(at: origURL)
+                        removedOriginal = true
+                        if fm.fileExists(atPath: marksURL.path) { try fm.removeItem(at: marksURL) }
+                    } catch {
+                        try? previousPicture.write(to: fileURL, options: .atomic)
+                        if removedOriginal { try? originalPicture.write(to: origURL, options: .atomic) }
+                        throw error
+                    }
+                } else if fm.fileExists(atPath: marksURL.path) {
+                    try fm.removeItem(at: marksURL)
                 }
-                try? fm.removeItem(at: marksURL)
             } else {
                 let hadOrig = fm.fileExists(atPath: origURL.path)
                 let hadMarks = fm.fileExists(atPath: marksURL.path)
@@ -216,7 +228,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                 }
             }
             finished = true
-            model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
+            try model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
             try? live.writeReadme()
             close()
         } catch {
@@ -227,7 +239,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     /// New screenshot: keep it without marks. Existing picture: leave it as it was.
     func skip() {
         do {
-            if isNew { model.annotationFinished(session: try liveSession(), item: item, relative: relative, isNew: true, kept: true) }
+            if isNew { try model.annotationFinished(session: try liveSession(), item: item, relative: relative, isNew: true, kept: true) }
             finished = true
             close()
         } catch {

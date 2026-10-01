@@ -131,7 +131,7 @@ final class AppModel: ObservableObject {
         back.removeAll()
         forward.removeAll()
         updateNav()
-        editor.sessionChanged()
+        editor.sessionClosed()
         updateConfig { $0.lastSession = nil }
     }
 
@@ -470,7 +470,7 @@ final class AppModel: ObservableObject {
     }
 
     /// The mark-up window finished with a picture.
-    func annotationFinished(session sourceSession: Session, item id: Int, relative: String, isNew: Bool, kept: Bool) {
+    func annotationFinished(session sourceSession: Session, item id: Int, relative: String, isNew: Bool, kept: Bool) throws {
         let isOpen = adoptIfOpen(sourceSession)
         if isNew {
             if kept {
@@ -478,7 +478,7 @@ final class AppModel: ObservableObject {
                     editor.insertMedia(kind: "image", src: relative, label: "")
                     flash("Screenshot saved to \(itemTitle(id))")
                 } else {
-                    try? appendMedia("![](\(relative))", to: sourceSession, item: id)
+                    try appendMedia("![](\(relative))", to: sourceSession, item: id)
                 }
             }
         } else if isOpen {

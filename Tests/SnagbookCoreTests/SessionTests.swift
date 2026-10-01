@@ -299,6 +299,17 @@ final class SessionTests: XCTestCase {
         let readme = try String(contentsOf: s.url.appendingPathComponent("README.md"), encoding: .utf8)
         XCTAssertTrue(readme.range(of: "## 1. Item 3") != nil, readme)
     }
+
+    func testUnreadableNoteIsNeverTreatedAsEmptyAndOverwritten() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        let note = try s.noteURL(item.id)
+        try FileManager.default.removeItem(at: note)
+        try FileManager.default.createDirectory(at: note, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try s.readNote(item.id))
+        XCTAssertThrowsError(try s.writeNote(item.id, body: "replacement"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: note.path))
+    }
 }
 
 final class ConfigTests: XCTestCase {
