@@ -548,7 +548,13 @@ final class AppModel: ObservableObject {
     private func appendMedia(_ markdown: String, to session: Session, item id: Int) throws {
         let old = try session.readNote(id).trimmingCharacters(in: .whitespacesAndNewlines)
         if old.split(separator: "\n").contains(Substring(markdown)) { return }
-        try session.writeNote(id, body: old.isEmpty ? markdown + "\n" : old + "\n\n" + markdown + "\n")
+        do {
+            try session.writeNote(id, body: old.isEmpty ? markdown + "\n" : old + "\n\n" + markdown + "\n")
+        } catch {
+            let written = try? session.readNote(id)
+            if written?.split(separator: "\n").contains(Substring(markdown)) == true { return }
+            throw error
+        }
     }
 
     private func adoptIfOpen(_ refreshed: Session) -> Bool {

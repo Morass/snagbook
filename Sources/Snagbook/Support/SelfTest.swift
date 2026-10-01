@@ -436,9 +436,16 @@ enum SelfTest {
             retry.done()
             check(Annotator.open.contains(where: { $0 === retry }), "a failed screenshot attachment keeps the picture open")
             try? FileManager.default.moveItem(at: heldNote, to: note)
+            let readme = session.url.appendingPathComponent(Session.readmeName)
+            let heldReadme = session.url.appendingPathComponent(".readme.selftest.md")
+            try? FileManager.default.moveItem(at: readme, to: heldReadme)
+            try? FileManager.default.createDirectory(at: readme, withIntermediateDirectories: false)
             retry.done()
             await settle()
-            check(!Annotator.open.contains(where: { $0 === retry }) && read(note).contains(retryRel), "screenshot attachment retries after its note is restored")
+            check(!Annotator.open.contains(where: { $0 === retry }) && read(note).contains(retryRel), "a durable screenshot link finishes attachment even if README refresh fails")
+            try? FileManager.default.removeItem(at: readme)
+            try? FileManager.default.moveItem(at: heldReadme, to: readme)
+            try? model.session?.writeReadme()
             if let elsewhere { model.delete(elsewhere, confirm: false); await settle() }
         } else {
             check(false, "the attachment-retry mark-up window opens")
