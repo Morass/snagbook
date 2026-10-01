@@ -304,6 +304,11 @@ enum SelfTest {
         // Record goes straight from the drawn rectangle to recording (no second press).
         let c = model.capture
         check(c.recordButtonTitle == "Record", "the Record button says Record when idle")
+        let controls = RegionOverlay()
+        controls.controller = c
+        controls.showRecording(CaptureTarget.screen(screen))
+        check(controls.stopControlAcceptsClick, "the floating recording controls accept the first click")
+        controls.hideAll()
 
         // The mark-up canvas: drags draw, keys switch tools, Return saves.
         guard let session = model.session, let id = model.selectedID else { return check(false, "an item for the canvas test") }

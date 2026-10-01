@@ -510,6 +510,10 @@ enum WindowPlacement {
         }
     }
 
+    static func restoreWithoutActivating() {
+        notebook?.orderFrontRegardless()
+    }
+
     static func toggle(_ model: AppModel) {
         if let w = notebook, w.isVisible, NSApp.isActive, w.isKeyWindow {
             NSApp.hide(nil)

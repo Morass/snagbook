@@ -71,7 +71,7 @@ The untouched picture is kept beside the marked-up one (`shot-001.orig.png`, wit
 
 <p align="center"><img src="docs/images/recording.png" alt="A note with a recording in it: the video's first frame with a play button and its length" width="720"></p>
 
-Press **⌃⌘R** anywhere (or the record button), drag the area to record, and use what you are testing. A small bar shows the time, with **Stop** and a **screenshot** button for a still of the recorded area. Stop with the bar, **⌃⌘R** again or the menu bar icon. The video goes into the item and plays in the note.
+Press **⌃⌘R** anywhere (or the record button), drag the area to record, and use what you are testing. If you started from the notebook, it steps aside only while you choose the area, then returns without taking focus. A small bar shows the time, with **Stop** and a **screenshot** button for a still of the recorded area. Stop with the bar, **⌃⌘R** again or the menu bar icon. The video goes into the item and plays in the note.
 
 Beside every video Snagbook writes what a reader who cannot play it needs: a still frame for each second in `clip-001-frames/`, a contact sheet with timestamps (`clip-001-contact.jpg`), and `clip-001.json` with the length, the size and the list of stills.
 

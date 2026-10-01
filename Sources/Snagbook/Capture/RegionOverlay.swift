@@ -92,6 +92,7 @@ final class RegionOverlay {
         if pill == nil {
             let p = Self.panel(NSRect(x: 0, y: 0, width: 300, height: 40))
             p.becomesKeyOnlyIfNeeded = true
+            p.ignoresMouseEvents = false
             let host = FirstMouseHostingView(rootView: CapturePill(capture: controller))
             p.contentView = host
             pill = p
@@ -107,6 +108,11 @@ final class RegionOverlay {
         origin.x = min(max(origin.x, screen.minX + 4), screen.maxX - size.width - 4)
         p.setFrame(NSRect(origin: origin, size: size), display: true)
         p.orderFrontRegardless()
+        p.makeKey()
+    }
+
+    var stopControlAcceptsClick: Bool {
+        pill?.isVisible == true && pill?.isKeyWindow == true && pill?.ignoresMouseEvents == false
     }
 
     func hideAll() {

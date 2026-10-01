@@ -81,6 +81,7 @@ final class CaptureController: ObservableObject {
         case .record:
             phase = .idle
             startRecording(t)
+            bringNotebookBack(activate: false)
         case .shoot:
             phase = .idle
             overlay.hideAll()
@@ -106,8 +107,9 @@ final class CaptureController: ObservableObject {
         return restoreNotebook
     }
 
-    private func bringNotebookBack() {
-        if takeRestoreNotebook() { WindowPlacement.show() }
+    private func bringNotebookBack(activate: Bool = true) {
+        guard takeRestoreNotebook() else { return }
+        if activate { WindowPlacement.show() } else { WindowPlacement.restoreWithoutActivating() }
     }
 
     // MARK: - screenshot
