@@ -114,6 +114,22 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: s.url.appendingPathComponent("session.json").path))
     }
 
+    func testOpeningThroughASymlinkBindsToItsTarget() throws {
+        let original = try Session.create(root: root, config: Config(), hash: "same-id")
+        try original.addItem()
+        let link = URL(fileURLWithPath: home).appendingPathComponent("session-link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: original.url)
+        let opened = try Session.open(link.path)
+        XCTAssertEqual(opened.url, original.url.resolvingSymlinksInPath())
+
+        let moved = original.url.deletingLastPathComponent().appendingPathComponent("moved-target")
+        try FileManager.default.moveItem(at: original.url, to: moved)
+        try FileManager.default.copyItem(at: moved, to: original.url)
+
+        XCTAssertFalse(opened.matchesDiskIdentity)
+        XCTAssertThrowsError(try opened.writeNote(1, body: "must not reach the copy"))
+    }
+
     func testDeletingASessionDiscardsTheWholeFolder() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem()

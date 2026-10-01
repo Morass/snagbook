@@ -156,6 +156,8 @@ enum SelfTest {
             let duration = try await w.finish()
             let target = CaptureTarget(rect: CGRect(x: 0, y: 0, width: 320, height: 180), displayID: CGMainDisplayID(), screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), scale: 2, kind: "region")
             let rel = try await model.capture.fileRecording(file, into: first, session: session, target: target, settings: model.config.capture, duration: duration)
+            let elsewhere = try model.addItem(title: "Capture switched away", focusTitle: false)
+            await settle()
             model.recordingSaved(session: session, item: first, relative: rel, duration: duration)
             try? FileManager.default.removeItem(at: work)
             await settle()
@@ -165,7 +167,9 @@ enum SelfTest {
             check(exists(media.appendingPathComponent("clip-001-frames/0003.jpg")), "one still per second beside it")
             check(exists(media.appendingPathComponent("clip-001-contact.jpg")), "contact sheet beside it")
             check(read(media.appendingPathComponent("clip-001.json")).contains("\"duration\""), "clip-001.json describes it")
-            check(read(noteURL).contains("[Video 0:03](media/clip-001.mp4)"), "recording is linked in the note")
+            check(read(noteURL).contains("[Video 0:03](media/clip-001.mp4)"), "a recording is linked to its original item after the selection changes")
+            model.delete(elsewhere, confirm: false)
+            await settle()
         } catch {
             check(false, "recording pipeline: \(error.localizedDescription)")
         }
@@ -248,6 +252,11 @@ enum SelfTest {
                 let d = try await rec.stop()
                 check(d > 1.0, "real recording lasts as long as it ran (\(d) s)")
                 try? FileManager.default.removeItem(at: out)
+
+                model.capture.startRecording(t)
+                model.capture.stopRecording()
+                for _ in 0..<100 where model.capture.phase != .idle { await settle(100) }
+                check(model.capture.phase == .idle, "Stop pressed during recording startup still stops the recording")
             } catch {
                 check(false, "real capture: \(error.localizedDescription)")
             }

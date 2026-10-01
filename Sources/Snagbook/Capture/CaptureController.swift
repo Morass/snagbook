@@ -22,6 +22,7 @@ final class CaptureController: ObservableObject {
     private var recordingFile: URL?
     private var recordingItem: Int?
     private var recordingSession: Session?
+    private var recordingStartup: Task<Void, Never>?
     /// The notebook stepped aside for this capture and comes back when it is filed.
     private var restoreNotebook = false
 
@@ -95,8 +96,7 @@ final class CaptureController: ObservableObject {
             } catch {
                 phase = .idle
                 target = nil
-                bringNotebookBack()
-                return model.show(error)
+                return showCaptureError(error)
             }
             // Let the overlay leave the screen before the picture is taken.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.shoot(t, destination: destination, finishesStandaloneCapture: true) }
@@ -106,7 +106,8 @@ final class CaptureController: ObservableObject {
     func cancel() {
         switch phase {
         case .recording: stopRecording()
-        default:
+        case .saving: break
+        case .idle, .picking:
             phase = .idle
             target = nil
             overlay.hideAll()
@@ -125,6 +126,12 @@ final class CaptureController: ObservableObject {
         if activate { WindowPlacement.show() } else { WindowPlacement.restoreWithoutActivating() }
     }
 
+    private func showCaptureError(_ error: Error) {
+        bringNotebookBack()
+        if WindowPlacement.notebook?.isVisible != true { WindowPlacement.show() }
+        model.show(error)
+    }
+
     // MARK: - screenshot
 
     func shoot(_ t: CaptureTarget, destination supplied: (Session, Int)? = nil, finishesStandaloneCapture: Bool = false) {
@@ -141,8 +148,7 @@ final class CaptureController: ObservableObject {
             }
         } catch {
             if finishesStandaloneCapture { phase = .idle; target = nil }
-            bringNotebookBack()
-            return model.show(error)
+            return showCaptureError(error)
         }
         Task {
             defer {
@@ -156,8 +162,7 @@ final class CaptureController: ObservableObject {
                 let waitsForAnnotator = model.screenshotTaken(image, source: t.summary, session: destination.0, item: destination.1)
                 if !waitsForAnnotator { bringNotebookBack() }
             } catch {
-                bringNotebookBack()
-                model.show(error)
+                showCaptureError(error)
             }
         }
     }
@@ -169,8 +174,7 @@ final class CaptureController: ObservableObject {
         let id: Int
         do { id = try model.ensureItem() } catch {
             target = nil
-            bringNotebookBack()
-            return model.show(error)
+            return showCaptureError(error)
         }
         guard let session = model.session else { return }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Snagbook-recording-\(UUID().uuidString)", isDirectory: true)
@@ -180,7 +184,7 @@ final class CaptureController: ObservableObject {
         rec.onError = { [weak self] error in
             Task { @MainActor in
                 guard let self, self.phase == .recording else { return }
-                self.model.show(error)
+                self.showCaptureError(error)
                 self.stopRecording()
             }
         }
@@ -191,19 +195,20 @@ final class CaptureController: ObservableObject {
         phase = .recording
         recordingStarted = Date()
         overlay.showRecording(t)
-        Task {
+        recordingStartup = Task {
             do {
                 try await rec.start(t, settings: model.config.capture, to: file)
             } catch {
+                guard recorder === rec else { return }
                 recorder = nil
                 recordingSession = nil
+                recordingStartup = nil
                 phase = .idle
                 recordingStarted = nil
                 target = nil
                 overlay.hideAll()
                 try? FileManager.default.removeItem(at: dir)
-                bringNotebookBack()
-                model.show(error)
+                showCaptureError(error)
             }
         }
     }
@@ -213,11 +218,15 @@ final class CaptureController: ObservableObject {
         phase = .saving
         overlay.showSaving()
         let settings = model.config.capture
+        let startup = recordingStartup
         Task {
+            await startup?.value
+            guard recorder === rec else { return }
             defer {
                 recorder = nil
                 recordingStarted = nil
                 recordingSession = nil
+                recordingStartup = nil
                 try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
             }
             do {
@@ -225,7 +234,7 @@ final class CaptureController: ObservableObject {
                 let saved = try await fileRecording(file, into: item, session: session, target: t, settings: settings, duration: duration)
                 model.recordingSaved(session: session, item: item, relative: saved, duration: duration)
             } catch {
-                model.show(error)
+                showCaptureError(error)
             }
             phase = .idle
             target = nil

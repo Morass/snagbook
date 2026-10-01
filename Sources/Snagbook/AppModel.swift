@@ -165,7 +165,10 @@ final class AppModel: ObservableObject {
                         a.addButton(withTitle: "Delete Permanently")
                         a.addButton(withTitle: "Cancel")
                         a.buttons.first?.hasDestructiveAction = true
-                        return a.runModal() == .alertFirstButtonReturn && session.matchesDiskIdentity
+                        return a.runModal() == .alertFirstButtonReturn
+                            && self.session === session
+                            && self.capture.phase == .idle
+                            && session.matchesDiskIdentity
                     }))
                 closeSession()
             } catch let e as CocoaError where e.code == .userCancelled {
@@ -177,7 +180,11 @@ final class AppModel: ObservableObject {
 
     /// Make sure there is somewhere to put a capture: a session and an item.
     func ensureItem() throws -> Int {
-        if let session, !session.exists { closeSession() }
+        if let session, !session.exists {
+            let path = session.displayPath
+            closeSession()
+            throw SnagError.notASession(path)
+        }
         if session == nil {
             let s = try Session.create(root: config.sessionsFolder, config: config)
             use(s)
@@ -416,10 +423,10 @@ final class AppModel: ObservableObject {
             let id = try sourceItem ?? ensureItem()
             guard let session = sourceSession ?? session, let png = ImageFile.pngData(image) else { return false }
             let rel = try session.saveMedia(id, data: png, prefix: "shot", ext: "png")
-            if config.capture.annotateScreenshots, self.session === session {
+            if config.capture.annotateScreenshots, self.session?.isSameSession(as: session) == true, selectedID == id {
                 Annotator.open(item: id, relative: rel, isNew: true, model: self)
                 return true
-            } else if self.session === session {
+            } else if self.session?.isSameSession(as: session) == true, selectedID == id {
                 editor.insertMedia(kind: "image", src: rel, label: "")
                 flash("Screenshot saved to \(itemTitle(id))")
             } else {
@@ -436,15 +443,14 @@ final class AppModel: ObservableObject {
     func annotationFinished(session sourceSession: Session, item id: Int, relative: String, isNew: Bool, kept: Bool) {
         if isNew {
             if kept {
-                if session === sourceSession {
-                    select(id)
+                if session?.isSameSession(as: sourceSession) == true, selectedID == id {
                     editor.insertMedia(kind: "image", src: relative, label: "")
                     flash("Screenshot saved to \(itemTitle(id))")
                 } else {
                     try? appendMedia("![](\(relative))", to: sourceSession, item: id)
                 }
             }
-        } else if session === sourceSession {
+        } else if session?.isSameSession(as: sourceSession) == true {
             editor.refreshMedia(relative)
         }
     }
@@ -457,8 +463,7 @@ final class AppModel: ObservableObject {
     /// A finished recording, already in the item's media folder.
     func recordingSaved(session sourceSession: Session, item id: Int, relative: String, duration: Double) {
         let label = "Video \(CaptureMath.duration(duration))"
-        if session === sourceSession {
-            if selectedID != id { select(id) }
+        if session?.isSameSession(as: sourceSession) == true, selectedID == id {
             editor.insertMedia(kind: "video", src: relative, label: label)
             flash("Recording (\(CaptureMath.duration(duration))) saved to \(itemTitle(id))")
         } else {

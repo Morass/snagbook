@@ -79,7 +79,7 @@ public final class Session {
 
     /// Open an existing session folder. `path` may use "~".
     public static func open(_ path: String, fallbackHeader: String = Config.defaultHeader) throws -> Session {
-        let url = Paths.url(path)
+        let url = Paths.url(path).resolvingSymlinksInPath()
         let data: Data
         do { data = try Data(contentsOf: url.appendingPathComponent(manifestName)) } catch { throw SnagError.notASession(path) }
         let manifest = try decoder.decode(Manifest.self, from: data)
@@ -124,6 +124,16 @@ public final class Session {
         guard disk.id == manifest.id else { return false }
         guard let fileIdentity else { return true }
         return Self.identity(of: url) == fileIdentity
+    }
+
+    /// Whether two open objects still refer to the same session folder on disk.
+    public func isSameSession(as other: Session) -> Bool {
+        guard manifest.id == other.manifest.id,
+              matchesDiskIdentity, other.matchesDiskIdentity else { return false }
+        if let fileIdentity, let otherIdentity = other.fileIdentity {
+            return fileIdentity == otherIdentity
+        }
+        return url.resolvingSymlinksInPath().standardizedFileURL == other.url.resolvingSymlinksInPath().standardizedFileURL
     }
 
     /// Folders may have been renamed or removed by hand: drop records whose folder is gone,

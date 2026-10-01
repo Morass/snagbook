@@ -140,6 +140,7 @@ final class PickerPanel: NSPanel {
 
 final class FirstMouseHostingView<V: View>: NSHostingView<V> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var needsPanelToBecomeKey: Bool { false }
 }
 
 /// The border drawn around a chosen region: dashed while waiting, red while recording.
