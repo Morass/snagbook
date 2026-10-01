@@ -77,6 +77,14 @@ test("insertMedia puts a picture in its own paragraph and keeps typing below it"
   assert.match(md(), /\[Video 0:05\]\(media\/clip-001\.mp4\)/);
 });
 
+test("read-only mode rejects programmatic capture insertion", () => {
+  api.open({ id: "capture-locked", markdown: "before\n", focus: false });
+  api.setReadOnly(true);
+  assert.equal(api.insertMedia({ kind: "image", src: "media/shot.png" }), false);
+  assert.equal(md(), "before\n");
+  api.setReadOnly(false);
+});
+
 test("colour and size marks write inline HTML", () => {
   api.open({ id: "06", markdown: "paint me\n", focus: false });
   api.selectAll();

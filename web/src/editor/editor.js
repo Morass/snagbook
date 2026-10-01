@@ -671,6 +671,7 @@ export const api = {
 
   /** Insert a picture or video as its own paragraph after the caret's block. */
   insertMedia({ kind, src, label = "", pos = null }) {
+    if (readOnly) return false;
     const node = kind === "video" ? nodes.video.create({ src, label }) : nodes.image.create({ src, alt: label });
     const state = view.state;
     let tr = state.tr;

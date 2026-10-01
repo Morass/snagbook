@@ -84,6 +84,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let flushTail = Promise.resolve();
   let noteTail = Promise.resolve();
   let acknowledgementTail = Promise.resolve();
+  let originTail = Promise.resolve();
   let editorLocks = 0;
   const s = { view: () => view, selected: () => selected };
 
@@ -214,12 +215,14 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     await apply(await call("state"));
   }
 
-  async function reloadCurrentItem(id, sessionId, openToken) {
-    if (selected !== id || editorItem !== id || view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
-    const md = await call("read_note", { id });
-    if (selected !== id || editorItem !== id || view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
-    snag()?.open({ id, markdown: md, base: mediaBase(platform(), id, epoch), sessionId, openToken, focus: false });
-    editorItem = id;
+  async function reloadOriginItem(origin) {
+    if (!originIsOpen(origin)) return;
+    const openToken = view.session.openToken;
+    const md = await call("read_note", { id: origin.id });
+    if (!originIsOpen(origin)) return;
+    if (view.session.openToken !== openToken) throw new Error("The source session changed while its note was reloading.");
+    snag()?.open({ id: origin.id, markdown: md, base: mediaBase(platform(), origin.id, epoch), sessionId: origin.sessionId, openToken, focus: false });
+    editorItem = origin.id;
   }
 
   // ------------------------------------------------------------ items
@@ -418,7 +421,14 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     await call("start_screenshot").catch(() => {});
   }
 
-  async function leaveCaptureInOrigin(ack, origin) {
+  function serializeOrigin(work) {
+    const running = originTail.then(work);
+    originTail = running.catch(() => {});
+    return running;
+  }
+
+  function leaveCaptureInOrigin(ack, origin) {
+    return serializeOrigin(async () => {
     if (ack) {
       const pending = { ...origin, filed: false, unlock: null };
       const isOpen = originIsOpen(pending);
@@ -427,7 +437,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         if (isOpen) await flush({ required: true });
         await call("capture_filed", { ack, inserted: false });
         pending.filed = true;
-        if (originIsOpen(pending)) await reloadCurrentItem(pending.id, pending.sessionId, pending.openToken);
+        if (originIsOpen(pending)) await reloadOriginItem(pending);
         pending.unlock?.();
       } catch {
         pendingOriginAcks.set(ack, pending);
@@ -439,9 +449,11 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       }
     }
     return true;
+    });
   }
 
-  async function retryOriginCaptures() {
+  function retryOriginCaptures() {
+    return serializeOrigin(async () => {
     for (const [ack, origin] of [...pendingOriginAcks]) {
       const isOpen = originIsOpen(origin);
       if (isOpen && !origin.unlock) origin.unlock = lockEditor();
@@ -451,7 +463,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
           await call("capture_filed", { ack, inserted: false });
           origin.filed = true;
         }
-        if (originIsOpen(origin)) await reloadCurrentItem(origin.id, origin.sessionId, origin.openToken);
+        if (originIsOpen(origin)) await reloadOriginItem(origin);
         origin.unlock?.();
         pendingOriginAcks.delete(ack);
       } catch {
@@ -461,11 +473,13 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         }
       }
     }
+    });
   }
 
   function originIsOpen(origin) {
     return !!origin && selected === origin.id && editorItem === origin.id
-      && view?.session?.id === origin.sessionId && view?.session?.openToken === origin.openToken;
+      && view?.session?.id === origin.sessionId
+      && (origin.path ? view.session.path === origin.path : view.session.openToken === origin.openToken);
   }
 
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
@@ -493,7 +507,11 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       if (filed) flash("The capture stayed in its original session.");
       return;
     }
-    snag()?.insertMedia({ kind, src: rel, label });
+    if (editorLocks > 0 || snag()?.insertMedia({ kind, src: rel, label }) === false) {
+      const filed = await leaveCaptureInOrigin(ack, origin);
+      if (filed) flash("The capture stayed in its original session.");
+      return;
+    }
     try {
       await flush({ required: !!ack });
       if (ack) await call("capture_filed", { ack, inserted: true });
@@ -924,11 +942,12 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         const id = msg.itemId;
         try {
           if (id == null || selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken) throw new Error("the destination changed");
+          const sessionPath = view.session.path;
           const saved = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
           const canInsert = await call("capture_can_insert", { ack: saved.ack }).catch(() => false);
           if (!canInsert || selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken || !snag()?.mediaSaved(msg.reqId, saved.rel)) {
             snag()?.mediaFailed(msg.reqId);
-            const filed = await leaveCaptureInOrigin(saved.ack, { id, sessionId: msg.sessionId, openToken: msg.openToken });
+            const filed = await leaveCaptureInOrigin(saved.ack, { id, sessionId: msg.sessionId, openToken: msg.openToken, path: sessionPath });
             await refresh();
             break;
           }

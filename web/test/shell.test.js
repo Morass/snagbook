@@ -175,6 +175,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseSession: () => releaseSession?.(),
     allowCaptureFiling: () => { captureFilingBlocked = false; },
     failNextNoteRead: () => { noteReadFailures++; },
+    addCaptureOrigin: (ack, origin) => { captureOrigins.set(ack, origin); },
     slowNoteFor(id) {
       slowNote = id;
     },
@@ -968,6 +969,36 @@ test("a failed reload after fallback filing keeps the source editor locked until
   assert.equal(t.app.calls.filter(([cmd]) => cmd === "capture_filed").length, filedCalls);
   assert.equal(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1)[1], false);
   assert.match(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, /!\[\]\(media\/image-001\.png\)/);
+});
+
+test("fallback reload follows the same folder across a new open token", async () => {
+  const t = await setup({ session: true, slowMedia: true });
+  t.editor.mediaSaved = () => false;
+  const source = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 16, itemId: 1, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  await t.shell.openSession(source.path);
+  t.app.releaseMedia();
+  await saving;
+  const reopened = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1];
+  assert.notEqual(reopened.openToken, source.openToken);
+  assert.match(reopened.markdown, /!\[\]\(media\/image-001\.png\)/);
+});
+
+test("a capture finishing while the editor is locked is filed by the backend", async () => {
+  const t = await setup({ session: true });
+  const source = t.shell.view().session;
+  let inserted = 0;
+  t.editor.insertMedia = () => { inserted++; };
+  t.app.addCaptureOrigin("locked-capture", { sessionId: source.id, openToken: source.openToken, id: 1, rel: "media/shot-locked.png" });
+  t.app.holdNextSession();
+  const switching = t.shell.newSession();
+  await t.settle();
+  await t.shell.onCaptured({ sessionId: source.id, ack: "locked-capture", id: 1, rel: "media/shot-locked.png" });
+  assert.equal(inserted, 0);
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "capture_filed").at(-1)[1], { ack: "locked-capture", inserted: false });
+  t.app.releaseSession();
+  await switching;
 });
 
 test("reopening the same folder refreshes the editor's session token", async () => {
