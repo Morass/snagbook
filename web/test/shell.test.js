@@ -907,10 +907,18 @@ test("a successful filing retry reloads the source note before another edit", as
   t.app.notes.set(1, "original\n");
   const { id: sessionId, openToken } = t.shell.view().session;
   await t.shell.onEditorMessage({ type: "media", reqId: 13, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  let pending = { id: 1, markdown: "typed while filing was blocked\n" };
+  t.editor.takePending = () => {
+    const value = pending;
+    pending = null;
+    return value;
+  };
+  t.editor.restorePending = (value) => { pending = value; };
   t.app.allowCaptureFiling();
   await t.shell.refresh();
+  assert.match(t.app.notes.get(1), /^typed while filing was blocked\n\n!\[\]\(media\/image-001\.png\)\n$/);
   const reopened = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1];
-  assert.match(reopened.markdown, /!\[\]\(media\/image-001\.png\)/);
+  assert.equal(reopened.markdown, t.app.notes.get(1));
 });
 
 test("reopening the same folder refreshes the editor's session token", async () => {

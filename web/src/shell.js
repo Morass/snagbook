@@ -215,9 +215,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function reloadCurrentItem(id, sessionId, openToken) {
-    if (selected !== id || view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
+    if (selected !== id || editorItem !== id || view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
     const md = await call("read_note", { id });
-    if (selected !== id || view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
+    if (selected !== id || editorItem !== id || view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
     snag()?.open({ id, markdown: md, base: mediaBase(platform(), id, epoch), sessionId, openToken, focus: false });
     editorItem = id;
   }
@@ -433,11 +433,18 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function retryOriginCaptures() {
     for (const [ack, origin] of [...pendingOriginAcks]) {
+      const isOpen = origin && selected === origin.id && editorItem === origin.id
+        && view?.session?.id === origin.sessionId && view?.session?.openToken === origin.openToken;
+      const unlock = isOpen ? lockEditor() : () => {};
       try {
+        if (isOpen) await flush({ required: true });
         await call("capture_filed", { ack, inserted: false });
         pendingOriginAcks.delete(ack);
         if (origin) await reloadCurrentItem(origin.id, origin.sessionId, origin.openToken);
-      } catch {}
+      } catch {
+      } finally {
+        unlock();
+      }
     }
   }
 
