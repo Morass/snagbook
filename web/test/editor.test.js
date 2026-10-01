@@ -71,6 +71,8 @@ test("insertMedia puts a picture in its own paragraph and keeps typing below it"
   api.open({ id: "05", markdown: "Before\n", focus: false });
   view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
   api.insertMedia({ kind: "image", src: "media/shot-001.png" });
+  assert.equal(api.hasMedia("media/shot-001.png"), true);
+  assert.equal(api.hasMedia("media/missing.png"), false);
   type("After");
   assert.equal(md(), "Before\n\n![](media/shot-001.png)\n\nAfter\n");
   api.insertMedia({ kind: "video", src: "media/clip-001.mp4", label: "Video 0:05" });

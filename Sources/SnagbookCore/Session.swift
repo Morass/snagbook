@@ -360,7 +360,7 @@ public final class Session {
     public func saveMedia(_ id: Int, data: Data, prefix: String, ext: String) throws -> String {
         try requireExists()
         let media = try mediaURL(id)
-        try ensureDirectory(media)
+        try ensureMediaDirectory(id, media)
         let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set(try fm.contentsOfDirectory(atPath: media.path)))
         try data.write(to: media.appendingPathComponent(name), options: .withoutOverwriting)
         return Self.mediaName + "/" + name
@@ -417,7 +417,7 @@ public final class Session {
     public func reserveMediaName(_ id: Int, prefix: String, ext: String) throws -> MediaReservation {
         try requireExists()
         let media = try mediaURL(id)
-        try ensureDirectory(media)
+        try ensureMediaDirectory(id, media)
         while true {
             let name = Naming.nextMediaName(prefix: prefix, ext: ext.lowercased(), existing: Set(try fm.contentsOfDirectory(atPath: media.path)))
             let url = media.appendingPathComponent(name)
@@ -556,6 +556,19 @@ public final class Session {
     private func ensureDirectory(_ directory: URL) throws {
         var isDirectory: ObjCBool = false
         if fm.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue { return }
+        try fm.createDirectory(at: directory, withIntermediateDirectories: false)
+    }
+
+    private func ensureMediaDirectory(_ id: Int, _ directory: URL) throws {
+        var isDirectory: ObjCBool = false
+        if fm.fileExists(atPath: directory.path, isDirectory: &isDirectory) {
+            if isDirectory.boolValue { return }
+            try fm.createDirectory(at: directory, withIntermediateDirectories: false)
+            return
+        }
+        if try readNote(id).contains(Self.mediaName + "/") {
+            throw SnagError.mediaChanged(Self.mediaName)
+        }
         try fm.createDirectory(at: directory, withIntermediateDirectories: false)
     }
 

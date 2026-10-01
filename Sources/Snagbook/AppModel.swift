@@ -513,12 +513,14 @@ final class AppModel: ObservableObject {
     }
 
     /// The mark-up window finished with a picture.
-    func annotationFinished(session sourceSession: Session, item id: Int, relative: String, isNew: Bool, kept: Bool) throws {
+    func annotationFinished(session sourceSession: Session, item id: Int, relative: String, isNew: Bool, kept: Bool) async throws {
         let isOpen = adoptIfOpen(sourceSession)
         if isNew {
             if kept {
                 if isOpen, selectedID == id {
-                    editor.insertMedia(kind: "image", src: relative, label: "")
+                    guard await editor.insertMediaAndFlush(kind: "image", src: relative, label: "") else {
+                        throw VideoErrorLike("the note link could not be saved")
+                    }
                     flash("Screenshot saved to \(itemTitle(id))")
                 } else {
                     try appendMedia("![](\(relative))", to: sourceSession, item: id)

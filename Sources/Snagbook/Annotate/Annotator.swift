@@ -44,6 +44,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     private var window: NSWindow!
     weak var canvas: AnnotationCanvas?
     private var finished = false
+    private(set) var finishing = false
 
     enum Tool: Hashable {
         case mark(MarkTool), select, crop
@@ -188,7 +189,13 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
 
     /// Save the marks and the rendered picture, then close.
     func done() {
+        guard !finishing else { return }
+        finishing = true
         canvas?.endTextEditing(commit: true)
+        Task { await finishDone() }
+    }
+
+    private func finishDone() async {
         do {
             let live = try liveSession()
             let itemDir = try live.itemURL(item)
@@ -269,27 +276,34 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
             self.pictureBinding = pictureBinding
             self.origBinding = nextOrigBinding
             self.marksBinding = nextMarksBinding
-            try model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
+            try await model.annotationFinished(session: live, item: item, relative: relative, isNew: isNew, kept: true)
             finished = true
             try? live.writeReadme()
             close()
         } catch {
+            finishing = false
             model.show(error)
         }
     }
 
     /// New screenshot: keep it without marks. Existing picture: leave it as it was.
     func skip() {
-        do {
-            try keepUnchanged()
-            close()
-        } catch {
-            model.show(error)
+        guard !finishing else { return }
+        finishing = true
+        Task {
+            do {
+                try await keepUnchanged()
+                close()
+            } catch {
+                finishing = false
+                model.show(error)
+            }
         }
     }
 
     /// New screenshot only: throw it away.
     func discard() {
+        guard !finishing else { return }
         do {
             if isNew {
                 let live = try liveSession()
@@ -322,20 +336,25 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
         window?.close()
     }
 
-    private func keepUnchanged() throws {
-        if isNew { try model.annotationFinished(session: try liveSession(), item: item, relative: relative, isNew: true, kept: true) }
+    private func keepUnchanged() async throws {
+        if isNew { try await model.annotationFinished(session: try liveSession(), item: item, relative: relative, isNew: true, kept: true) }
         finished = true
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard !finished else { return true }
-        do {
-            try keepUnchanged()
-            return true
-        } catch {
-            model.show(error)
-            return false
+        guard !finishing else { return false }
+        finishing = true
+        Task {
+            do {
+                try await keepUnchanged()
+                close()
+            } catch {
+                finishing = false
+                model.show(error)
+            }
         }
+        return false
     }
 
     func windowWillClose(_ notification: Notification) {

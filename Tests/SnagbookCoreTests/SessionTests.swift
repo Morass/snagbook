@@ -253,6 +253,21 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: media.appendingPathComponent("shot-001.png")), Data([1]))
     }
 
+    func testMissingLinkedMediaFolderIsNotRecreatedWithReusedNames() throws {
+        let s = try Session.create(root: root, config: Config())
+        try s.addItem()
+        let rel = try s.saveMedia(1, data: Data("first".utf8), prefix: "shot", ext: "png")
+        try s.writeNote(1, body: "![](\(rel))\n")
+        let media = try s.mediaURL(1)
+        let held = media.deletingLastPathComponent().appendingPathComponent("held-media")
+        try FileManager.default.moveItem(at: media, to: held)
+
+        XCTAssertThrowsError(try s.saveMedia(1, data: Data("second".utf8), prefix: "shot", ext: "png"))
+        XCTAssertThrowsError(try s.reserveMediaName(1, prefix: "clip", ext: "mp4"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: media.path))
+        XCTAssertEqual(try Data(contentsOf: held.appendingPathComponent("shot-001.png")), Data("first".utf8))
+    }
+
     func testAReplacedMediaReservationIsNeverOverwrittenOrDeleted() throws {
         let s = try Session.create(root: root, config: Config())
         try s.addItem()

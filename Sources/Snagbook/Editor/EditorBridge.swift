@@ -100,7 +100,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         guard ready, let r = await evaluate("snag.takePending()") as? [String: Any],
               let id = r["id"] as? Int, let md = r["markdown"] as? String else { return true }
         guard model?.noteChanged(id: id, markdown: md) == true else {
-            call("snag.restorePending(\(Self.json(r)))")
+            _ = await evaluate("snag.restorePending(\(Self.json(r)))")
             return false
         }
         return true
@@ -110,6 +110,15 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     func insertMedia(kind: String, src: String, label: String) {
         call("snag.insertMedia(\(Self.json(["kind": kind, "src": src, "label": label])))")
+    }
+
+    func insertMediaAndFlush(kind: String, src: String, label: String) async -> Bool {
+        guard ready else { return false }
+        let source = Self.json(src)
+        if await evaluate("snag.hasMedia(\(source))") as? Bool != true {
+            guard await evaluate("snag.insertMedia(\(Self.json(["kind": kind, "src": src, "label": label])))") as? Bool == true else { return false }
+        }
+        return await flush()
     }
 
     func refreshMedia(_ src: String) { call("snag.refreshMedia(\(Self.json(src)))") }

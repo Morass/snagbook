@@ -118,7 +118,7 @@ enum SelfTest {
             a.commit { $0.marks.append(Mark(tool: .ellipse, points: [Pt(40, 40), Pt(200, 160)], color: "#ff3b30", width: 6)) }
             a.commit { $0.marks.append(Mark(tool: .text, points: [Pt(220, 60)], color: "#ff3b30", width: 24, text: "here")) }
             a.done()
-            await settle()
+            for _ in 0..<50 where Annotator.open.contains(where: { $0 === a }) { await settle(100) }
             _ = await model.editor.flush()
             let media = try! session.mediaURL(first)
             check(exists(media.appendingPathComponent("shot-001.png")), "marked-up screenshot saved")
@@ -413,6 +413,7 @@ enum SelfTest {
             try? stranger.write(to: pristine)
             originalReplaced.commit { $0.marks.append(Mark(tool: .ellipse, points: [Pt(30, 30), Pt(100, 90)], color: "#ff3b30", width: 4)) }
             originalReplaced.done()
+            await settle()
             check(Annotator.open.contains(where: { $0 === originalReplaced }), "mark-up refuses a replacement original picture")
             check((try? Data(contentsOf: pristine)) == stranger, "mark-up leaves a replacement original picture unchanged")
             try? FileManager.default.removeItem(at: pristine)
@@ -433,7 +434,9 @@ enum SelfTest {
             let heldNote = note.deletingLastPathComponent().appendingPathComponent(".attachment.selftest.md")
             try? FileManager.default.moveItem(at: note, to: heldNote)
             check(retry.windowShouldClose(retry.canvas!.window!) == false && Annotator.open.contains(where: { $0 === retry }), "closing keeps a failed screenshot attachment available to retry")
+            for _ in 0..<50 where retry.finishing { await settle(100) }
             retry.done()
+            for _ in 0..<50 where retry.finishing { await settle(100) }
             check(Annotator.open.contains(where: { $0 === retry }), "a failed screenshot attachment keeps the picture open")
             try? FileManager.default.moveItem(at: heldNote, to: note)
             let readme = session.url.appendingPathComponent(Session.readmeName)
@@ -451,6 +454,26 @@ enum SelfTest {
             check(false, "the attachment-retry mark-up window opens")
         }
 
+        model.select(id)
+        await settle()
+        let selectedRetryRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.6))!, prefix: "shot", ext: "png")) ?? ""
+        Annotator.open(item: id, relative: selectedRetryRel, isNew: true, model: model)
+        await settle()
+        if let selectedRetry = Annotator.open.last {
+            let note = try! session.noteURL(id)
+            let heldNote = note.deletingLastPathComponent().appendingPathComponent(".selected-attachment.selftest.md")
+            try? FileManager.default.moveItem(at: note, to: heldNote)
+            selectedRetry.done()
+            for _ in 0..<50 where selectedRetry.finishing { await settle(100) }
+            check(Annotator.open.contains(where: { $0 === selectedRetry }), "a selected-item attachment waits for its note to save")
+            try? FileManager.default.moveItem(at: heldNote, to: note)
+            selectedRetry.done()
+            for _ in 0..<50 where Annotator.open.contains(where: { $0 === selectedRetry }) { await settle(100) }
+            check(!Annotator.open.contains(where: { $0 === selectedRetry }) && read(note).contains(selectedRetryRel), "a selected-item attachment closes only after its link is durable")
+        } else {
+            check(false, "the selected attachment-retry mark-up window opens")
+        }
+
         let discardRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.8))!, prefix: "shot", ext: "png")) ?? ""
         Annotator.open(item: id, relative: discardRel, isNew: true, model: model)
         await settle()
@@ -461,6 +484,7 @@ enum SelfTest {
             let heldNote = note.deletingLastPathComponent().appendingPathComponent(".discard.selftest.md")
             try? FileManager.default.moveItem(at: note, to: heldNote)
             discardAfterFailure.done()
+            await settle()
             try? FileManager.default.moveItem(at: heldNote, to: note)
             let media = try! model.session!.mediaURL(id)
             let name = (discardRel as NSString).lastPathComponent
@@ -483,6 +507,7 @@ enum SelfTest {
             let pristine = currentMedia.appendingPathComponent(stem + ".orig.png")
             try? FileManager.default.setAttributes([.immutable: true], ofItemAtPath: pristine.path)
             rollback.done()
+            await settle()
             check(Annotator.open.contains(where: { $0 === rollback }), "a failed companion removal keeps the picture open")
             try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: pristine.path)
             rollback.done()
@@ -503,6 +528,7 @@ enum SelfTest {
             try? FileManager.default.createDirectory(at: marksURL, withIntermediateDirectories: false)
             failed.commit { $0.marks.append(Mark(tool: .ellipse, points: [Pt(10, 10), Pt(80, 60)], color: "#ff3b30", width: 4)) }
             failed.done()
+            await settle()
             check(Annotator.open.contains(where: { $0 === failed }), "a failed mark-up save keeps the picture open")
             check((try? Data(contentsOf: failedURL)) == before, "a partially failed mark-up save leaves the picture unchanged")
             try? FileManager.default.removeItem(at: marksURL)
@@ -521,6 +547,7 @@ enum SelfTest {
             let heldManifest = session.url.appendingPathComponent(".session.selftest.json")
             try? FileManager.default.moveItem(at: manifest, to: heldManifest)
             validation.done()
+            await settle()
             check(Annotator.open.contains(where: { $0 === validation }), "a failed session validation keeps unsaved marks open")
             try? FileManager.default.moveItem(at: heldManifest, to: manifest)
             validation.discard()
@@ -540,6 +567,7 @@ enum SelfTest {
             try? stranger.write(to: picture)
             replaced.commit { $0.marks.append(Mark(tool: .rect, points: [Pt(10, 10), Pt(80, 60)], color: "#ff3b30", width: 4)) }
             replaced.done()
+            await settle()
             check(Annotator.open.contains(where: { $0 === replaced }), "mark-up refuses a replacement picture at the same path")
             check((try? Data(contentsOf: picture)) == stranger, "mark-up does not overwrite a replacement picture")
             try? FileManager.default.removeItem(at: picture)
