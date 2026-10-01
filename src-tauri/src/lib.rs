@@ -852,7 +852,7 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     // the item's note here.
     let body = s.read_note(active.id).unwrap_or_default();
     let body = body.trim_end();
-    let written = s.write_note(active.id, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") });
+    let written = s.write_note_matching(active.id, &active.item_identity, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") });
     let last = app.state::<Busy>().release(&active.session, active.id);
     if last {
         if s.matches_item_identity(active.id, &active.item_identity) {
@@ -895,14 +895,14 @@ fn file_pending_capture(pending: &PendingCapture, fallback_header: &str) -> Res<
     if !s.matches_item_identity(pending.item, &pending.item_identity) {
         return Err("The capture's item is gone or was replaced.".into());
     }
-    append_capture_link(&mut s, pending.item, &pending.link)
+    append_capture_link(&mut s, pending.item, &pending.item_identity, &pending.link)
 }
 
-fn append_capture_link(s: &mut Session, item: i64, link: &str) -> Res<()> {
+fn append_capture_link(s: &mut Session, item: i64, identity: &FolderIdentity, link: &str) -> Res<()> {
     let body = s.read_note(item).map_err(err)?;
     if body.lines().any(|line| line.trim() == link) { return Ok(()) }
     let body = body.trim_end();
-    if let Err(e) = s.write_note(item, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") }) {
+    if let Err(e) = s.write_note_matching(item, identity, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") }) {
         if s.read_note(item).is_ok_and(|written| written.lines().any(|line| line.trim() == link)) { return Ok(()) }
         return Err(err(e));
     }
@@ -1127,7 +1127,7 @@ fn finish_markup(app: &AppHandle, kept: bool, changed: bool) -> Res<()> {
     {
         if file_without_notebook {
             if let Some(ack) = &p.ack {
-                if append_capture_link(s, p.id, &format!("![]({})", p.rel)).is_ok() {
+                if append_capture_link(s, p.id, &p.item_identity, &format!("![]({})", p.rel)).is_ok() {
                     app.state::<CaptureAcks>().0.lock().unwrap().remove(ack);
                     app.state::<Busy>().release(&p.session_dir, p.id);
                     event_ack = None;
@@ -1537,9 +1537,10 @@ mod tests {
         std::fs::remove_file(&readme).unwrap();
         std::fs::create_dir(&readme).unwrap();
         let link = "![](media/image-001.png)";
+        let identity = s.item_identity(id).unwrap();
 
-        append_capture_link(&mut s, id, link).unwrap();
-        append_capture_link(&mut s, id, link).unwrap();
+        append_capture_link(&mut s, id, &identity, link).unwrap();
+        append_capture_link(&mut s, id, &identity, link).unwrap();
 
         let note = s.read_note(id).unwrap();
         assert_eq!(note.lines().filter(|line| line.trim() == link).count(), 1);

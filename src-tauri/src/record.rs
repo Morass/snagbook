@@ -97,7 +97,7 @@ impl Encoder {
     /// ffmpeg reading raw RGBA frames of `src` size and writing `out` at `dst` size.
     pub fn start(ffmpeg: &Path, args: &[String], src: (u32, u32), dst: (u32, u32), fps: i64, out: &Path) -> Result<Encoder, String> {
         let mut cmd = Command::new(ffmpeg);
-        cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba"])
+        cmd.args(["-hide_banner", "-loglevel", "error", "-n", "-f", "rawvideo", "-pix_fmt", "rgba"])
             .args(["-s", &format!("{}x{}", src.0, src.1), "-framerate", &fps.to_string(), "-i", "-"])
             .args(["-vf", &format!("scale={}:{}:flags=bicubic", dst.0, dst.1), "-r", &fps.to_string()])
             .args(args)
@@ -323,6 +323,26 @@ fn require_destination(destination: &Option<(PathBuf, FolderIdentity)>) -> Resul
     destination_current(destination).then_some(()).ok_or_else(|| "the recording's item folder is gone or was replaced".into())
 }
 
+fn commit_encoded(temp: &Path, target: &Path, destination: &Option<(PathBuf, FolderIdentity)>) -> Result<(), String> {
+    require_destination(destination)?;
+    if target.exists() {
+        if std::fs::metadata(target).map_err(|e| e.to_string())?.len() != 0 {
+            return Err(format!("{} already contains a video", target.display()));
+        }
+        std::fs::remove_file(target).map_err(|e| e.to_string())?;
+    }
+    require_destination(destination)?;
+    let mut source = std::fs::File::open(temp).map_err(|e| e.to_string())?;
+    let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| e.to_string())?;
+    if let Err(e) = std::io::copy(&mut source, &mut output).and_then(|_| output.flush()) {
+        if destination_current(destination) {
+            let _ = std::fs::remove_file(target);
+        }
+        return Err(e.to_string());
+    }
+    require_destination(destination)
+}
+
 pub struct Finished {
     /// "clip-001.mp4", or None when there was no ffmpeg to make a video.
     pub video: Option<String>,
@@ -391,7 +411,8 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
                 let (ext, args) = pick_codec(&encoders, bit_rate(dst.0, dst.1, fps)).ok_or("this ffmpeg has no H.264 or VP9 encoder")?;
                 let name = format!("{stem}.{ext}");
                 require_destination(&destination)?;
-                let mut enc = Encoder::start(&ff, &args, src, dst, fps, &dir.join(&name))?;
+                let temp = std::env::temp_dir().join(format!("snagbook-{}.{}", uuid::Uuid::new_v4(), ext));
+                let mut enc = Encoder::start(&ff, &args, src, dst, fps, &temp)?;
                 *slot.lock().unwrap() = Some(enc.killer());
                 let mut failed = None;
                 for (frame, times) in rx {
@@ -404,10 +425,14 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
                     }
                 }
                 let done = enc.finish(limit);
-                let r = match failed {
+                let mut r = match failed {
                     Some(e) => Err(e),
                     None => done.map(|_| name.clone()),
                 };
+                if r.is_ok() {
+                    r = commit_encoded(&temp, &dir.join(&name), &destination).map(|_| name.clone());
+                }
+                let _ = std::fs::remove_file(&temp);
                 // A video that did not finish is not a video: nothing would play it.
                 if r.is_err() {
                     if destination_current(&destination) { let _ = std::fs::remove_file(dir.join(&name)); }
@@ -830,6 +855,46 @@ mod tests {
 
         assert!(result.err().unwrap().contains("replaced"));
         assert_eq!(std::fs::read(replacement_frames.join("keep.jpg")).unwrap(), b"replacement");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_delayed_encoder_cannot_overwrite_a_replacement_items_video() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = snagbook_core::Session::create_now(&root.path().to_string_lossy(), &snagbook_core::Config::default()).unwrap();
+        let id = session.add_item(None, chrono::Utc::now()).unwrap().id;
+        let item_dir = session.item_dir(id).unwrap();
+        let identity = session.item_identity(id).unwrap();
+        let media = session.media_dir(id).unwrap();
+        std::fs::create_dir(&media).unwrap();
+        std::fs::write(media.join("clip-001.mp4"), b"").unwrap();
+        let started = root.path().join("encoder-started");
+        let release = root.path().join("encoder-release");
+        let ffmpeg = root.path().join("delayed-ffmpeg");
+        std::fs::write(&ffmpeg, format!("#!/bin/sh\ncase \"$*\" in *-encoders*) echo ' V....D libx264  H.264'; exit 0;; esac\nfor a; do out=$a; done\n: > '{}'\nwhile [ ! -e '{}' ]; do sleep 0.01; done\nprintf encoded-video > \"$out\"\ncat > /dev/null\n", started.display(), release.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let held = session.dir.join("held-delayed-encoder-item");
+        let replacement_video = media.join("clip-001.mp4");
+        let stop = Stop::new();
+        let request = stop.clone();
+        let mut replaced = false;
+        let plan = Plan { dir: media, stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(ffmpeg), source: "test".into(), destination: Some((item_dir.clone(), identity)), finish_timeout: Duration::from_secs(5) };
+
+        let result = run(|| {
+            if started.exists() && !replaced {
+                std::fs::rename(&item_dir, &held).unwrap();
+                std::fs::create_dir_all(replacement_video.parent().unwrap()).unwrap();
+                std::fs::write(&replacement_video, b"replacement").unwrap();
+                std::fs::write(&release, b"").unwrap();
+                request.request();
+                replaced = true;
+            }
+            Ok(RgbaImage::from_pixel(64, 48, Rgba([1, 2, 3, 255])))
+        }, plan, stop);
+
+        assert!(result.err().unwrap().contains("replaced"));
+        assert_eq!(std::fs::read(replacement_video).unwrap(), b"replacement");
     }
 
     fn plan(dir: &std::path::Path, ffmpeg: Option<PathBuf>) -> Plan {

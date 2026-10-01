@@ -443,7 +443,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     if (ack) {
       const pending = { ...origin, filed: false, unlock: null };
       pendingOriginAcks.set(ack, pending);
-      const isOpen = originIsOpen(pending);
+      const isOpen = originIsOpen(pending) || await bindOpenOrigin(ack, pending);
       if (isOpen) pending.unlock = lockEditor();
       try {
         if (isOpen) await flush({ required: true });
@@ -468,7 +468,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   function retryOriginCaptures() {
     return serializeOrigin(async () => {
     for (const [ack, origin] of [...pendingOriginAcks]) {
-      const isOpen = originIsOpen(origin);
+      const isOpen = originIsOpen(origin) || (!origin.filed && await bindOpenOrigin(ack, origin));
       if (isOpen && !origin.unlock) origin.unlock = lockEditor();
       try {
         if (!origin.filed) {
@@ -494,6 +494,16 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     return !!origin && editorItem === origin.id
       && view?.session?.id === origin.sessionId
       && (origin.path ? view.session.path === origin.path : view.session.openToken === origin.openToken);
+  }
+
+  async function bindOpenOrigin(ack, origin) {
+    if (!ack || !origin || editorItem !== origin.id || view?.session?.id !== origin.sessionId) return false;
+    const openToken = view.session.openToken;
+    const matches = await call("capture_can_insert", { ack }).catch(() => false);
+    if (!matches || view?.session?.openToken !== openToken || editorItem !== origin.id) return false;
+    origin.openToken = openToken;
+    origin.path = view.session.path;
+    return true;
   }
 
   function lockPendingOriginEditors() {

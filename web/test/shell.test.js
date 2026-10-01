@@ -58,8 +58,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     new_session: async () => {
       if (sessionGate && !holdSessionReply) { await sessionGate; sessionGate = null; }
       const path = `~/Snagbook/${String(nextHash++).padStart(8, "0")}_25-09-2026`;
-      session = { id: `id-${nextHash}`, openToken: `open-${nextOpen++}`, path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
-      sessionOrigins.set(session.openToken, { id: session.id, path: session.path });
+      session = { id: `id-${nextHash}`, openToken: `open-${nextOpen++}`, path, folderToken: path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
+      sessionOrigins.set(session.openToken, { id: session.id, path: session.path, folderToken: session.folderToken });
       list.unshift({ id: session.id, path, title: session.title, items: 1, created: "2026-09-25T16:00:00Z" });
       handlers.add_item({});
       const opened = view();
@@ -69,18 +69,18 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     open_session: ({ path }) => {
       const s = list.find((x) => x.path === path);
       if (!s) throw "not a session";
-      session = { id: s.id || `id-${path}`, openToken: `open-${nextOpen++}`, path, title: s.title, header: null, items: [], nextItem: 2 };
+      session = { id: s.id || `id-${path}`, openToken: `open-${nextOpen++}`, path, folderToken: s.folderToken || path, title: s.title, header: null, items: [], nextItem: 2 };
       session.items.push(makeItem(1, "Old", "01-old"));
-      sessionOrigins.set(session.openToken, { id: session.id, path: session.path });
+      sessionOrigins.set(session.openToken, { id: session.id, path: session.path, folderToken: session.folderToken });
       return view();
     },
     pick_session_folder: async () => {
       if (sessionGate) { await sessionGate; sessionGate = null; }
       if (cancelFolderPick) { cancelFolderPick = false; return null; }
       const path = "~/Snagbook/picked";
-      session = { id: "picked", openToken: `open-${nextOpen++}`, path, title: "Picked", header: null, items: [], nextItem: 2 };
+      session = { id: "picked", openToken: `open-${nextOpen++}`, path, folderToken: path, title: "Picked", header: null, items: [], nextItem: 2 };
       session.items.push(makeItem(1, "Picked item", "01-picked-item"));
-      sessionOrigins.set(session.openToken, { id: session.id, path: session.path });
+      sessionOrigins.set(session.openToken, { id: session.id, path: session.path, folderToken: session.folderToken });
       return view();
     },
     add_item: ({ title }) => {
@@ -167,7 +167,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     capture_can_insert: async ({ ack }) => {
       if (captureGate) await captureGate;
       const origin = captureOrigins.get(ack);
-      return captureCanInsert && (!origin || (origin.sessionId === session?.id && origin.openToken === session?.openToken));
+      return captureCanInsert && (!origin || (origin.sessionId === session?.id
+        && (origin.folderToken ? origin.folderToken === session?.folderToken : origin.openToken === session?.openToken)));
     },
     save_media: async ({ sessionId, openToken, itemToken, id, mime }) => {
       const origin = sessionOrigins.get(openToken);
@@ -177,7 +178,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (mediaGate) await mediaGate;
       const ack = `media-${nextMedia++}`;
       const rel = mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png";
-      captureOrigins.set(ack, { sessionId, openToken, id, rel });
+      captureOrigins.set(ack, { sessionId, openToken, folderToken: origin.folderToken, id, rel });
       return { sessionId, sessionPath: origin.path, ack, id, rel, kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
     },
   };
@@ -1187,6 +1188,22 @@ test("fallback reload follows the same folder across a new open token", async ()
   const reopened = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1];
   assert.notEqual(reopened.openToken, source.openToken);
   assert.match(reopened.markdown, /!\[\]\(media\/image-001\.png\)/);
+});
+
+test("fallback reload recognizes the source reopened through another path", async () => {
+  const t = await setup({ session: true, slowMedia: true });
+  t.editor.mediaSaved = () => false;
+  const source = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 17, itemId: 1, itemToken: source.items[0].itemToken, sessionId: source.id, openToken: source.openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  t.app.list.push({ id: source.id, path: "~/alias-to-the-source", folderToken: source.folderToken, title: "Same session", items: 1 });
+  await t.shell.openSession("~/alias-to-the-source");
+  t.editor.log.length = 0;
+  t.app.releaseMedia();
+  await saving;
+
+  assert.equal(t.editor.log.filter(([kind]) => kind === "readOnly").at(0)?.[1], true);
+  assert.match(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, /!\[\]\(media\/image-001\.png\)/);
 });
 
 test("a capture finishing while the editor is locked is filed by the backend", async () => {

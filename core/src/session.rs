@@ -4,6 +4,7 @@ use chrono::{DateTime, Local, SecondsFormat, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -81,6 +82,29 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     fs::write(&tmp, data)?;
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+fn write_atomic_matching_dir(path: &Path, data: &[u8], expected: &FolderIdentity, before_commit: impl FnOnce()) -> Result<()> {
+    let dir = path.parent().ok_or_else(|| SnagError::Io(format!("{} has no folder", path.display())))?;
+    if !expected.matches_path(dir) {
+        return Err(SnagError::Io(format!("The folder {} is gone or was replaced.", dir.display())));
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp = dir.join(format!(".{name}.{:08x}.tmp", rand::random::<u32>()));
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    file.write_all(data)?;
+    file.flush()?;
+    before_commit();
+    if !expected.matches_path(dir) {
+        return Err(SnagError::Io(format!("The folder {} is gone or was replaced.", dir.display())));
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        if expected.matches_path(dir) {
+            let _ = fs::remove_file(&tmp);
+        }
         return Err(e.into());
     }
     Ok(())
@@ -464,10 +488,14 @@ impl Session {
         if !self.matches_item_identity(id, identity) {
             return Err(SnagError::Io(format!("The folder of item {id} is gone or was replaced.")));
         }
-        self.write_note(id, body)
+        self.write_note_inner(id, body, Some(identity))
     }
 
     pub fn write_note(&mut self, id: i64, body: &str) -> Result<bool> {
+        self.write_note_inner(id, body, None)
+    }
+
+    fn write_note_inner(&mut self, id: i64, body: &str, identity: Option<&FolderIdentity>) -> Result<bool> {
         self.require_exists()?;
         let path = self.note_path(id)?;
         if !path.parent().is_some_and(Path::is_dir) {
@@ -482,7 +510,10 @@ impl Session {
         if new == old {
             return Ok(false);
         }
-        write_atomic(&path, new.as_bytes())?;
+        match identity {
+            Some(expected) => write_atomic_matching_dir(&path, new.as_bytes(), expected, || {})?,
+            None => write_atomic(&path, new.as_bytes())?,
+        }
         self.write_readme()?;
         Ok(true)
     }
@@ -632,4 +663,29 @@ impl Session {
 
 fn trunc(d: DateTime<Utc>) -> DateTime<Utc> {
     DateTime::from_timestamp(d.timestamp(), 0).unwrap_or(d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bound_atomic_write_cannot_cross_an_item_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let item = root.path().join("01-item");
+        fs::create_dir(&item).unwrap();
+        let note = item.join(NOTE_NAME);
+        fs::write(&note, "original\n").unwrap();
+        let identity = FolderIdentity(Arc::new(same_file::Handle::from_path(&item).unwrap()));
+        let held = root.path().join("held-item");
+
+        let result = write_atomic_matching_dir(&note, b"old editor text\n", &identity, || {
+            fs::rename(&item, &held).unwrap();
+            fs::create_dir(&item).unwrap();
+            fs::write(&note, "replacement\n").unwrap();
+        });
+
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(note).unwrap(), "replacement\n");
+    }
 }
