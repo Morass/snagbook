@@ -22,7 +22,7 @@ final class CaptureController: ObservableObject {
     private var recordingFile: URL?
     private var recordingItem: Int?
     private var recordingSession: Session?
-    private var recordingItemCreated: Date?
+    private var recordingItemIdentity: String?
     private var recordingStartup: Task<Void, Never>?
     private var savingItem: Int?
     private var savingSession: Session?
@@ -144,16 +144,20 @@ final class CaptureController: ObservableObject {
     // MARK: - screenshot
 
     func shoot(_ t: CaptureTarget, destination supplied: (Session, Int)? = nil, finishesStandaloneCapture: Bool = false) {
-        let destination: (Session, Int, Date?)
+        let destination: (Session, Int, String)
         do {
             if let supplied {
-                destination = (supplied.0, supplied.1, nil)
-            } else if phase == .recording, let recordingSession, let recordingItem {
-                destination = (recordingSession, recordingItem, recordingItemCreated)
+                let session = try liveSession(for: supplied.0, item: supplied.1, identity: nil)
+                guard let identity = try session.itemIdentity(supplied.1) else { throw SnagError.noSuchItem(supplied.1) }
+                destination = (session, supplied.1, identity)
+            } else if phase == .recording, let recordingSession, let recordingItem, let recordingItemIdentity {
+                destination = (recordingSession, recordingItem, recordingItemIdentity)
             } else {
                 let id = try model.ensureItem()
-                guard let session = model.session else { throw SnagError.noSuchItem(id) }
-                destination = (session, id, nil)
+                guard let source = model.session else { throw SnagError.noSuchItem(id) }
+                let session = try liveSession(for: source, item: id, identity: nil)
+                guard let identity = try session.itemIdentity(id) else { throw SnagError.noSuchItem(id) }
+                destination = (session, id, identity)
             }
         } catch {
             if finishesStandaloneCapture { phase = .idle; target = nil }
@@ -174,7 +178,7 @@ final class CaptureController: ObservableObject {
             }
             do {
                 let image = try await ScreenGrabber.screenshot(t)
-                let live = try liveSession(for: destination.0, item: destination.1, created: destination.2)
+                let live = try liveSession(for: destination.0, item: destination.1, identity: destination.2)
                 let waitsForAnnotator = model.screenshotTaken(image, source: t.summary, session: live, item: destination.1)
                 if !waitsForAnnotator { bringNotebookBack() }
             } catch {
@@ -194,10 +198,11 @@ final class CaptureController: ObservableObject {
         }
         guard let sourceSession = model.session else { return }
         let session: Session
-        let itemCreated: Date
+        let itemIdentity: String
         do {
-            session = try liveSession(for: sourceSession, item: id, created: nil)
-            itemCreated = try session.item(id).created
+            session = try liveSession(for: sourceSession, item: id, identity: nil)
+            guard let identity = try session.itemIdentity(id) else { throw SnagError.noSuchItem(id) }
+            itemIdentity = identity
         } catch {
             target = nil
             return showCaptureError(error)
@@ -217,7 +222,7 @@ final class CaptureController: ObservableObject {
         recordingFile = file
         recordingItem = id
         recordingSession = session
-        recordingItemCreated = itemCreated
+        recordingItemIdentity = itemIdentity
         phase = .recording
         recordingStarted = Date()
         overlay.showRecording(t)
@@ -228,7 +233,7 @@ final class CaptureController: ObservableObject {
                 guard recorder === rec else { return }
                 recorder = nil
                 recordingSession = nil
-                recordingItemCreated = nil
+                recordingItemIdentity = nil
                 recordingStartup = nil
                 phase = .idle
                 recordingStarted = nil
@@ -242,7 +247,7 @@ final class CaptureController: ObservableObject {
 
     func stopRecording() {
         guard phase == .recording, let rec = recorder, let file = recordingFile, let item = recordingItem,
-              let session = recordingSession, let itemCreated = recordingItemCreated, let t = target else { return }
+              let session = recordingSession, let itemIdentity = recordingItemIdentity, let t = target else { return }
         phase = .saving
         overlay.showSaving()
         let settings = model.config.capture
@@ -255,13 +260,13 @@ final class CaptureController: ObservableObject {
                 recorder = nil
                 recordingStarted = nil
                 recordingSession = nil
-                recordingItemCreated = nil
+                recordingItemIdentity = nil
                 recordingStartup = nil
                 if filed { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
             }
             do {
                 let duration = try await rec.stop()
-                let saved = try await fileRecording(file, into: item, session: session, itemCreated: itemCreated, target: t, settings: settings, duration: duration)
+                let saved = try await fileRecording(file, into: item, session: session, itemIdentity: itemIdentity, target: t, settings: settings, duration: duration)
                 filed = true
                 model.recordingSaved(session: saved.session, item: item, relative: saved.relative, duration: duration)
             } catch {
@@ -275,8 +280,8 @@ final class CaptureController: ObservableObject {
     }
 
     /// Name the recording, write its stills beside it, and move all of it into the item.
-    func fileRecording(_ recording: URL, into item: Int, session: Session, itemCreated: Date? = nil, target t: CaptureTarget, settings: CaptureSettings, duration: Double) async throws -> (session: Session, relative: String) {
-        var current = try liveSession(for: session, item: item, created: itemCreated)
+    func fileRecording(_ recording: URL, into item: Int, session: Session, itemIdentity: String, target t: CaptureTarget, settings: CaptureSettings, duration: Double) async throws -> (session: Session, relative: String) {
+        var current = try liveSession(for: session, item: item, identity: itemIdentity)
         let reserved = try current.reserveMediaName(item, prefix: "clip", ext: "mp4")
         let name = reserved.url.lastPathComponent
         let work = recording.deletingLastPathComponent()
@@ -288,7 +293,7 @@ final class CaptureController: ObservableObject {
         var moves = [(named, reserved.url), (work.appendingPathComponent(n.json), media.appendingPathComponent(n.json)),
                      (work.appendingPathComponent(n.frames), media.appendingPathComponent(n.frames))]
         if info.contactSheet != nil { moves.append((work.appendingPathComponent(n.sheet), media.appendingPathComponent(n.sheet))) }
-        current = try liveSession(for: session, item: item, created: itemCreated)
+        current = try liveSession(for: session, item: item, identity: itemIdentity)
         let liveMedia = try current.mediaURL(item)
         for (from, to) in moves {
             guard current.matchesDiskIdentity else { throw SnagError.notASession(current.displayPath) }
@@ -299,11 +304,11 @@ final class CaptureController: ObservableObject {
         return (current, reserved.relative)
     }
 
-    private func liveSession(for source: Session, item: Int, created: Date?) throws -> Session {
+    private func liveSession(for source: Session, item: Int, identity: String?) throws -> Session {
         let current = try Session.open(source.url.path, fallbackHeader: model.config.header)
         guard current.isSameSession(as: source) else { throw SnagError.notASession(source.displayPath) }
         _ = try current.item(item)
-        if let created, !current.isSameItem(item, created: created) { throw SnagError.noSuchItem(item) }
+        if let identity, !current.isSameItem(item, identity: identity) { throw SnagError.noSuchItem(item) }
         return current
     }
 }

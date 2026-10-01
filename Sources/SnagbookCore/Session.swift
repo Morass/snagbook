@@ -182,8 +182,12 @@ public final class Session {
     public func itemURL(_ id: Int) throws -> URL { url.appendingPathComponent(try item(id).folder, isDirectory: true) }
     public func noteURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.noteName) }
     public func mediaURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.mediaName, isDirectory: true) }
-    public func isSameItem(_ id: Int, created: Date) -> Bool {
-        (try? item(id).created) == created
+    public func itemIdentity(_ id: Int) throws -> String? {
+        Self.identity(of: try itemURL(id))
+    }
+
+    public func isSameItem(_ id: Int, identity: String) -> Bool {
+        (try? itemIdentity(id)) == identity
     }
 
     /// Add an item after the others. With no title it is "Item N".

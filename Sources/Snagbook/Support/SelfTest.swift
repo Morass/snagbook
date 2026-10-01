@@ -156,12 +156,12 @@ enum SelfTest {
             let duration = try await w.finish()
             let target = CaptureTarget(rect: CGRect(x: 0, y: 0, width: 320, height: 180), displayID: CGMainDisplayID(), screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900), scale: 2, kind: "region")
             let recordingSession = try Session.open(session.url.path, fallbackHeader: model.config.header)
-            let recordingItemCreated = try recordingSession.item(first).created
+            guard let recordingItemIdentity = try recordingSession.itemIdentity(first) else { throw SnagError.noSuchItem(first) }
             model.openSession(session.displayPath)
             for _ in 0..<30 where model.session === session { await settle(100) }
             model.rename(first, to: "Renamed while recording")
             await settle()
-            let saved = try await model.capture.fileRecording(file, into: first, session: recordingSession, itemCreated: recordingItemCreated, target: target, settings: model.config.capture, duration: duration)
+            let saved = try await model.capture.fileRecording(file, into: first, session: recordingSession, itemIdentity: recordingItemIdentity, target: target, settings: model.config.capture, duration: duration)
             let rel = saved.relative
             let elsewhere = try model.addItem(title: "Capture switched away", focusTitle: false)
             await settle()
