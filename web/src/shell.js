@@ -420,11 +420,21 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function leaveCaptureInOrigin(ack, origin) {
     if (ack) {
+      const pending = { ...origin, filed: false, unlock: null };
+      const isOpen = originIsOpen(pending);
+      if (isOpen) pending.unlock = lockEditor();
       try {
+        if (isOpen) await flush({ required: true });
         await call("capture_filed", { ack, inserted: false });
-        pendingOriginAcks.delete(ack);
+        pending.filed = true;
+        if (originIsOpen(pending)) await reloadCurrentItem(pending.id, pending.sessionId, pending.openToken);
+        pending.unlock?.();
       } catch {
-        pendingOriginAcks.set(ack, origin);
+        pendingOriginAcks.set(ack, pending);
+        if (!pending.filed || !originIsOpen(pending)) {
+          pending.unlock?.();
+          pending.unlock = null;
+        }
         return false;
       }
     }
@@ -433,19 +443,29 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function retryOriginCaptures() {
     for (const [ack, origin] of [...pendingOriginAcks]) {
-      const isOpen = origin && selected === origin.id && editorItem === origin.id
-        && view?.session?.id === origin.sessionId && view?.session?.openToken === origin.openToken;
-      const unlock = isOpen ? lockEditor() : () => {};
+      const isOpen = originIsOpen(origin);
+      if (isOpen && !origin.unlock) origin.unlock = lockEditor();
       try {
-        if (isOpen) await flush({ required: true });
-        await call("capture_filed", { ack, inserted: false });
+        if (!origin.filed) {
+          if (isOpen) await flush({ required: true });
+          await call("capture_filed", { ack, inserted: false });
+          origin.filed = true;
+        }
+        if (originIsOpen(origin)) await reloadCurrentItem(origin.id, origin.sessionId, origin.openToken);
+        origin.unlock?.();
         pendingOriginAcks.delete(ack);
-        if (origin) await reloadCurrentItem(origin.id, origin.sessionId, origin.openToken);
       } catch {
-      } finally {
-        unlock();
+        if (!origin.filed || !originIsOpen(origin)) {
+          origin.unlock?.();
+          origin.unlock = null;
+        }
       }
     }
+  }
+
+  function originIsOpen(origin) {
+    return !!origin && selected === origin.id && editorItem === origin.id
+      && view?.session?.id === origin.sessionId && view?.session?.openToken === origin.openToken;
   }
 
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
@@ -910,7 +930,6 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
             snag()?.mediaFailed(msg.reqId);
             const filed = await leaveCaptureInOrigin(saved.ack, { id, sessionId: msg.sessionId, openToken: msg.openToken });
             await refresh();
-            if (filed) await reloadCurrentItem(id, msg.sessionId, msg.openToken);
             break;
           }
           const pending = pendingCaptureAcks.get(id) || [];

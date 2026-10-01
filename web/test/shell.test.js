@@ -29,6 +29,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let cancelFolderPick = false;
   let sessionGate = null;
   let captureFilingBlocked = failCaptureFiling;
+  let noteReadFailures = 0;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
   const captureFilingGate = slowCaptureFiling ? new Promise((resolve) => { releaseCaptureFiling = resolve; }) : null;
   let captureFilingUsed = false;
@@ -103,6 +104,10 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       return view();
     },
     read_note: async ({ id }) => {
+      if (noteReadFailures > 0) {
+        noteReadFailures--;
+        throw "The note could not be read.";
+      }
       if (heldNote === id && noteGate) {
         heldNote = null;
         await noteGate;
@@ -169,6 +174,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     cancelNextFolderPick: () => { cancelFolderPick = true; sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     releaseSession: () => releaseSession?.(),
     allowCaptureFiling: () => { captureFilingBlocked = false; },
+    failNextNoteRead: () => { noteReadFailures++; },
     slowNoteFor(id) {
       slowNote = id;
     },
@@ -919,6 +925,49 @@ test("a successful filing retry reloads the source note before another edit", as
   assert.match(t.app.notes.get(1), /^typed while filing was blocked\n\n!\[\]\(media\/image-001\.png\)\n$/);
   const reopened = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1];
   assert.equal(reopened.markdown, t.app.notes.get(1));
+});
+
+test("immediate fallback waits for pending source edits before appending its link", async () => {
+  const t = await setup({ session: true, slowMedia: true, slowWrite: true });
+  t.editor.mediaSaved = () => false;
+  const { id: sessionId, openToken } = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 14, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  const autosaving = t.shell.onEditorMessage({ type: "changed", id: 1, markdown: "first edit\n" });
+  await t.settle();
+  let pending = { id: 1, markdown: "second edit\n" };
+  t.editor.takePending = () => {
+    const value = pending;
+    pending = null;
+    return value;
+  };
+  t.app.cancelNextFolderPick();
+  const picking = t.shell.pickFolder();
+  await t.settle();
+  t.app.releaseMedia();
+  t.app.releaseWrite();
+  await autosaving;
+  await saving;
+  t.app.releaseSession();
+  await picking;
+  assert.match(t.app.notes.get(1), /^second edit\n\n!\[\]\(media\/image-001\.png\)\n$/);
+});
+
+test("a failed reload after fallback filing keeps the source editor locked until retry", async () => {
+  const t = await setup({ session: true, failCaptureFiling: true });
+  t.editor.mediaSaved = () => false;
+  const { id: sessionId, openToken } = t.shell.view().session;
+  await t.shell.onEditorMessage({ type: "media", reqId: 15, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  t.app.allowCaptureFiling();
+  t.app.failNextNoteRead();
+  await t.shell.refresh();
+  assert.equal(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1)[1], true);
+  assert.match(t.app.notes.get(1), /!\[\]\(media\/image-001\.png\)/);
+  const filedCalls = t.app.calls.filter(([cmd]) => cmd === "capture_filed").length;
+  await t.shell.refresh();
+  assert.equal(t.app.calls.filter(([cmd]) => cmd === "capture_filed").length, filedCalls);
+  assert.equal(t.editor.log.filter(([kind]) => kind === "readOnly").at(-1)[1], false);
+  assert.match(t.editor.log.filter(([kind]) => kind === "open").at(-1)[1].markdown, /!\[\]\(media\/image-001\.png\)/);
 });
 
 test("reopening the same folder refreshes the editor's session token", async () => {
