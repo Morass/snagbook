@@ -578,7 +578,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return;
     }
     if (selected !== id || editorItem !== id) await show(id, { focus: false });
-    if (!stillHere() || selected !== id || editorItem !== id) {
+    const editorStillValid = !ack || await call("capture_can_insert", { ack }).catch(() => false);
+    if (!editorStillValid || !stillHere() || selected !== id || editorItem !== id) {
       const filed = await leaveCaptureInOrigin(ack, origin);
       if (filed) flash("The capture stayed in its original session.");
       return;

@@ -8,7 +8,7 @@ import { rectFraction, formatElapsed } from "../src/rect.js";
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
 /// An in-memory stand-in for the app's commands.
-function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, slowCaptureFiling = false, slowFiledReply = false, slowMedia = false, slowWrite = false, slowDelete = false, failCaptureFiling = false } = {}) {
+function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, holdSecondCaptureCheck = false, slowCaptureFiling = false, slowFiledReply = false, slowMedia = false, slowWrite = false, slowDelete = false, failCaptureFiling = false } = {}) {
   const calls = [];
   const notes = new Map();
   let slowNote = null;
@@ -22,6 +22,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let nextMedia = 1;
   let nextItemToken = 1;
   let releaseCaptureCheck;
+  let releaseSecondCaptureCheck;
   let releaseCaptureFiling;
   let releaseMedia;
   let releaseWrite;
@@ -35,6 +36,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let captureFilingBlocked = failCaptureFiling;
   let noteReadFailures = 0;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
+  const secondCaptureGate = holdSecondCaptureCheck ? new Promise((resolve) => { releaseSecondCaptureCheck = resolve; }) : null;
+  let captureChecks = 0;
   const captureFilingGate = slowCaptureFiling ? new Promise((resolve) => { releaseCaptureFiling = resolve; }) : null;
   let captureFilingUsed = false;
   const mediaGate = slowMedia ? new Promise((resolve) => { releaseMedia = resolve; }) : null;
@@ -188,9 +191,12 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     capture_can_insert: async ({ ack }) => {
       if (captureGate) await captureGate;
       const origin = captureOrigins.get(ack);
-      return captureCanInsert && (!origin || (origin.sessionId === session?.id
+      const canInsert = captureCanInsert && (!origin || (origin.sessionId === session?.id
         && (origin.folderToken ? origin.folderToken === session?.folderToken : origin.openToken === session?.openToken)
         && (!origin.itemToken || session.items.find((item) => item.id === origin.id)?.itemToken === origin.itemToken)));
+      captureChecks++;
+      if (captureChecks === 2 && secondCaptureGate) await secondCaptureGate;
+      return canInsert;
     },
     save_media: async ({ sessionId, openToken, itemToken, id, mime }) => {
       const origin = sessionOrigins.get(openToken);
@@ -214,6 +220,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     calls,
     notes,
     releaseCaptureCheck: () => releaseCaptureCheck?.(),
+    releaseSecondCaptureCheck: () => releaseSecondCaptureCheck?.(),
     releaseCaptureFiling: () => releaseCaptureFiling?.(),
     releaseMedia: () => releaseMedia?.(),
     releaseWrite: () => releaseWrite?.(),
@@ -862,6 +869,34 @@ test("capture insertion revalidates the item after refreshed state arrives", asy
 
   assert.equal(t.app.notes.get(1), "replacement\n");
   assert.equal(t.app.calls.some(([cmd, args]) => cmd === "write_note" && args.itemToken === replacementToken && args.markdown.includes("shot-old-life")), false);
+});
+
+test("capture insertion revalidates after waiting for its target editor", async () => {
+  const t = await setup({ session: true, holdSecondCaptureCheck: true });
+  await t.shell.newItem();
+  await t.shell.show(1);
+  const source = t.shell.view().session;
+  const item = source.items.find((candidate) => candidate.id === 1);
+  t.app.addCaptureOrigin("waiting-capture", { sessionId: source.id, openToken: source.openToken, folderToken: source.folderToken, itemToken: item.itemToken, id: 1, rel: "media/shot-old-life.png" });
+  let current = null;
+  let pending = null;
+  const open = t.editor.open;
+  t.editor.open = (value) => { current = value; open(value); };
+  t.editor.insertMedia = ({ src }) => { pending = { id: current.id, itemToken: current.itemToken, markdown: `${current.markdown}![](${src})\n` }; };
+  t.editor.takePending = () => { const value = pending; pending = null; return value; };
+  const filing = t.shell.onCaptured({ sessionId: source.id, ack: "waiting-capture", id: 1, rel: "media/shot-old-life.png" });
+  await t.settle();
+  await t.shell.show(2);
+  t.app.holdNoteFor(1);
+  t.app.releaseSecondCaptureCheck();
+  await t.settle();
+  t.app.replaceItem(1);
+  t.app.notes.set(1, "replacement\n");
+  await t.shell.refresh();
+  t.app.releaseNote();
+  await filing;
+
+  assert.equal(t.app.notes.get(1), "replacement\n");
 });
 
 test("capture fallback reload follows the same session folder after reopening it", async () => {
