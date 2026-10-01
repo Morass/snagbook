@@ -697,6 +697,7 @@ export const api = {
 
   /** The app saved a pasted or dropped file; put it where the user dropped it. */
   mediaSaved(reqId, src) {
+    if (readOnly) return false;
     const p = pending.get(reqId);
     pending.delete(reqId);
     if (!p) return false;

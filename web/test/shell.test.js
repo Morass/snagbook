@@ -25,6 +25,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let releaseWrite;
   let releaseDelete;
   let releaseSession;
+  let holdSessionReply = false;
   let sessionGate = null;
   let captureFilingBlocked = failCaptureFiling;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
@@ -34,6 +35,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   const writeGate = slowWrite ? new Promise((resolve) => { releaseWrite = resolve; }) : null;
   const deleteGate = slowDelete ? new Promise((resolve) => { releaseDelete = resolve; }) : null;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
+  const captureOrigins = new Map();
   const list = [...sessions];
   const view = (extra = {}) => ({ config, session: session && JSON.parse(JSON.stringify(session)), loadError: null, closed: null, platform, ...extra });
   const settle = () => {
@@ -43,12 +45,14 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     state: () => view(),
     list_sessions: () => list.map((s) => ({ ...s })),
     new_session: async () => {
-      if (sessionGate) { await sessionGate; sessionGate = null; }
+      if (sessionGate && !holdSessionReply) { await sessionGate; sessionGate = null; }
       const path = `~/Snagbook/${String(nextHash++).padStart(8, "0")}_25-09-2026`;
       session = { id: `id-${nextHash}`, openToken: `open-${nextOpen++}`, path, title: "Session 25 Sep, 18:00", header: null, items: [], nextItem: 1 };
       list.unshift({ id: session.id, path, title: session.title, items: 1, created: "2026-09-25T16:00:00Z" });
       handlers.add_item({});
-      return view();
+      const opened = view();
+      if (sessionGate) { await sessionGate; sessionGate = null; holdSessionReply = false; }
+      return opened;
     },
     open_session: ({ path }) => {
       const s = list.find((x) => x.path === path);
@@ -115,23 +119,27 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     set_selected: () => null,
     update_config: ({ patch }) => (Object.assign(config, patch), view()),
     start_screenshot: () => null,
-    capture_filed: async () => {
+    capture_filed: async ({ ack }) => {
       if (captureFilingBlocked) throw "The capture could not be filed.";
       if (captureFilingGate) {
         if (captureFilingUsed) throw "That capture is not waiting to be filed.";
         captureFilingUsed = true;
         await captureFilingGate;
       }
+      captureOrigins.delete(ack);
       return null;
     },
-    capture_can_insert: async () => {
+    capture_can_insert: async ({ ack }) => {
       if (captureGate) await captureGate;
-      return captureCanInsert;
+      const origin = captureOrigins.get(ack);
+      return captureCanInsert && (!origin || (origin.sessionId === session?.id && origin.openToken === session?.openToken));
     },
     save_media: async ({ sessionId, openToken, id, mime }) => {
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
       if (mediaGate) await mediaGate;
-      return { sessionId, ack: `media-${nextMedia++}`, id, rel: mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png", kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
+      const ack = `media-${nextMedia++}`;
+      captureOrigins.set(ack, { sessionId, openToken });
+      return { sessionId, ack, id, rel: mime.startsWith("video/") ? "media/clip-001.mp4" : "media/image-001.png", kind: mime.startsWith("video/") ? "video" : "image", label: "", problem: null };
     },
   };
   const invoke = async (cmd, args = {}) => {
@@ -149,6 +157,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseWrite: () => releaseWrite?.(),
     releaseDelete: () => releaseDelete?.(),
     holdNextSession: () => { sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
+    holdNextSessionReply: () => { holdSessionReply = true; sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     releaseSession: () => releaseSession?.(),
     allowCaptureFiling: () => { captureFilingBlocked = false; },
     slowNoteFor(id) {
@@ -826,6 +835,25 @@ test("a pasted-media save response cannot cross an item switch", async () => {
   await saving;
   assert.equal(t.editor.log.some((entry) => entry[0] === "saved" && entry[1] === 9), false);
   assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "media-1", inserted: false }]);
+});
+
+test("a paste reply cannot enter an old editor after the backend switched sessions", async () => {
+  const t = await setup({ session: true, slowMedia: true });
+  let pending = null;
+  t.editor.mediaSaved = (_reqId, rel) => (pending = { id: 1, markdown: rel }, true);
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  const { id: sessionId, openToken } = t.shell.view().session;
+  const saving = t.shell.onEditorMessage({ type: "media", reqId: 11, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  await t.settle();
+  t.app.holdNextSessionReply();
+  const switching = t.shell.newSession();
+  await t.settle();
+  t.app.releaseMedia();
+  await saving;
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "media-1", inserted: false }]);
+  t.app.releaseSession();
+  await switching;
+  assert.notEqual(t.shell.view().session.openToken, openToken);
 });
 
 test("failed filing of delayed pasted media is retried", async () => {
