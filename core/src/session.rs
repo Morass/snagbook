@@ -102,6 +102,7 @@ pub struct Session {
     pub display_path: String,
     pub manifest: Manifest,
     fallback_header: String,
+    folder_identity: same_file::Handle,
 }
 
 impl Session {
@@ -123,6 +124,7 @@ impl Session {
         let dir = fs::canonicalize(dir)?;
         let display = format!("{}/{}", root.trim_end_matches('/'), name);
         let s = Session {
+            folder_identity: same_file::Handle::from_path(&dir)?,
             dir,
             display_path: Paths::abbreviate(&Paths::expand(&display)),
             manifest: Manifest { created: trunc(now), format: 1, header: None, id: hash.into(), items: vec![], next_item: 1, title: None },
@@ -142,7 +144,8 @@ impl Session {
         let dir = fs::canonicalize(&requested).map_err(|_| SnagError::NotASession(path.into()))?;
         let data = fs::read(dir.join(MANIFEST_NAME)).map_err(|_| SnagError::NotASession(path.into()))?;
         let manifest: Manifest = serde_json::from_slice(&data).map_err(|e| SnagError::Io(format!("{path}: {e}")))?;
-        let mut s = Session { dir, display_path: Paths::abbreviate(&Paths::expand(path)), manifest, fallback_header: fallback_header.into() };
+        let folder_identity = same_file::Handle::from_path(&dir)?;
+        let mut s = Session { dir, display_path: Paths::abbreviate(&Paths::expand(path)), manifest, fallback_header: fallback_header.into(), folder_identity };
         s.repair();
         Ok(s)
     }
@@ -172,11 +175,12 @@ impl Session {
 
     /// Whether the folder is still there (it can be deleted from outside at any time).
     pub fn exists(&self) -> bool {
-        self.matches_disk_identity()
+        self.dir.is_dir() && self.dir.join(MANIFEST_NAME).is_file()
     }
 
     pub fn matches_disk_identity(&self) -> bool {
-        fs::read(self.dir.join(MANIFEST_NAME))
+        let same_folder = same_file::Handle::from_path(&self.dir).ok().is_some_and(|current| current == self.folder_identity);
+        same_folder && fs::read(self.dir.join(MANIFEST_NAME))
             .ok()
             .and_then(|data| serde_json::from_slice::<Manifest>(&data).ok())
             .is_some_and(|disk| disk.id == self.manifest.id)
@@ -280,6 +284,7 @@ impl Session {
     /// files are being written into it). Called again with the same title and `move_folder`,
     /// it brings a folder left behind up to date.
     pub fn retitle_item(&mut self, id: i64, title: &str, move_folder: bool) -> Result<ItemRecord> {
+        self.require_exists()?;
         let t = title.trim().to_string();
         if t.is_empty() {
             return Err(SnagError::BadName(title.into()));
@@ -310,6 +315,7 @@ impl Session {
     /// Remove an item. `discard` decides what happens to the folder (the app moves it to
     /// the Trash); an error from it leaves the item in place.
     pub fn delete_item(&mut self, id: i64, discard: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+        self.require_exists()?;
         let dir = self.item_dir(id)?;
         discard(&dir)?;
         self.manifest.items.retain(|r| r.id != id);
@@ -341,6 +347,7 @@ impl Session {
     }
 
     pub fn move_item(&mut self, id: i64, index: usize) -> Result<()> {
+        self.require_exists()?;
         let from = self.manifest.items.iter().position(|r| r.id == id).ok_or(SnagError::NoSuchItem(id))?;
         let rec = self.manifest.items.remove(from);
         let to = index.min(self.manifest.items.len());
@@ -361,6 +368,7 @@ impl Session {
 
     /// Name the session; an empty name goes back to the date.
     pub fn set_title(&mut self, title: &str) -> Result<()> {
+        self.require_exists()?;
         let t = title.trim();
         self.manifest.title = if t.is_empty() { None } else { Some(t.into()) };
         self.save()
@@ -368,6 +376,7 @@ impl Session {
 
     /// Give this session its own header; None goes back to the global one.
     pub fn set_header(&mut self, header: Option<&str>) -> Result<()> {
+        self.require_exists()?;
         self.manifest.header = header.map(String::from);
         self.save()
     }
@@ -398,6 +407,7 @@ impl Session {
     /// Store the note's Markdown, keeping its front matter. False when the file already held
     /// exactly this.
     pub fn write_note(&mut self, id: i64, body: &str) -> Result<bool> {
+        self.require_exists()?;
         let path = self.note_path(id)?;
         if !path.parent().is_some_and(Path::is_dir) {
             return Err(SnagError::Io(format!("The folder of item {id} is gone.")));
@@ -508,6 +518,7 @@ impl Session {
     }
 
     pub fn write_readme(&self) -> Result<()> {
+        self.require_exists()?;
         let path = self.dir.join(README_NAME);
         let text = self.readme_text();
         if fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {

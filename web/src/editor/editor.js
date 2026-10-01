@@ -615,6 +615,11 @@ export const api = {
     return { id: currentId, markdown };
   },
 
+  restorePending(p) {
+    const entry = p?.id == null ? null : cache.get(p.id);
+    if (entry && serializeMarkdown(entry.state.doc, entry.memo) === p.markdown) entry.saved = null;
+  },
+
   markdown() {
     return serializeMarkdown(view.state.doc, cache.get(currentId)?.memo);
   },

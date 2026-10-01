@@ -40,6 +40,15 @@ fn path(s: &Session) -> String {
     s.dir.to_string_lossy().to_string()
 }
 
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() { copy_dir(&entry.path(), &dest) } else { fs::copy(entry.path(), dest).unwrap(); }
+    }
+}
+
 #[test]
 fn create_makes_hash_date_folder_with_manifest_and_readme() {
     let e = env();
@@ -283,6 +292,21 @@ fn a_replacement_at_the_same_path_is_neither_written_nor_deleted() {
     assert!(original.add_item(None, Utc::now()).is_err());
     assert!(original.delete(|p| fs::remove_dir_all(p).map_err(Into::into)).is_err());
     assert_eq!(Session::open(&original.dir.to_string_lossy(), "").unwrap().manifest.id, "replacement");
+}
+
+#[test]
+fn a_copied_replacement_with_the_same_manifest_id_is_rejected() {
+    let e = env();
+    let mut original = Session::create(&e.root, &Config::default(), date("2026-09-25T10:00:00Z"), "same-id").unwrap();
+    original.add_item(None, Utc::now()).unwrap();
+    let old = original.dir.with_file_name("old-copy-source");
+    fs::rename(&original.dir, &old).unwrap();
+    copy_dir(&old, &original.dir);
+
+    assert!(!original.matches_disk_identity());
+    assert!(original.write_note(1, "must not reach the copy").is_err());
+    assert!(original.delete(|p| fs::remove_dir_all(p).map_err(Into::into)).is_err());
+    assert!(original.dir.join("session.json").is_file());
 }
 
 #[test]

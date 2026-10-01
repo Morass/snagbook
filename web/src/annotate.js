@@ -395,7 +395,7 @@ function load(src) {
 
 async function start() {
   info = await invoke("markup_info");
-  const base = (windows ? "http://snagbook.localhost" : "snagbook://localhost") + `/item/${info.id}/`;
+  const base = (windows ? "http://snagbook.localhost" : "snagbook://localhost") + "/markup/";
   const comp = M.companions(info.rel);
   original = await load(base + (info.hasOrig ? comp.orig : info.rel).split("/").map(encodeURIComponent).join("/") + "?v=" + Date.now());
   canvas.width = original.naturalWidth;

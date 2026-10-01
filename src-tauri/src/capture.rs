@@ -41,6 +41,8 @@ pub struct Rect {
 
 #[derive(Clone, Serialize)]
 pub struct Captured {
+    pub session_id: Option<String>,
+    pub ack: Option<String>,
     pub id: i64,
     pub rel: String,
     /// "image" or "video".

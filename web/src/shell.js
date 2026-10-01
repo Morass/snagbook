@@ -76,6 +76,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let editorReady = false;
   let titleFor = null;
   let statusTimer = null;
+  const pendingCaptureAcks = new Map();
   const s = { view: () => view, selected: () => selected };
 
   const platform = () => view?.platform || "linux";
@@ -110,10 +111,22 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     if (!ed || !editorReady) return;
     const p = ed.takePending?.();
     if (p && p.id != null) {
-      const writing = call("write_note", { id: p.id, markdown: p.markdown });
-      if (required) await writing;
-      else await writing.catch(() => {});
+      const writing = call("write_note", { sessionId: view?.session?.id, id: p.id, markdown: p.markdown });
+      try {
+        await writing;
+        await acknowledgeCapture(p.id);
+      } catch (e) {
+        ed.restorePending?.(p);
+        if (required) throw e;
+      }
     }
+  }
+
+  async function acknowledgeCapture(id) {
+    const pending = pendingCaptureAcks.get(id);
+    if (!pending || pending.sessionId !== view?.session?.id) return;
+    await call("capture_filed", { ack: pending.ack, inserted: true });
+    pendingCaptureAcks.delete(id);
   }
 
   async function apply(v, { select } = {}) {
@@ -297,12 +310,22 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   /// A screenshot was saved into item `id`: show it and put it in the note at the caret.
-  async function onCaptured({ id, rel, kind = "image", label = "", problem = null }) {
+  async function onCaptured({ sessionId, ack, id, rel, kind = "image", label = "", problem = null }) {
+    if (sessionId && view?.session?.id !== sessionId) {
+      if (ack) await call("capture_filed", { ack, inserted: false });
+      await refresh();
+      return flash("The capture stayed in its original session.");
+    }
     await apply(await call("state"), { select: id });
     if (selected !== id) await show(id, { focus: false });
     snag()?.insertMedia({ kind, src: rel, label });
-    await flush();
-    if (kind === "video" && view?.session?.id) await call("capture_filed", { id, sessionId: view.session.id });
+    try {
+      await flush({ required: !!ack });
+      if (ack) await call("capture_filed", { ack, inserted: true });
+    } catch {
+      if (ack) pendingCaptureAcks.set(id, { ack, sessionId });
+      return;
+    }
     await refresh();
     const it = items().find((i) => i.id === id);
     const where = it?.title ?? "item " + id;
@@ -702,7 +725,14 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         if (selected != null) await show(selected, { focus: false });
         break;
       case "changed":
-        if (msg.id != null) await call("write_note", { id: msg.id, markdown: msg.markdown }).catch(() => refresh());
+        if (msg.id != null) {
+          try {
+            await call("write_note", { sessionId: view?.session?.id, id: msg.id, markdown: msg.markdown });
+            await acknowledgeCapture(msg.id);
+          } catch {
+            await refresh();
+          }
+        }
         break;
       case "media": {
         const id = selected;

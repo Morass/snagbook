@@ -200,8 +200,9 @@ fn add_item(st: St, title: Option<String>) -> Res<View> {
 fn rename_item(app: AppHandle, st: St, id: i64, title: String) -> Res<View> {
     let mut a = st.lock().unwrap();
     // A recording is writing into this item's folder: the folder is renamed when it is done.
-    let busy = app.state::<Busy>().has(a.session.as_ref().map(|s| s.dir.as_path()), id);
-    a.session()?.retitle_item(id, &title, !busy).map_err(err)?;
+    let recording = app.state::<Busy>().has(a.session.as_ref().map(|s| s.dir.as_path()), id);
+    let marking = app.state::<Markup>().0.lock().unwrap().as_ref().is_some_and(|p| a.session.as_ref().is_some_and(|s| p.session_id == s.manifest.id) && p.id == id);
+    a.session()?.retitle_item(id, &title, !recording && !marking).map_err(err)?;
     Ok(a.view())
 }
 
@@ -291,8 +292,9 @@ fn read_note(st: St, id: i64) -> Res<String> {
 }
 
 #[tauri::command]
-fn write_note(st: St, id: i64, markdown: String) -> Res<bool> {
+fn write_note(st: St, session_id: String, id: i64, markdown: String) -> Res<bool> {
     let mut a = st.lock().unwrap();
+    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id) { return Err("The open session changed before the note could be saved.".into()); }
     a.session()?.write_note(id, &markdown).map_err(err)
 }
 
@@ -477,6 +479,7 @@ struct Active {
     session_name: String,
     stem: String,
     started_ms: u64,
+    ack: String,
 }
 
 /// Recordings still being finished after Stop; the app does not quit under them.
@@ -491,6 +494,17 @@ struct Busy(Mutex<std::collections::HashMap<(PathBuf, i64), usize>>);
 
 #[derive(Default)]
 struct SessionDeleteFallback(Mutex<std::collections::HashSet<String>>);
+
+#[derive(Clone)]
+struct PendingCapture {
+    session: PathBuf,
+    session_id: String,
+    item: i64,
+    link: String,
+}
+
+#[derive(Default)]
+struct CaptureAcks(Mutex<std::collections::HashMap<String, PendingCapture>>);
 
 impl Busy {
     fn add(&self, session: &Path, id: i64) {
@@ -581,7 +595,8 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
         record::run(grab, plan, stop2)
     });
     let started_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, session, session_name, stem, started_ms });
+    let ack = uuid::Uuid::new_v4().to_string();
+    *app.state::<Recorder>().0.lock().unwrap() = Some(Active { stop, handle, id, session, session_name, stem, started_ms, ack });
     open_recbar(app, rect, monitor);
     let _ = app.emit_to("main", "recording", true);
     Ok(())
@@ -646,12 +661,12 @@ fn stop_recording_now(app: &AppHandle) {
     app.state::<Finishing>().0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let app = app.clone();
     std::thread::spawn(move || {
-        let Active { handle, id, session, session_name, stem, .. } = active;
+        let Active { handle, id, session, session_name, stem, ack, .. } = active;
         let result = handle.join().unwrap_or_else(|_| Err("the recording stopped unexpectedly".into()));
         // Another recording may have started meanwhile: the button shows whichever is true now.
         let now = app.state::<Recorder>().0.lock().unwrap().is_some();
         let _ = app.emit_to("main", "recording", now);
-        finish_recording(&app, Done { id, session, session_name, stem }, result);
+        finish_recording(&app, Done { id, session, session_name, stem, ack }, result);
         let left = app.state::<Finishing>().0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1;
         // The windows were closed while it finished: quit now, as closing them would have.
         if left == 0 && app.webview_windows().is_empty() {
@@ -666,6 +681,7 @@ struct Done {
     session: PathBuf,
     session_name: String,
     stem: String,
+    ack: String,
 }
 
 fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finished, String>) {
@@ -702,15 +718,19 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
         }
     };
     let label = format!("Recording {}", snagbook_core::capture_math::duration(f.duration));
+    let link = if kind == "video" { format!("[{label}]({rel})") } else { format!("![{label}]({rel})") };
     // Shown in the notebook: its editor adds the link where the note is being written.
     if open_here && app.get_webview_window("main").is_some() {
+        app.state::<CaptureAcks>().0.lock().unwrap().insert(active.ack.clone(), PendingCapture {
+            session: active.session.clone(), session_id: s.manifest.id.clone(), item: active.id, link,
+        });
+        let session_id = s.manifest.id.clone();
         drop(a);
-        capture::announce(app, capture::Captured { id: active.id, rel, kind: kind.into(), label, problem: f.problem });
+        capture::announce(app, capture::Captured { session_id: Some(session_id), ack: Some(active.ack), id: active.id, rel, kind: kind.into(), label, problem: f.problem });
         return;
     }
     // Otherwise (another session open, or the notebook closed) the link goes at the end of
     // the item's note here.
-    let link = if kind == "video" { format!("[{label}]({rel})") } else { format!("![{label}]({rel})") };
     let body = s.read_note(active.id).unwrap_or_default();
     let body = body.trim_end();
     let written = s.write_note(active.id, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") });
@@ -727,14 +747,23 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
 }
 
 #[tauri::command]
-fn capture_filed(app: AppHandle, st: St, id: i64, session_id: String) -> Res<()> {
+fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, inserted: bool) -> Res<()> {
+    if window.label() != "main" { return Err("Recordings are filed from the notebook window.".into()); }
+    let pending = app.state::<CaptureAcks>().0.lock().unwrap().get(&ack).cloned().ok_or("That recording is not waiting to be filed.")?;
     let mut a = st.lock().unwrap();
-    let s = a.session()?;
-    if s.manifest.id != session_id {
-        return Err("The recording's session is no longer open.".into());
+    if inserted {
+        if a.session.as_ref().is_none_or(|s| s.manifest.id != pending.session_id) { return Err("The recording's session is no longer open.".into()); }
+    } else {
+        let mut s = Session::open(&pending.session.to_string_lossy(), &a.store.config.header).map_err(err)?;
+        let body = s.read_note(pending.item).unwrap_or_default();
+        let body = body.trim_end();
+        s.write_note(pending.item, &if body.is_empty() { format!("{}\n", pending.link) } else { format!("{body}\n\n{}\n", pending.link) }).map_err(err)?;
     }
-    if app.state::<Busy>().release(&s.dir, id) {
-        if let Ok(title) = s.item(id).map(|r| r.title.clone()) { s.retitle_item(id, &title, true).map_err(err)?; }
+    app.state::<CaptureAcks>().0.lock().unwrap().remove(&ack);
+    if app.state::<Busy>().release(&pending.session, pending.item) {
+        if let Some(s) = a.session.as_mut().filter(|s| s.manifest.id == pending.session_id) {
+            if let Ok(title) = s.item(pending.item).map(|r| r.title.clone()) { s.retitle_item(pending.item, &title, true).map_err(err)?; }
+        }
     }
     Ok(())
 }
@@ -770,6 +799,8 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
     let id = target_item(&mut a)?;
     let rel = a.session()?.save_media(id, &png, "shot", "png").map_err(err)?;
     let annotate = a.store.config.capture.annotate_screenshots;
+    let session_id = a.session.as_ref().map(|s| s.manifest.id.clone());
+    let session_dir = a.session.as_ref().map(|s| s.dir.clone());
     drop(a);
     if annotate {
         let auto = app.state::<SelftestNext>().0.lock().unwrap().take();
@@ -777,7 +808,13 @@ fn finish_capture(app: &AppHandle, rect: capture::Rect) -> Res<()> {
             return Ok(());
         }
     }
-    capture::announce(&app, capture::Captured { id, rel, kind: "image".into(), label: String::new(), problem: None });
+    let ack = uuid::Uuid::new_v4().to_string();
+    if let (Some(source_id), Some(session)) = (session_id.clone(), session_dir) {
+        app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), PendingCapture {
+            session, session_id: source_id, item: id, link: format!("![]({rel})"),
+        });
+    }
+    capture::announce(&app, capture::Captured { session_id, ack: Some(ack), id, rel, kind: "image".into(), label: String::new(), problem: None });
     Ok(())
 }
 
@@ -812,13 +849,14 @@ fn markup_files(p: &markup::Pending) -> Res<markup::Files> {
 }
 
 fn open_markup_now(app: &AppHandle, id: i64, rel: String, is_new: bool, auto: Option<String>) -> Res<()> {
-    let (session_id, session_dir, item_dir) = {
+    let (session_id, session_dir, item_dir, fallback_header) = {
         let st = app.state::<Mutex<App>>();
         let mut a = st.lock().unwrap();
+        let fallback_header = a.store.config.header.clone();
         let s = a.session()?;
-        (s.manifest.id.clone(), s.dir.clone(), s.item_dir(id).map_err(err)?)
+        (s.manifest.id.clone(), s.dir.clone(), s.item_dir(id).map_err(err)?, fallback_header)
     };
-    let p = markup::Pending { id, rel, is_new, session_id, session_dir, item_dir, auto };
+    let p = markup::Pending { id, rel, is_new, session_id, session_dir, item_dir, fallback_header, auto };
     markup_files(&p)?;
     if let Some(w) = app.get_webview_window(markup::WINDOW) {
         let _ = w.set_focus();
@@ -855,7 +893,17 @@ fn finish_markup(app: &AppHandle, kept: bool, changed: bool) {
     if let Some(w) = app.get_webview_window(markup::WINDOW) {
         let _ = w.destroy();
     }
-    if let Ok(s) = Session::open(&p.session_dir.to_string_lossy(), "") { let _ = s.write_readme(); }
+    if let Ok(mut s) = Session::open(&p.session_dir.to_string_lossy(), &p.fallback_header) {
+        let still_open = app.state::<Mutex<App>>().lock().unwrap().session.as_ref().is_some_and(|open| open.manifest.id == p.session_id);
+        if p.is_new && kept && !still_open {
+            let body = s.read_note(p.id).unwrap_or_default();
+            let link = format!("![]({})", p.rel);
+            let body = body.trim_end();
+            let _ = s.write_note(p.id, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") });
+        }
+        let _ = s.write_readme();
+        if let Ok(title) = s.item(p.id).map(|r| r.title.clone()) { let _ = s.retitle_item(p.id, &title, true); }
+    }
     let _ = app.emit_to("main", "marked", Marked { session_id: p.session_id, id: p.id, rel: p.rel, is_new: p.is_new, kept, changed });
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -1080,8 +1128,17 @@ pub(crate) fn item_file(app: &tauri::AppHandle, id: i64, rel: &str) -> Option<Pa
     media::contained(&dir, rel)
 }
 
+pub(crate) fn markup_file(app: &tauri::AppHandle, rel: &str) -> Option<PathBuf> {
+    let p = app.state::<Markup>().0.lock().ok()?.clone()?;
+    markup_files(&p).ok()?;
+    media::contained(&p.item_dir, rel)
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.unminimize(); let _ = w.set_focus(); }
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1100,6 +1157,7 @@ pub fn run() {
         .manage(Finishing::default())
         .manage(Busy::default())
         .manage(SessionDeleteFallback::default())
+        .manage(CaptureAcks::default())
         .manage(Markup::default())
         .manage(SelftestNext::default())
         .on_window_event(|w, e| {

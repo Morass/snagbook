@@ -16,6 +16,7 @@ pub struct Pending {
     pub session_id: String,
     pub session_dir: PathBuf,
     pub item_dir: PathBuf,
+    pub fallback_header: String,
     /// The self-test's script for the page ("ring", "count", "clear", "skip").
     pub auto: Option<String>,
 }

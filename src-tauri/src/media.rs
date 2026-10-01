@@ -138,8 +138,15 @@ pub fn serve(app: &tauri::AppHandle, request: &Request<Vec<u8>>) -> Response<Vec
             None => status(StatusCode::NOT_FOUND),
         };
     }
-    let Some((id, rel)) = parse_path(request.uri().path()) else { return status(StatusCode::NOT_FOUND) };
-    let Some(file) = crate::item_file(app, id, &rel) else { return status(StatusCode::NOT_FOUND) };
+    let path = request.uri().path();
+    let file = if let Some(rel) = path.strip_prefix("/markup/").and_then(|r| percent_encoding::percent_decode_str(r).decode_utf8().ok()) {
+        crate::markup_file(app, &rel)
+    } else if let Some((id, rel)) = parse_path(path) {
+        crate::item_file(app, id, &rel)
+    } else {
+        None
+    };
+    let Some(file) = file else { return status(StatusCode::NOT_FOUND) };
     let Ok(mut f) = File::open(&file) else { return status(StatusCode::NOT_FOUND) };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let kind = content_type(&file);

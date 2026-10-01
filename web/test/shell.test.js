@@ -68,7 +68,11 @@ function fakeApp({ platform = "linux", trash = true, sessions = [] } = {}) {
       return view();
     },
     read_note: ({ id }) => (slowNote === id ? new Promise((r) => setTimeout(() => r(notes.get(id) ?? ""), 30)) : notes.get(id) ?? ""),
-    write_note: ({ id, markdown }) => (notes.set(id, markdown), true),
+    write_note: ({ sessionId, id, markdown }) => {
+      if (session?.id !== sessionId) throw "The open session changed before the note could be saved.";
+      notes.set(id, markdown);
+      return true;
+    },
     copy_handoff: () => `Read ${session.path}/README.md`,
     set_session_title: ({ title }) => ((session.title = title || "Session 25 Sep, 18:00"), view()),
     set_selected: () => null,
@@ -335,18 +339,43 @@ test("a session switch during confirmation cannot delete the replacement", async
 
 test("a failed pending-note write prevents session deletion", async () => {
   const t = await setup({ session: true });
-  t.editor.takePending = () => ({ id: 1, markdown: "unsaved" });
-  const original = t.app.invoke;
-  t.app.invoke = original;
+  let pending = { id: 1, markdown: "unsaved" };
+  t.editor.takePending = () => { const p = pending; pending = null; return p; };
+  t.editor.restorePending = (p) => { pending = p; };
   const before = t.shell.view().session.path;
   const old = t.app.calls.length;
-  // The shell's invoke is already captured, so replace the handler by making Map.set fail.
-  t.app.notes.set = () => { throw new Error("disk full"); };
+  const set = t.app.notes.set.bind(t.app.notes);
+  let full = true;
+  t.app.notes.set = (id, markdown) => { if (full) throw new Error("disk full"); return set(id, markdown); };
   const deleting = t.shell.deleteSession();
   await t.answer(true);
   await deleting;
   assert.equal(t.shell.view().session.path, before);
   assert.equal(t.app.calls.slice(old).some(([c]) => c === "delete_session"), false);
+
+  full = false;
+  const retry = t.shell.deleteSession();
+  await t.answer(true);
+  await retry;
+  assert.equal(t.app.notes.get(1), "unsaved", "the retry saves the exact pending note before deletion");
+  assert.equal(t.shell.view().session, null);
+});
+
+test("every finished recording kind acknowledges only after filing", async () => {
+  const t = await setup({ session: true });
+  t.editor.insertMedia = () => {};
+  const sessionId = t.shell.view().session.id;
+  await t.shell.onCaptured({ sessionId, ack: "contact-ack", id: 1, rel: "media/clip-001-contact.jpg", kind: "image" });
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "contact-ack", inserted: true }]);
+});
+
+test("a delayed capture stays in its source session", async () => {
+  const t = await setup({ session: true });
+  let inserted = 0;
+  t.editor.insertMedia = () => { inserted++; };
+  await t.shell.onCaptured({ sessionId: "another-session", ack: "source-ack", id: 1, rel: "media/clip-001.mp4", kind: "video" });
+  assert.deepEqual(t.app.calls.filter(([c]) => c === "capture_filed").map(([, a]) => a), [{ ack: "source-ack", inserted: false }]);
+  assert.equal(inserted, 0);
 });
 
 test("an open session deleted from outside is closed with a message", async () => {
