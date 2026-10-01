@@ -74,6 +74,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         if shownItem == id { shownItem = nil }
         epoch += 1
         call("snag.forget(\(id))")
+        call("snag.setContext(\(epoch))")
     }
 
     /// Another session is open: its items reuse the ids and picture names of this one.

@@ -146,6 +146,20 @@ test("a delayed pasted file cannot cross into another item", async () => {
   assert.equal(md(), "destination\n");
 });
 
+test("changing the item-lifetime context invalidates a delayed paste", async () => {
+  let release;
+  const file = { type: "image/png", name: "slow.png", arrayBuffer: () => new Promise((r) => { release = r; }) };
+  api.open({ id: "15", markdown: "same item\n", context: 7, focus: false });
+  const before = posted.length;
+  view.someProp("handlePaste", (f) => f(view, { clipboardData: { files: [file] }, preventDefault() {} }));
+  api.setContext(8);
+  release(new Uint8Array([1, 2]).buffer);
+  await new Promise((r) => setTimeout(r, 0));
+  const msg = posted.slice(before).find((m) => m.type === "media");
+  assert.equal(api.mediaSaved(msg.reqId, "media/image-001.png"), false);
+  assert.equal(md(), "same item\n");
+});
+
 test("a session reset drops undo history even when item ids and text match", () => {
   api.open({ id: "1", markdown: "old session\n", context: 5, focus: false });
   api.selectAll();

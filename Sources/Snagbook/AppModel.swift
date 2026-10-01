@@ -157,13 +157,13 @@ final class AppModel: ObservableObject {
         }
         Task {
             guard await editor.flush() else { return flash("The note could not be saved, so the session was not deleted") }
-            guard self.session === session,
+            guard let live = self.session, live.isSameSession(as: session),
                   capture.phase == .idle,
-                  !Annotator.open.contains(where: { $0.session.isSameSession(as: session) }) else {
+                  !Annotator.open.contains(where: { $0.session.isSameSession(as: live) }) else {
                 return flash("The session changed or a capture started, so it was not deleted")
             }
             do {
-                try session.delete(discard: Session.trashOrDelete(
+                try live.delete(discard: Session.trashOrDelete(
                     trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
                     deletePermanently: { _ in
                         guard confirm else { return true }
@@ -174,10 +174,10 @@ final class AppModel: ObservableObject {
                         a.addButton(withTitle: "Cancel")
                         a.buttons.first?.hasDestructiveAction = true
                         return a.runModal() == .alertFirstButtonReturn
-                            && self.session === session
+                            && self.session?.isSameSession(as: live) == true
                             && self.capture.phase == .idle
-                            && !Annotator.open.contains(where: { $0.session.isSameSession(as: session) })
-                            && session.matchesDiskIdentity
+                            && !Annotator.open.contains(where: { $0.session.isSameSession(as: live) })
+                            && live.matchesDiskIdentity
                     }))
                 closeSession()
             } catch let e as CocoaError where e.code == .userCancelled {
@@ -329,13 +329,13 @@ final class AppModel: ObservableObject {
         }
         Task {
             guard await editor.flush() else { return flash("The note could not be saved, so the item was not deleted") }
-            guard self.session?.isSameSession(as: session) == true,
-                  !capture.isUsing(session, item: id),
-                  !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: session) }) else {
+            guard let live = self.session, live.isSameSession(as: session),
+                  !capture.isUsing(live, item: id),
+                  !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: live) }) else {
                 return flash("The item changed or a capture started, so it was not deleted")
             }
             do {
-                try session.deleteItem(id, discard: Session.trashOrDelete(
+                try live.deleteItem(id, discard: Session.trashOrDelete(
                     trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
                     deletePermanently: { _ in
                         guard confirm else { return true }
@@ -346,12 +346,13 @@ final class AppModel: ObservableObject {
                         a.addButton(withTitle: "Cancel")
                         a.buttons.first?.hasDestructiveAction = true
                         return a.runModal() == .alertFirstButtonReturn
-                            && self.session?.isSameSession(as: session) == true
-                            && !self.capture.isUsing(session, item: id)
-                            && !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: session) })
+                            && self.session?.isSameSession(as: live) == true
+                            && !self.capture.isUsing(live, item: id)
+                            && !Annotator.open.contains(where: { $0.item == id && $0.session.isSameSession(as: live) })
                     }))
+                self.session = live
                 editor.forget(item: id)
-                items = session.manifest.items
+                items = live.manifest.items
                 if selectedID == id {
                     selectedID = nil
                     if let prev = back.last(where: { b in items.contains { $0.id == b } }) ?? items.last?.id { show(prev, record: false) } else { titleDraft = "" }

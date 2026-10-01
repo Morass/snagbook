@@ -605,6 +605,10 @@ export const api = {
     currentContext = null;
   },
 
+  setContext(context) {
+    currentContext = context;
+  },
+
   /** Write out a pending change right now (before switching items or quitting). */
   flush() {
     persistNow();

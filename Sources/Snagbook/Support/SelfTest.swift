@@ -248,9 +248,15 @@ enum SelfTest {
         check(model.session?.title == "Inventory pass" && model.items.contains { $0.id == second }, "switching back reopens the named session where it was")
 
         // 12. Delete moves an item's folder away and forgets it.
+        _ = await js(model, "snag.typeText(' pending before delete')")
         model.delete(second, confirm: false)
         await settle()
         check(!model.items.contains { $0.id == second } && !exists(secondNote.deletingLastPathComponent()), "delete removes the item and its folder")
+        check(model.session?.manifest.items.contains(where: { $0.id == second }) == false, "deleting after a pending save updates the active manifest")
+        let countBeforeReuse = model.items.count
+        let reused = try? model.addItem(title: "Reused after delete", focusTitle: false)
+        check(model.items.count == countBeforeReuse + 1 && reused.map { id in model.items.filter { $0.id == id }.count == 1 } == true, "a new item after deletion appears exactly once")
+        if let reused { model.delete(reused, confirm: false); await settle() }
 
         // 13. Real screen capture, when this Mac allows it.
         if CGPreflightScreenCaptureAccess() {
@@ -444,6 +450,17 @@ enum SelfTest {
         WindowPlacement.show()
         await settle(600)
         check(WindowPlacement.notebook?.isVisible == true, "the notebook comes back after its window was closed")
+
+        model.newSession()
+        let originalPath = session.displayPath
+        for _ in 0..<30 where model.session?.displayPath == originalPath { await settle(100) }
+        let disposable = model.session?.url
+        _ = await js(model, "snag.typeText(' pending before session delete')")
+        model.deleteSession(confirm: false)
+        for _ in 0..<30 where model.session != nil { await settle(100) }
+        check(model.session == nil && disposable.map { !exists($0) } == true, "session deletion still succeeds after flushing pending edits")
+        model.openSession(originalPath)
+        for _ in 0..<30 where model.session?.displayPath != originalPath { await settle(100) }
 
         // A session removed elsewhere closes instead of being recreated by the next write.
         let deletedPath = session.displayPath
