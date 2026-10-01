@@ -189,7 +189,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return refresh();
     }
     if (turn !== showing || selected !== id) return;
-    ed.open({ id, markdown: md, base: mediaBase(platform(), id, epoch), focus });
+    ed.open({ id, markdown: md, base: mediaBase(platform(), id, epoch), sessionId: view.session.id, openToken: view.session.openToken, focus });
   }
 
   async function newItem() {
@@ -237,13 +237,21 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function deleteItem(id) {
     const it = items().find((i) => i.id === id);
     if (!it) return;
+    const sessionId = view.session.id;
+    const openToken = view.session.openToken;
     const ok = await confirm(`Delete “${it.title}”?`, "Its folder, with the note and all its pictures and videos, goes to the Trash.", "Move to Trash");
     if (!ok) return;
+    if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
+      return flash("The open session changed, so the item was not deleted.", "error");
+    }
     await flush();
+    if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
+      return flash("The open session changed, so the item was not deleted.", "error");
+    }
     const index = items().findIndex((i) => i.id === id);
     let v;
     try {
-      v = await call("delete_item", { id, permanently: false });
+      v = await call("delete_item", { sessionId, openToken, id, permanently: false });
     } catch (e) {
       const msg = String(e?.message || e);
       if (!msg.startsWith("NOTRASH:")) return flash(msg, "error");
@@ -253,7 +261,10 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         "Delete Permanently"
       );
       if (!again) return;
-      v = await call("delete_item", { id, permanently: true });
+      if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
+        return flash("The open session changed, so the item was not deleted.", "error");
+      }
+      v = await call("delete_item", { sessionId, openToken, id, permanently: true });
     }
     snag()?.forget?.(id);
     epoch++;
@@ -759,10 +770,10 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         }
         break;
       case "media": {
-        const id = selected;
+        const id = msg.itemId;
         try {
-          if (id == null) throw new Error("no item");
-          const rel = await call("save_media", { sessionId: view?.session?.id, openToken: view?.session?.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
+          if (id == null || selected !== id || view?.session?.id !== msg.sessionId || view?.session?.openToken !== msg.openToken) throw new Error("the destination changed");
+          const rel = await call("save_media", { sessionId: msg.sessionId, openToken: msg.openToken, id, base64: msg.base64, mime: msg.mime || "", name: msg.name || "" });
           snag()?.mediaSaved(msg.reqId, rel);
           await refresh();
         } catch {

@@ -458,12 +458,13 @@ function fileToBase64(file) {
 
 function sendFiles(files, pos) {
   let any = false;
+  const destination = { itemId: currentId, sessionId: currentSessionId, openToken: currentOpenToken };
   for (const file of files) {
     if (!/^(image|video)\//.test(file.type)) continue;
     any = true;
     const reqId = nextReq++;
-    pending.set(reqId, { pos, kind: file.type.startsWith("video") ? "video" : "image", name: file.name });
-    fileToBase64(file).then((base64) => post({ type: "media", reqId, name: file.name || "", mime: file.type, base64 }));
+    pending.set(reqId, { pos, kind: file.type.startsWith("video") ? "video" : "image", name: file.name, ...destination });
+    fileToBase64(file).then((base64) => post({ type: "media", reqId, name: file.name || "", mime: file.type, base64, ...destination }));
   }
   return any;
 }
@@ -473,6 +474,8 @@ function sendFiles(files, pos) {
 const cache = new Map(); // item id -> {state, memo, saved}
 let view = null;
 let currentId = null;
+let currentSessionId = null;
+let currentOpenToken = null;
 let saveTimer = null;
 let onToolbar = () => {};
 
@@ -567,7 +570,7 @@ export function mount(place, opts = {}) {
 
 export const api = {
   /** Show item `id`. Keeps undo history when coming back to an item whose file did not change. */
-  open({ id, markdown, base, focus = true }) {
+  open({ id, markdown, base, sessionId = null, openToken = null, focus = true }) {
     persistNow();
     const baseChanged = base != null && base !== mediaBase;
     if (base != null) mediaBase = base;
@@ -582,6 +585,8 @@ export const api = {
     }
     if (baseChanged) for (const v of mediaViews) v.render();
     currentId = id;
+    currentSessionId = sessionId;
+    currentOpenToken = openToken;
     onToolbar(view.state);
     if (focus) api.focus();
     return true;

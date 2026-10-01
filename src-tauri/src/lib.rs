@@ -211,11 +211,14 @@ fn rename_item(app: AppHandle, st: St, id: i64, title: String) -> Res<View> {
 /// Move an item's folder to the Trash. When that is impossible the answer starts with
 /// "NOTRASH:" and the page asks before calling again with `permanently`.
 #[tauri::command]
-fn delete_item(app: AppHandle, window: tauri::Window, st: St, id: i64, permanently: bool) -> Res<View> {
+fn delete_item(app: AppHandle, window: tauri::Window, st: St, session_id: String, open_token: String, id: i64, permanently: bool) -> Res<View> {
     if window.label() != "main" {
         return Err("Items are deleted from the notebook window.".into());
     }
     let mut a = st.lock().unwrap();
+    if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
+        return Err("The open session changed, so the item was not deleted.".into());
+    }
     if app.state::<Busy>().has(a.session.as_ref().map(|s| s.dir.as_path()), id) {
         return Err("A capture is still being saved into this item. Delete it once the capture is in its note.".into());
     }

@@ -48,7 +48,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       it.title = title;
       return view();
     },
-    delete_item: ({ id, permanently }) => {
+    delete_item: ({ sessionId, openToken, id, permanently }) => {
+      if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
       if (!permanently && !trash) throw "NOTRASH:the drive has no Trash";
       session.items = session.items.filter((i) => i.id !== id);
       settle();
@@ -240,6 +241,17 @@ test("delete asks first, and Cancel keeps the item", async () => {
   await p;
   assert.equal(t.shell.view().session.items.length, 1);
   assert.ok(!t.app.calls.some(([c]) => c === "delete_item"));
+});
+
+test("an item delete confirmation cannot cross into another session", async () => {
+  const t = await setup({ session: true, sessions: [{ path: "~/Snagbook/other", title: "Other", items: 1, created: "2026-09-25T16:00:00Z" }] });
+  const deleting = t.shell.deleteItem(1);
+  await t.settle();
+  await t.shell.openSession("~/Snagbook/other");
+  await t.answer(true);
+  await deleting;
+  assert.equal(t.shell.view().session.title, "Other");
+  assert.equal(t.app.calls.some(([c]) => c === "delete_item"), false);
 });
 
 test("on a drive without a Trash, delete asks again before deleting for good", async () => {
@@ -489,11 +501,22 @@ test("template buttons name their shortcut and Ctrl+1 types the first", async ()
 
 test("pasted bytes are saved into the shown item and handed back to the editor", async () => {
   const t = await setup({ session: true });
-  await t.shell.onEditorMessage({ type: "media", reqId: 7, base64: "AA==", mime: "image/png", name: "" });
+  const { id: sessionId, openToken } = t.shell.view().session;
+  await t.shell.onEditorMessage({ type: "media", reqId: 7, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
   // The fake app has no save_media: the editor is told it failed, and nothing breaks.
   assert.deepEqual(t.editor.log.pop(), ["failed", 7]);
   assert.equal(t.app.calls.find(([c]) => c === "save_media")[1].sessionId, t.shell.view().session.id);
   assert.equal(t.app.calls.find(([c]) => c === "save_media")[1].openToken, t.shell.view().session.openToken);
+});
+
+test("pasted bytes arriving after a session switch are refused", async () => {
+  const t = await setup({ session: true, sessions: [{ path: "~/Snagbook/other", title: "Other", items: 1, created: "2026-09-25T16:00:00Z" }] });
+  const { id: sessionId, openToken } = t.shell.view().session;
+  await t.shell.openSession("~/Snagbook/other");
+  const oldCalls = t.app.calls.length;
+  await t.shell.onEditorMessage({ type: "media", reqId: 8, itemId: 1, sessionId, openToken, base64: "AA==", mime: "image/png", name: "" });
+  assert.equal(t.app.calls.slice(oldCalls).some(([c]) => c === "save_media"), false);
+  assert.deepEqual(t.editor.log.pop(), ["failed", 8]);
 });
 
 test("switching sessions forgets the old items in the editor", async () => {
