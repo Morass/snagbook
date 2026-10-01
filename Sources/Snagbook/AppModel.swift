@@ -120,9 +120,15 @@ final class AppModel: ObservableObject {
     }
 
     func refreshSessionFromDisk() {
-        guard let s = session, !s.exists else { return }
-        closeSession()
-        alert = AlertInfo(title: "Session closed", message: "The session folder \(s.displayPath) was deleted outside Snagbook.")
+        guard let s = session else { return }
+        switch s.diskState {
+        case .current: return
+        case .unreadable:
+            return flash("The session cannot be read right now; it was left open")
+        case .gone:
+            closeSession()
+            alert = AlertInfo(title: "Session closed", message: "The session folder \(s.displayPath) was deleted outside Snagbook.")
+        }
     }
 
     private func closeSession() {
@@ -189,10 +195,15 @@ final class AppModel: ObservableObject {
 
     /// Make sure there is somewhere to put a capture: a session and an item.
     func ensureItem() throws -> Int {
-        if let session, !session.exists {
-            let path = session.displayPath
-            closeSession()
-            throw SnagError.notASession(path)
+        if let session {
+            switch session.diskState {
+            case .current: break
+            case .unreadable: throw SnagError.sessionUnreadable(session.displayPath)
+            case .gone:
+                let path = session.displayPath
+                closeSession()
+                throw SnagError.notASession(path)
+            }
         }
         if session == nil {
             let s = try Session.create(root: config.sessionsFolder, config: config)

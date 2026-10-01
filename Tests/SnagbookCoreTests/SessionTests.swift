@@ -113,6 +113,18 @@ final class SessionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: s.url.path))
     }
 
+    func testABrokenManifestIsUnreadableRatherThanDeleted() throws {
+        let s = try Session.create(root: root, config: Config())
+        let manifest = s.url.appendingPathComponent(Session.manifestName)
+        try Data("not json".utf8).write(to: manifest)
+
+        XCTAssertEqual(s.diskState, .unreadable)
+        XCTAssertThrowsError(try s.addItem()) { error in
+            XCTAssertEqual(error as? SnagError, .sessionUnreadable(s.displayPath))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: s.url.path))
+    }
+
     func testAReplacementAtTheSamePathIsNeitherWrittenNorDeleted() throws {
         let s = try Session.create(root: root, config: Config(), hash: "original")
         let old = s.url.deletingLastPathComponent().appendingPathComponent("old")

@@ -111,19 +111,28 @@ public final class Session {
         return out.sorted { $0.created > $1.created }
     }
 
-    /// Whether the session is still present on disk. Its folder can disappear while the
-    /// app has it open.
-    public var exists: Bool {
-        matchesDiskIdentity
+    public enum DiskState: Equatable { case current, gone, unreadable }
+
+    /// Distinguish removal/replacement from a read failure: only the former permits the UI
+    /// to discard pending editor state.
+    public var diskState: DiskState {
+        let currentIdentity: String?
+        do { currentIdentity = try Self.readIdentity(of: url) }
+        catch { return Self.isMissing(error) ? .gone : .unreadable }
+        if let fileIdentity, currentIdentity != fileIdentity { return .gone }
+        let data: Data
+        do { data = try Data(contentsOf: url.appendingPathComponent(Self.manifestName)) }
+        catch { return Self.isMissing(error) ? .gone : .unreadable }
+        guard let disk = try? Self.decoder.decode(Manifest.self, from: data) else { return .unreadable }
+        return disk.id == manifest.id ? .current : .gone
     }
+
+    /// Whether the session is still present, readable and is the same filesystem object.
+    public var exists: Bool { diskState == .current }
 
     /// The path still names the session that was opened, rather than a replacement folder.
     public var matchesDiskIdentity: Bool {
-        guard let data = try? Data(contentsOf: url.appendingPathComponent(Self.manifestName)),
-              let disk = try? Self.decoder.decode(Manifest.self, from: data) else { return false }
-        guard disk.id == manifest.id else { return false }
-        guard let fileIdentity else { return true }
-        return Self.identity(of: url) == fileIdentity
+        diskState == .current
     }
 
     /// Whether two open objects still refer to the same session folder on disk.
@@ -456,14 +465,27 @@ public final class Session {
     }
 
     private func requireExists() throws {
-        guard exists else { throw SnagError.notASession(displayPath) }
+        switch diskState {
+        case .current: return
+        case .gone: throw SnagError.notASession(displayPath)
+        case .unreadable: throw SnagError.sessionUnreadable(displayPath)
+        }
     }
 
     private static func identity(of url: URL) -> String? {
-        guard let a = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let volume = a[.systemNumber] as? NSNumber,
+        try? readIdentity(of: url)
+    }
+
+    private static func readIdentity(of url: URL) throws -> String? {
+        let a = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard let volume = a[.systemNumber] as? NSNumber,
               let file = a[.systemFileNumber] as? NSNumber else { return nil }
         return "\(volume.uint64Value):\(file.uint64Value)"
+    }
+
+    private static func isMissing(_ error: Error) -> Bool {
+        let e = error as NSError
+        return e.domain == NSCocoaErrorDomain && (e.code == NSFileNoSuchFileError || e.code == NSFileReadNoSuchFileError)
     }
 
     private func ensureDirectory(_ directory: URL) throws {

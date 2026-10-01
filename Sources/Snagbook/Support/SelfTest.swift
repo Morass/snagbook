@@ -462,6 +462,19 @@ enum SelfTest {
         model.openSession(originalPath)
         for _ in 0..<30 where model.session?.displayPath != originalPath { await settle(100) }
 
+        // A read failure is not deletion: keep both the session and its unsaved editor text.
+        let currentSession = model.session!
+        let pendingID = model.selectedID!
+        let manifestURL = currentSession.url.appendingPathComponent(Session.manifestName)
+        let manifestData = try! Data(contentsOf: manifestURL)
+        _ = await js(model, "snag.typeText(' pending while manifest unreadable')")
+        try? Data("not json".utf8).write(to: manifestURL, options: .atomic)
+        model.refreshSessionFromDisk()
+        check(model.session != nil, "an unreadable manifest leaves the session and pending note open")
+        try? manifestData.write(to: manifestURL, options: .atomic)
+        check(await model.editor.flush(), "the pending note saves after the manifest is readable again")
+        check(read(try! currentSession.noteURL(pendingID)).contains("pending while manifest unreadable"), "a temporary manifest read failure loses no editor text")
+
         // A session removed elsewhere closes instead of being recreated by the next write.
         let deletedPath = session.displayPath
         _ = await js(model, "snag.typeText(' pending in removed session')")
