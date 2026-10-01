@@ -143,6 +143,15 @@ test("takePending hands over an unsaved change exactly once", () => {
   assert.equal(changes().length, before, "nothing left for the timer to post");
 });
 
+test("read-only mode rejects programmatic template changes", () => {
+  api.open({ id: "locked", markdown: "before\n", focus: false });
+  api.setReadOnly(true);
+  assert.equal(api.insertMarkdown("**Bug:** "), false);
+  assert.equal(api.run("bold"), false);
+  assert.equal(api.markdown(), "before\n");
+  api.setReadOnly(false);
+});
+
 test("moving to another item with the same picture name shows that item's picture", () => {
   const md = "Shot\n\n![](media/shot-001.png)\n\n[clip](media/clip-001.mp4)\n";
   api.open({ id: "21", markdown: md, base: "snagbook://item/21/", focus: false });

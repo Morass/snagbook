@@ -476,6 +476,7 @@ let view = null;
 let currentId = null;
 let currentSessionId = null;
 let currentOpenToken = null;
+let readOnly = false;
 let saveTimer = null;
 let onToolbar = () => {};
 
@@ -609,7 +610,8 @@ export const api = {
   },
 
   setReadOnly(value) {
-    view.setProps({ editable: () => !value });
+    readOnly = value;
+    view.setProps({ editable: () => !readOnly });
   },
 
   /** A change not yet reported, as {id, markdown}, marked as reported; or null. */
@@ -635,6 +637,7 @@ export const api = {
 
   /** Insert Markdown text (a template) at the caret. */
   insertMarkdown(text) {
+    if (readOnly) return false;
     const { doc } = parseMarkdown(text);
     const state = view.state;
     const single = doc.childCount === 1 && doc.firstChild.type === nodes.paragraph;
@@ -727,6 +730,7 @@ export const api = {
     return view.state.doc.textContent;
   },
   run(name, arg) {
+    if (readOnly) return false;
     const cmd = commands[name];
     if (!cmd) return false;
     return cmd(arg)(view.state, view.dispatch, view);
