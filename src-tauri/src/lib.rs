@@ -641,6 +641,10 @@ impl Busy {
     fn has_session(&self, session: &Path) -> bool {
         self.0.lock().unwrap().keys().any(|(s, _)| s == session)
     }
+
+    fn count(&self, session: &Path, id: i64) -> usize {
+        self.0.lock().unwrap().get(&(session.to_path_buf(), id)).copied().unwrap_or(0)
+    }
 }
 
 fn release_capture(busy: &Busy, session_path: &Path, item: i64, item_identity: FolderIdentity, session: Option<&mut Session>) -> Option<String> {
@@ -914,13 +918,18 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
     let session_id = pending.session_id.clone();
     let item = pending.item;
     let item_identity = pending.item_identity;
+    let busy = app.state::<Busy>();
+    let busy_before = busy.count(&session_path, item);
     let rename_warning = release_capture(
-        app.state::<Busy>().inner(),
+        busy.inner(),
         &session_path,
         item,
         item_identity,
         a.session.as_mut().filter(|s| s.manifest.id == session_id),
     );
+    if selftest_requested() {
+        println!("note filed {} for item {item}; capture holds {busy_before}->{}", pending.link, busy.count(&session_path, item));
+    }
     if let Some(warning) = rename_warning {
         if selftest_requested() {
             println!("note {warning}");
