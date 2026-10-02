@@ -159,7 +159,8 @@ public final class Session {
         let names = ((try? fm.contentsOfDirectory(atPath: url.path)) ?? []).sorted()
         for name in names where !known.contains(name) {
             guard let num = Int(name.prefix(while: { $0.isNumber })), num > 0, name.prefix(while: { $0.isNumber }).count >= 2 else { continue }
-            let note = url.appendingPathComponent(name).appendingPathComponent(Self.noteName)
+            guard let folder = try? itemFolderURL(name) else { continue }
+            let note = folder.appendingPathComponent(Self.noteName)
             guard fm.fileExists(atPath: note.path) else { continue }
             let text = (try? String(contentsOf: note, encoding: .utf8)) ?? ""
             let title = FrontMatter.split(text).fields.first { $0.key == "title" }?.value ?? name
@@ -194,8 +195,9 @@ public final class Session {
     private func itemFolderURL(_ folder: String) throws -> URL {
         let path = folder as NSString
         let candidate = url.appendingPathComponent(folder, isDirectory: true)
+        let isSymlink = (try? fm.destinationOfSymbolicLink(atPath: candidate.path)) != nil
         guard !folder.isEmpty, !folder.utf8.contains(0), folder != ".", folder != "..", !path.isAbsolutePath,
-              path.pathComponents.count == 1,
+              path.pathComponents.count == 1, !isSymlink,
               candidate.deletingLastPathComponent().standardizedFileURL == url.standardizedFileURL else {
             throw SnagError.badName(folder)
         }

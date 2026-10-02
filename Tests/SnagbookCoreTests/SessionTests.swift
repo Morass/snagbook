@@ -480,6 +480,22 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: parentNote, encoding: .utf8), "keep parent")
     }
 
+    func testItemDirectorySymlinkCannotEscapeItsSession() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        let itemFolder = try s.itemURL(item.id)
+        let victim = s.url.deletingLastPathComponent().appendingPathComponent("symlink-victim")
+        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: false)
+        let victimNote = victim.appendingPathComponent(Session.noteName)
+        try Data("keep target".utf8).write(to: victimNote)
+        try FileManager.default.removeItem(at: itemFolder)
+        try FileManager.default.createSymbolicLink(at: itemFolder, withDestinationURL: victim)
+        let corrupt = try Session.open(s.url.path)
+
+        XCTAssertThrowsError(try corrupt.writeNote(item.id, body: "must stay inside"))
+        XCTAssertEqual(try String(contentsOf: victimNote, encoding: .utf8), "keep target")
+    }
+
     func testRenameDoesNotModifyAReplacementItemFolder() throws {
         let s = try Session.create(root: root, config: Config())
         let item = try s.addItem()
