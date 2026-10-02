@@ -643,10 +643,11 @@ impl Busy {
     }
 }
 
-fn release_capture(busy: &Busy, session_path: &Path, item: i64, item_identity: &FolderIdentity, session: Option<&mut Session>) {
+fn release_capture(busy: &Busy, session_path: &Path, item: i64, item_identity: FolderIdentity, session: Option<&mut Session>) {
     if busy.release(session_path, item) {
-        if let Some(s) = session.filter(|s| s.matches_item_identity(item, item_identity)) {
+        if let Some(s) = session.filter(|s| s.matches_item_identity(item, &item_identity)) {
             if let Ok(title) = s.item(item).map(|r| r.title.clone()) {
+                drop(item_identity);
                 let _ = s.retitle_item(item, &title, true);
             }
         }
@@ -905,12 +906,16 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
         file_pending_capture(&pending, &a.store.config.header)?;
     }
     app.state::<CaptureAcks>().0.lock().unwrap().remove(&ack);
+    let session_path = pending.session.clone();
+    let session_id = pending.session_id.clone();
+    let item = pending.item;
+    let item_identity = pending.item_identity;
     release_capture(
         app.state::<Busy>().inner(),
-        &pending.session,
-        pending.item,
-        &pending.item_identity,
-        a.session.as_mut().filter(|s| s.manifest.id == pending.session_id),
+        &session_path,
+        item,
+        item_identity,
+        a.session.as_mut().filter(|s| s.manifest.id == session_id),
     );
     Ok(())
 }
@@ -1554,6 +1559,23 @@ mod tests {
     }
 
     #[test]
+    fn a_last_recording_release_applies_the_deferred_folder_title() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        let id = s.add_item(None, Utc::now()).unwrap().id;
+        s.retitle_item(id, "Recorded item", false).unwrap();
+        let item_identity = s.item_identity(id).unwrap();
+        let session_path = s.dir.clone();
+        let busy = Busy::default();
+        busy.add(&session_path, id);
+
+        release_capture(&busy, &session_path, id, item_identity, Some(&mut s));
+
+        assert_eq!(s.item_dir(id).unwrap().file_name().unwrap(), "01-recorded-item");
+        assert!(!busy.has(Some(&session_path), id));
+    }
+
+    #[test]
     fn a_durable_capture_link_survives_a_readme_failure_without_duplicates() {
         let d = tempfile::tempdir().unwrap();
         let mut s = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
@@ -1677,7 +1699,7 @@ mod tests {
         busy.add(&s.dir, id);
         let session_path = s.dir.clone();
 
-        release_capture(&busy, &session_path, id, &item_identity, Some(&mut s));
+        release_capture(&busy, &session_path, id, item_identity, Some(&mut s));
 
         assert!(!busy.has(Some(&session_path), id));
     }
