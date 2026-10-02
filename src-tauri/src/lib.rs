@@ -821,6 +821,7 @@ struct Done {
 }
 
 fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finished, String>) {
+    let Done { id, session, session_id, session_identity, item_identity, session_name, stem, ack } = active;
     let outcome = result.and_then(|f| match (&f.video, &f.sheet) {
         (Some(v), _) => Ok((format!("media/{v}"), "video", f)),
         (None, Some(s)) => Ok((format!("media/{s}"), "image", f)),
@@ -828,28 +829,28 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     });
     let st = app.state::<Mutex<App>>();
     let mut a = st.lock().unwrap();
-    let open_here = a.session.as_ref().is_some_and(|s| s.manifest.id == active.session_id && s.dir == active.session && s.matches_folder_identity(&active.session_identity));
+    let open_here = a.session.as_ref().is_some_and(|s| s.manifest.id == session_id && s.dir == session && s.matches_folder_identity(&session_identity));
     // The session the recording went into: the open one, or its folder opened again.
     let mut other = None;
     if !open_here {
-        other = Session::reopen_matching(&active.session, &active.session_name, &active.session_identity, &active.session_id, &a.store.config.header).ok();
+        other = Session::reopen_matching(&session, &session_name, &session_identity, &session_id, &a.store.config.header).ok();
     }
     let s = if open_here { a.session.as_mut() } else { other.as_mut() };
-    let Some(s) = s.filter(|s| s.matches_item_identity(active.id, &active.item_identity)) else {
-        app.state::<Busy>().release(&active.session, active.id);
+    let Some(s) = s.filter(|s| s.matches_item_identity(id, &item_identity)) else {
+        app.state::<Busy>().release(&session, id);
         drop(a);
         let _ = app.emit_to("main", "problem", match outcome {
-            Ok((rel, ..)) => format!("The recording {rel} was saved, but item {} of {} is gone, so it is in no note.", active.id, active.session_name),
-            Err(e) => format!("The recording {} failed: {e}", active.stem),
+            Ok((rel, ..)) => format!("The recording {rel} was saved, but item {id} of {session_name} is gone, so it is in no note."),
+            Err(e) => format!("The recording {stem} failed: {e}"),
         });
         return;
     };
     let (rel, kind, f) = match outcome {
         Ok(o) => o,
         Err(e) => {
-            app.state::<Busy>().release(&active.session, active.id);
+            app.state::<Busy>().release(&session, id);
             drop(a);
-            let _ = app.emit_to("main", "problem", format!("The recording {} failed: {e}", active.stem));
+            let _ = app.emit_to("main", "problem", format!("The recording {stem} failed: {e}"));
             return;
         }
     };
@@ -857,16 +858,16 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     let link = if kind == "video" { format!("[{label}]({rel})") } else { format!("![{label}]({rel})") };
     // Shown in the notebook: its editor adds the link where the note is being written.
     if open_here && app.get_webview_window("main").is_some() {
-        app.state::<CaptureAcks>().0.lock().unwrap().insert(active.ack.clone(), PendingCapture {
-            session: active.session.clone(), display_path: active.session_name.clone(), session_identity: active.session_identity.clone(), session_id: s.manifest.id.clone(), item: active.id, item_identity: active.item_identity.clone(), link,
+        let current_session_id = s.manifest.id.clone();
+        app.state::<CaptureAcks>().0.lock().unwrap().insert(ack.clone(), PendingCapture {
+            session: session.clone(), display_path: session_name.clone(), session_identity, session_id: current_session_id.clone(), item: id, item_identity, link,
         });
-        let session_id = s.manifest.id.clone();
         drop(a);
         capture::announce(app, capture::Captured {
-            session_id: Some(session_id),
-            session_path: active.session_name.clone(),
-            ack: Some(active.ack),
-            id: active.id,
+            session_id: Some(current_session_id),
+            session_path: session_name,
+            ack: Some(ack),
+            id,
             rel,
             kind: kind.into(),
             label,
@@ -876,20 +877,20 @@ fn finish_recording(app: &AppHandle, active: Done, result: Result<record::Finish
     }
     // Otherwise (another session open, or the notebook closed) the link goes at the end of
     // the item's note here.
-    let body = s.read_note(active.id).unwrap_or_default();
+    let body = s.read_note(id).unwrap_or_default();
     let body = body.trim_end();
-    let written = s.write_note_matching(active.id, &active.item_identity, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") });
-    let last = app.state::<Busy>().release(&active.session, active.id);
-    if last {
-        if s.matches_item_identity(active.id, &active.item_identity) {
-            if let Ok(title) = s.item(active.id).map(|r| r.title.clone()) { let _ = s.retitle_item(active.id, &title, true); }
-        }
+    let written = s.write_note_matching(id, &item_identity, &if body.is_empty() { format!("{link}\n") } else { format!("{body}\n\n{link}\n") });
+    let last = app.state::<Busy>().release(&session, id);
+    let same_item = s.matches_item_identity(id, &item_identity);
+    drop(item_identity);
+    if last && same_item {
+        if let Ok(title) = s.item(id).map(|r| r.title.clone()) { let _ = s.retitle_item(id, &title, true); }
     }
-    let title = s.item(active.id).map(|r| r.title.clone()).unwrap_or_default();
+    let title = s.item(id).map(|r| r.title.clone()).unwrap_or_default();
     drop(a);
     let _ = app.emit_to("main", "problem", match written {
-        Ok(_) => format!("The recording was added to the end of “{title}” in {}.", active.session_name),
-        Err(e) => format!("The recording {rel} was saved in {}, but its note could not be written: {e}", active.session_name),
+        Ok(_) => format!("The recording was added to the end of “{title}” in {session_name}."),
+        Err(e) => format!("The recording {rel} was saved in {session_name}, but its note could not be written: {e}"),
     });
 }
 
