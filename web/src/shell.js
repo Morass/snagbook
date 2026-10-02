@@ -375,7 +375,10 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return;
     }
     if (title === it.title) return;
-    await callView("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, expectedTitle: titleForTitle, title });
+    const applied = await callView("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, expectedTitle: titleForTitle, title });
+    if (applied && titleFor === id && titleForToken === it.itemToken && t.value.trim() !== title) {
+      titleForTitle = title;
+    }
   }
 
   async function deleteItem(id) {

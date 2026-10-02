@@ -467,6 +467,22 @@ test("a delayed rename reply cannot replace a newer session", async () => {
   assert.equal(t.shell.view().session.id, secondSession);
 });
 
+test("typing another title while a rename reply is delayed keeps the newer draft", async () => {
+  const t = await setup({ session: true, slowRename: true });
+  t.$("item-title").focus();
+  t.$("item-title").value = "First title";
+  const first = t.shell.renameSelected();
+  await t.app.renameStarted();
+  t.$("item-title").value = "Second title";
+
+  t.app.releaseRename();
+  await first;
+  await t.shell.renameSelected();
+
+  assert.equal(t.shell.view().session.items[0].title, "Second title");
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "rename_item").map(([, args]) => args.title), ["First title", "Second title"]);
+});
+
 test("a pending title cannot rename a replacement item with the same number", async () => {
   const t = await setup({ session: true });
   const oldToken = t.shell.view().session.items[0].itemToken;
