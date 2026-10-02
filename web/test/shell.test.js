@@ -100,8 +100,10 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       session.nextItem = id + 1;
       return view();
     },
-    rename_item: ({ id, title }) => {
+    rename_item: ({ sessionId, openToken, itemToken, id, title }) => {
+      if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed, so the item was not renamed.";
       const it = session.items.find((i) => i.id === id);
+      if (it?.itemToken !== itemToken) throw "The item changed, so it was not renamed.";
       it.title = title;
       return view();
     },
@@ -401,6 +403,22 @@ test("an empty title is refused and the old one comes back", async () => {
   await t.shell.renameSelected();
   assert.equal(t.$("item-title").value, "Item 1");
   assert.ok(!t.app.calls.some(([c]) => c === "rename_item"));
+});
+
+test("a pending title cannot rename a replacement item with the same number", async () => {
+  const t = await setup({ session: true });
+  const oldToken = t.shell.view().session.items[0].itemToken;
+  t.$("item-title").focus();
+  t.$("item-title").value = "old item's draft";
+  t.app.replaceItem(1);
+
+  await t.shell.refresh();
+  t.$("item-title").blur();
+  await t.settle();
+
+  assert.equal(t.$("item-title").value, "Item 1");
+  assert.equal(t.shell.view().session.items[0].title, "Item 1");
+  assert.equal(t.app.calls.some(([cmd, args]) => cmd === "rename_item" && args.itemToken === oldToken), false);
 });
 
 test("arrow keys in the list move the selection", async () => {

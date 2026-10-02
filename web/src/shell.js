@@ -77,6 +77,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let shownOpenToken = null;
   let editorReady = false;
   let titleFor = null;
+  let titleForToken = null;
   let statusTimer = null;
   const pendingCaptureAcks = new Map();
   const pendingOriginAcks = new Map();
@@ -341,14 +342,17 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const t = $("item-title");
     const id = titleFor;
     const it = items().find((i) => i.id === id);
-    if (!it) return;
+    if (!it || it.itemToken !== titleForToken) {
+      if (id === selected) t.value = it?.title ?? "";
+      return;
+    }
     const title = t.value.trim();
     if (!title) {
       if (id === selected) t.value = it.title;
       return;
     }
     if (title === it.title) return;
-    await apply(await call("rename_item", { id, title }));
+    await apply(await call("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, title }));
   }
 
   async function deleteItem(id) {
@@ -709,8 +713,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const it = items().find((i) => i.id === selected);
     const t = $("item-title");
     // Keep what is being typed, but only for the item it belongs to.
-    if (doc.activeElement !== t || titleFor !== selected) t.value = it?.title ?? "";
+    if (doc.activeElement !== t || titleFor !== selected || titleForToken !== it?.itemToken) t.value = it?.title ?? "";
     titleFor = selected;
+    titleForToken = it?.itemToken ?? null;
     t.disabled = !it;
   }
 
@@ -1104,7 +1109,8 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         e.preventDefault();
         renameSelected().then(() => snag()?.focus());
       } else if (e.key === "Escape") {
-        t.value = items().find((i) => i.id === titleFor)?.title ?? "";
+        const it = items().find((i) => i.id === titleFor && i.itemToken === titleForToken);
+        t.value = it?.title ?? "";
         snag()?.focus();
       }
     });

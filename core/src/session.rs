@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 pub const MANIFEST_NAME: &str = "session.json";
@@ -118,6 +118,14 @@ fn names_in(dir: &Path) -> Vec<String> {
     fs::read_dir(dir)
         .map(|r| r.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
         .unwrap_or_default()
+}
+
+fn child_folder(dir: &Path, name: &str) -> Result<PathBuf> {
+    let mut components = Path::new(name).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(dir.join(name)),
+        _ => Err(SnagError::Io(format!("The item folder name {name:?} is unsafe."))),
+    }
 }
 
 /// One test session: a folder holding session.json, README.md and a folder per item.
@@ -269,7 +277,7 @@ impl Session {
     fn repair(&mut self) {
         let before = self.manifest.items.len();
         let dir = self.dir.clone();
-        self.manifest.items.retain(|r| dir.join(&r.folder).exists());
+        self.manifest.items.retain(|r| child_folder(&dir, &r.folder).is_ok_and(|path| path.exists()));
         let mut changed = self.manifest.items.len() != before;
         let known: HashSet<String> = self.manifest.items.iter().map(|r| r.folder.clone()).collect();
         let mut names = names_in(&self.dir);
@@ -319,7 +327,7 @@ impl Session {
     }
 
     pub fn item_dir(&self, id: i64) -> Result<PathBuf> {
-        Ok(self.dir.join(&self.item(id)?.folder))
+        child_folder(&self.dir, &self.item(id)?.folder)
     }
 
     pub fn note_path(&self, id: i64) -> Result<PathBuf> {
@@ -369,7 +377,8 @@ impl Session {
         }
         let i = self.manifest.items.iter().position(|r| r.id == id).ok_or(SnagError::NoSuchItem(id))?;
         let mut rec = self.manifest.items[i].clone();
-        let text = fs::read_to_string(self.dir.join(&rec.folder).join(NOTE_NAME))?;
+        let old_dir = child_folder(&self.dir, &rec.folder)?;
+        let text = fs::read_to_string(old_dir.join(NOTE_NAME))?;
         let new_folder = Naming::item_folder(id, &t);
         if rec.title == t && (!move_folder || new_folder == rec.folder || self.dir.join(&new_folder).exists()) {
             return Ok(rec);
@@ -377,13 +386,13 @@ impl Session {
         if move_folder && new_folder != rec.folder {
             let to = self.dir.join(&new_folder);
             if !to.exists() {
-                fs::rename(self.dir.join(&rec.folder), &to)?;
+                fs::rename(&old_dir, &to)?;
                 rec.folder = new_folder;
             }
         }
         rec.title = t.clone();
         self.manifest.items[i] = rec.clone();
-        let note = self.dir.join(&rec.folder).join(NOTE_NAME);
+        let note = child_folder(&self.dir, &rec.folder)?.join(NOTE_NAME);
         let parts = FrontMatter::split(&text);
         write_atomic(&note, FrontMatter::join(&parts.raw, &[("title", &t)], &parts.body).as_bytes())?;
         self.save()?;
