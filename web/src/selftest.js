@@ -283,7 +283,8 @@ export async function runSelfTest(shell, invoke) {
     check((await invoke("read_note", sessionArgs(1))).includes(wantRel), "the recording is in the note");
     check(await until(() => $("rec").textContent === "Record"), "the button says Record again");
     await shell.refresh();
-    check(/recorded-item/.test(items().find((i) => i.id === 1)?.folder || ""), "after the recording the folder follows the new title: " + items().find((i) => i.id === 1)?.folder);
+    const captureTrace = await invoke("selftest_capture_trace");
+    check(/recorded-item/.test(items().find((i) => i.id === 1)?.folder || ""), "after the recording the folder follows the new title: " + items().find((i) => i.id === 1)?.folder + "; " + captureTrace);
     const info = await fetch(base() + "media/clip-001.json").then((r) => r.json()).catch(() => null);
     check(info && Math.abs(info.duration - expected) < 0.8, `clip-001.json gives the length: ${info?.duration}s for ${expected.toFixed(2)}s between Record and Stop`);
     check(info?.stills?.length === Math.min(60, Math.floor(info.duration) + 1) && info.stills[0].file === "clip-001-frames/0001.jpg", `one still a second beside it: ${info?.stills?.length} for ${info?.duration}s`);

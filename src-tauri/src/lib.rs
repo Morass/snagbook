@@ -617,6 +617,9 @@ struct PendingCapture {
 #[derive(Default)]
 struct CaptureAcks(Mutex<std::collections::HashMap<String, PendingCapture>>);
 
+#[derive(Default)]
+struct CaptureTrace(Mutex<String>);
+
 impl Busy {
     fn add(&self, session: &Path, id: i64) {
         *self.0.lock().unwrap().entry((session.to_path_buf(), id)).or_default() += 1;
@@ -917,6 +920,7 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
     let session_path = pending.session.clone();
     let session_id = pending.session_id.clone();
     let item = pending.item;
+    let identity_matches = a.session.as_ref().is_some_and(|s| s.manifest.id == session_id && s.matches_item_identity(item, &pending.item_identity));
     let item_identity = pending.item_identity;
     let busy = app.state::<Busy>();
     let busy_before = busy.count(&session_path, item);
@@ -927,9 +931,11 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
         item_identity,
         a.session.as_mut().filter(|s| s.manifest.id == session_id),
     );
-    if selftest_requested() {
-        println!("note filed {} for item {item}; capture holds {busy_before}->{}", pending.link, busy.count(&session_path, item));
-    }
+    *app.state::<CaptureTrace>().0.lock().unwrap() = format!(
+        "{}; holds {busy_before}->{}; current item matched: {identity_matches}",
+        pending.link,
+        busy.count(&session_path, item),
+    );
     if let Some(warning) = rename_warning {
         if selftest_requested() {
             println!("note {warning}");
@@ -1382,6 +1388,11 @@ fn selftest_log(line: String) {
     }
 }
 
+#[tauri::command]
+fn selftest_capture_trace(app: AppHandle) -> String {
+    app.state::<CaptureTrace>().0.lock().unwrap().clone()
+}
+
 /// Whether recordings can be saved as video here.
 #[tauri::command]
 fn ffmpeg_found() -> bool {
@@ -1459,6 +1470,7 @@ pub fn run() {
         .manage(Busy::default())
         .manage(SessionDeleteFallback::default())
         .manage(CaptureAcks::default())
+        .manage(CaptureTrace::default())
         .manage(Markup::default())
         .manage(SelftestNext::default())
         .on_window_event(|w, e| {
@@ -1532,6 +1544,7 @@ pub fn run() {
             selftest_requested,
             selftest_mode,
             selftest_log,
+            selftest_capture_trace,
             ffmpeg_found,
             selftest_delete_session,
             selftest_done,
