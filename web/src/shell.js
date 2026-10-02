@@ -369,7 +369,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       title: t.value.trim(),
     };
     const key = `${intent.sessionId}\u0000${intent.openToken}\u0000${intent.itemToken}`;
-    intent.expectedTitle = queuedTitles.get(key) ?? titleForTitle;
+    const queuedTitle = queuedTitles.get(key);
+    intent.followsPending = queuedTitle != null;
+    intent.expectedTitle = queuedTitle ?? titleForTitle;
     if (intent.title && intent.title !== intent.expectedTitle) queuedTitles.set(key, intent.title);
     const work = titleTail.then(() => renameSelectedOnce(intent)).finally(() => {
       if (queuedTitles.get(key) === intent.title) queuedTitles.delete(key);
@@ -380,7 +382,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function renameSelectedOnce(intent) {
     const t = $("item-title");
-    const { sessionId, openToken, itemToken, id, expectedTitle, title } = intent;
+    const { sessionId, openToken, itemToken, id, expectedTitle, title, followsPending } = intent;
     if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
     const it = items().find((i) => i.id === id);
     if (!it || it.itemToken !== itemToken) {
@@ -392,14 +394,15 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return;
     }
     if (title === expectedTitle) {
-      if (it.title !== expectedTitle && titleFor === id && titleForToken === itemToken) {
+      if (!followsPending && it.title !== expectedTitle && titleFor === id && titleForToken === itemToken) {
         if (id === selected) t.value = it.title;
         titleForTitle = it.title;
       }
       return;
     }
     const applied = await callView("rename_item", { sessionId, openToken, itemToken, id, expectedTitle, title });
-    if (applied && titleFor === id && titleForToken === it.itemToken && t.value.trim() !== title) {
+    if (titleFor === id && titleForToken === itemToken) {
+      if (!applied && t.value.trim() === expectedTitle) t.value = title;
       titleForTitle = title;
     }
   }

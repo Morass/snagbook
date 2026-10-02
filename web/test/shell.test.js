@@ -8,7 +8,7 @@ import { rectFraction, formatElapsed } from "../src/rect.js";
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
 /// An in-memory stand-in for the app's commands.
-function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, holdSecondCaptureCheck = false, slowCaptureFiling = false, slowFiledReply = false, slowMedia = false, slowWrite = false, slowDelete = false, slowRename = false, failCaptureFiling = false } = {}) {
+function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, holdSecondCaptureCheck = false, slowCaptureFiling = false, slowFiledReply = false, slowMedia = false, slowWrite = false, slowDelete = false, slowRename = false, holdSecondRenameReply = false, failCaptureFiling = false } = {}) {
   const calls = [];
   const notes = new Map();
   let slowNote = null;
@@ -29,6 +29,9 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let releaseDelete;
   let releaseRename;
   let renameReached;
+  let releaseSecondRename;
+  let secondRenameReached;
+  let renameCount = 0;
   let releaseSession;
   let holdSessionReply = false;
   let cancelFolderPick = false;
@@ -48,6 +51,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   const deleteGate = slowDelete ? new Promise((resolve) => { releaseDelete = resolve; }) : null;
   const renameGate = slowRename ? new Promise((resolve) => { releaseRename = resolve; }) : null;
   const renameStarted = slowRename ? new Promise((resolve) => { renameReached = resolve; }) : null;
+  const secondRenameGate = holdSecondRenameReply ? new Promise((resolve) => { releaseSecondRename = resolve; }) : null;
+  const secondRenameStarted = holdSecondRenameReply ? new Promise((resolve) => { secondRenameReached = resolve; }) : null;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
   const captureOrigins = new Map();
   const sessionOrigins = new Map();
@@ -117,6 +122,11 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       if (it.title !== expectedTitle) throw "The item's title changed, so an older edit was not applied.";
       it.title = title;
       const renamed = view();
+      renameCount++;
+      if (renameCount === 2 && secondRenameGate) {
+        secondRenameReached();
+        await secondRenameGate;
+      }
       if (renameGate) {
         renameReached();
         await renameGate;
@@ -245,6 +255,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseDelete: () => releaseDelete?.(),
     renameStarted: () => renameStarted,
     releaseRename: () => releaseRename?.(),
+    secondRenameStarted: () => secondRenameStarted,
+    releaseSecondRename: () => releaseSecondRename?.(),
     holdNextSession: () => { sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     holdNextState: () => { stateGate = new Promise((resolve) => { releaseState = resolve; }); },
     holdStaleNextState: () => {
@@ -484,26 +496,31 @@ test("typing another title while a rename reply is delayed keeps the newer draft
 });
 
 test("blurring another title while a rename reply is delayed preserves that save", async () => {
-  const t = await setup({ session: true, slowRename: true });
+  const t = await setup({ session: true, slowRename: true, holdSecondRenameReply: true });
   t.$("item-title").focus();
   t.$("item-title").value = "First title";
   const first = t.shell.renameSelected();
   await t.app.renameStarted();
   t.$("item-title").value = "Second title";
   t.$("item-title").blur();
-  t.app.holdNextState();
-  const refresh = t.shell.refresh();
-  await t.settle();
-
   t.app.releaseRename();
   await first;
+  await t.app.secondRenameStarted();
+  t.app.holdStaleNextState();
+  const refresh = t.shell.refresh();
   await t.settle();
+  t.app.releaseSecondRename();
+  await t.settle();
+
+  t.$("item-title").focus();
+  t.$("item-title").value = "Third title";
+  await t.shell.renameSelected();
   t.app.releaseState();
   await refresh;
 
-  assert.equal(t.shell.view().session.items[0].title, "Second title");
-  assert.equal(t.$("item-title").value, "Second title");
-  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "rename_item").map(([, args]) => args.title), ["First title", "Second title"]);
+  assert.equal(t.shell.view().session.items[0].title, "Third title");
+  assert.equal(t.$("item-title").value, "Third title");
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "rename_item").map(([, args]) => args.title), ["First title", "Second title", "Third title"]);
 });
 
 test("a pending title cannot rename a replacement item with the same number", async () => {
