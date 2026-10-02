@@ -63,12 +63,12 @@ export async function runSelfTest(shell, invoke) {
 
     // 3. typed text reaches notes.md by itself, without switching items
     snag().typeText("The logo overlaps the Start button.");
-    check(await until(async () => (await invoke("read_note", { id: 1 })).includes("The logo overlaps the Start button."), 5000), "typed text reaches notes.md by itself");
+    check(await until(async () => (await invoke("read_note", sessionArgs(1))).includes("The logo overlaps the Start button."), 5000), "typed text reaches notes.md by itself");
 
     // 4. a template button types its text
     document.querySelector("#templates .template")?.click();
     await shell.flush();
-    check((await invoke("read_note", { id: 1 })).includes("**Bug:**"), "the Bug template inserts **Bug:**");
+    check((await invoke("read_note", sessionArgs(1))).includes("**Bug:**"), "the Bug template inserts **Bug:**");
 
     // 5. a pasted picture is saved and shown through the snagbook: scheme
     const saved1 = await invoke("save_media", { ...sessionArgs(1), base64: RED, mime: "image/png", name: "" });
@@ -158,7 +158,7 @@ export async function runSelfTest(shell, invoke) {
     check(m?.id === 1 && m?.rel === "media/shot-001.png" && m.isNew && m.kept && m.sessionPath === shell.view().session.path, "Done saves it into item 1 as media/shot-001.png with its session path: " + JSON.stringify(m));
     check(await until(async () => !(await invoke("capture_open")) && !(await invoke("markup_open"))), "the screenshot and mark-up windows close");
     await shell.flush();
-    check((await invoke("read_note", { id: 1 })).includes("media/shot-001.png"), "the screenshot is in the note");
+    check((await invoke("read_note", sessionArgs(1))).includes("media/shot-001.png"), "the screenshot is in the note");
     const shot = [...document.querySelectorAll("#editor .img-wrap img")].find((i) => i.src.includes("shot-001"));
     const loaded = await imageLoaded(shot);
     const want = Math.round(screen.width * devicePixelRatio * 0.25);
@@ -223,7 +223,7 @@ export async function runSelfTest(shell, invoke) {
     await invoke("finish_screenshot", { rect: { x: 0.5, y: 0.5, w: 0.2, h: 0.2 } });
     m = await Promise.race([marked, sleep(10000).then(() => null)]);
     await shell.flush();
-    check(m?.rel === "media/shot-002.png" && m.kept && (await invoke("read_note", { id: 1 })).includes("media/shot-002.png") && (await fetchText("media/shot-002.marks.json")) === null, "No Marks keeps the screenshot without companions");
+    check(m?.rel === "media/shot-002.png" && m.kept && (await invoke("read_note", sessionArgs(1))).includes("media/shot-002.png") && (await fetchText("media/shot-002.marks.json")) === null, "No Marks keeps the screenshot without companions");
     marked = nextMarked();
     await invoke("selftest_markup_next", { script: "discard" });
     await invoke("start_screenshot");
@@ -231,7 +231,7 @@ export async function runSelfTest(shell, invoke) {
     await invoke("finish_screenshot", { rect: { x: 0.5, y: 0.1, w: 0.2, h: 0.2 } });
     m = await Promise.race([marked, sleep(10000).then(() => null)]);
     await shell.flush();
-    check(m?.rel === "media/shot-003.png" && !m.kept && (await fetchSize("media/shot-003.png")) === null && !(await invoke("read_note", { id: 1 })).includes("shot-003"), "Discard throws the screenshot away");
+    check(m?.rel === "media/shot-003.png" && !m.kept && (await fetchSize("media/shot-003.png")) === null && !(await invoke("read_note", sessionArgs(1))).includes("shot-003"), "Discard throws the screenshot away");
 
     await invoke("start_screenshot");
     await until(() => invoke("capture_open"));
@@ -280,7 +280,7 @@ export async function runSelfTest(shell, invoke) {
     const wantRel = video ? "media/clip-001.mp4" : "media/clip-001-contact.jpg";
     if (video) check(rec?.kind === "video" && rec?.rel === wantRel && rec?.sessionPath === shell.view().session.path, "the recording is saved as " + wantRel + " with its session path: " + JSON.stringify(rec));
     else check(rec?.kind === "image" && rec?.rel === wantRel && /ffmpeg/.test(rec?.problem || ""), "without ffmpeg the contact sheet is saved, and the reason is given: " + JSON.stringify(rec));
-    check((await invoke("read_note", { id: 1 })).includes(wantRel), "the recording is in the note");
+    check((await invoke("read_note", sessionArgs(1))).includes(wantRel), "the recording is in the note");
     check(await until(() => $("rec").textContent === "Record"), "the button says Record again");
     await shell.refresh();
     check(/recorded-item/.test(items().find((i) => i.id === 1)?.folder || ""), "after the recording the folder follows the new title: " + items().find((i) => i.id === 1)?.folder);
@@ -310,9 +310,9 @@ export async function runSelfTest(shell, invoke) {
     await invoke("stop_recording");
     check(await until(() => $("rec").textContent === "Record", 120000), "the button says Record once it is finished");
     await sleep(500);
-    check(!(await invoke("read_note", { id: 1 })).includes("clip-"), "the session opened meanwhile gets no link");
+    check(!(await invoke("read_note", sessionArgs(1))).includes("clip-"), "the session opened meanwhile gets no link");
     await shell.openSession(path);
-    const back = await invoke("read_note", { id: 1 });
+    const back = await invoke("read_note", sessionArgs(1));
     check(/\]\(media\/clip-003\.(mp4|webm)\)|clip-003-contact/.test(back), "the recording is at the end of its own item's note: " + JSON.stringify(back.slice(-50)));
     check(other !== path, "(two sessions were used)");
 
