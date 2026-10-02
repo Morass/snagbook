@@ -12,7 +12,7 @@ When you play-test a game or click through an app, the findings pile up faster t
 
 Everything is saved as ordinary files as you type: a folder per session, a folder per item, Markdown notes, PNG pictures and MP4 videos. Every video gets still frames and a contact sheet beside it, so someone (or something) that cannot play it can still see what happened. There is nothing to export.
 
-This is Snagbook for **Linux and Windows**, maintained on a best-effort basis. The main Snagbook is the macOS app, [Morass/snagbook](https://github.com/Morass/snagbook); both keep sessions in the same folder format, so a session made on one system opens on the other.
+This guide covers Snagbook on **Linux and Windows**. [macOS installation and usage](../README.md) are covered in the main guide; every platform uses the same session-folder format.
 
 ## Contents
 
@@ -28,7 +28,7 @@ This is Snagbook for **Linux and Windows**, maintained on a best-effort basis. T
 
 ## Install
 
-Download the package for your system from the [Releases](../../releases) page:
+Download the package for your system from the [Releases](https://github.com/Morass/snagbook/releases) page:
 
 - **Debian, Ubuntu and relatives:** `sudo apt install ./Snagbook_0.1.0_amd64.deb`
 - **Any other Linux:** the `.AppImage`. Make it executable (`chmod +x Snagbook_0.1.0_amd64.AppImage`) and run it.
@@ -178,6 +178,8 @@ sudo apt install build-essential libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
 Then:
 
 ```sh
+git clone https://github.com/Morass/snagbook.git
+cd snagbook/desktop
 npm ci
 npm run build:web
 npx tauri build            # packages land in target/release/bundle/

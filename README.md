@@ -1,10 +1,10 @@
 # Snagbook
 
-**A notebook for testing sessions on the Mac: numbered findings, each with a note, marked-up screenshots and screen recordings, kept as plain folders anyone can read.**
+**A notebook for testing sessions on macOS, Linux and Windows: numbered findings, each with a note, marked-up screenshots and screen recordings, kept as plain folders anyone can read.**
 
 <p align="center"><img src="docs/images/notebook.png" alt="The Snagbook window: findings on the left, the selected finding's note with a screenshot on the right" width="820"></p>
 
-When you play-test a game or click through an app, the findings pile up faster than you can write them down. Snagbook stays open beside what you are testing — over full-screen games too. Every finding is an item with a title, a note and its pictures and videos. A screenshot or a recording is one key press and a drag away, from any app, and it lands in the note you are writing.
+When you play-test a game or click through an app, the findings pile up faster than you can write them down. Snagbook stays open beside what you are testing; on macOS it can stay above full-screen games too. Every finding is an item with a title, a note and its pictures and videos. A screenshot or a recording is one key press and a drag away, from any app, and it lands in the note you are writing.
 
 - **Start a session** for one sitting of testing.
 - **Add an item** per finding, type what happened, press a key to grab a screenshot (and circle what matters on it) or record what happens.
@@ -26,6 +26,8 @@ Everything is saved as ordinary files while you type: a folder per session, a fo
 
 ## Install
 
+### macOS
+
 Snagbook needs macOS 14 (Sonoma) or newer. It is built from source with the Swift toolchain (Xcode or the Command Line Tools) and Node.js, which builds the note editor once:
 
 ```sh
@@ -38,7 +40,19 @@ make install          # builds Snagbook.app and copies it to /Applications
 
 The first screenshot or recording asks for the **Screen Recording** permission (System Settings › Privacy & Security › Screen & System Audio Recording). Turn Snagbook on there, then quit and reopen it.
 
+### Linux and Windows
+
+Download the package for your system from the [Releases](https://github.com/Morass/snagbook/releases) page:
+
+- **Debian, Ubuntu and relatives:** `sudo apt install ./Snagbook_0.1.0_amd64.deb`
+- **Other Linux systems:** make the `.AppImage` executable with `chmod +x`, then run it.
+- **Windows 10 and 11:** run `Snagbook_0.1.0_x64-setup.exe`. It is not signed, so SmartScreen may require **More info → Run anyway** the first time.
+
+Install **ffmpeg** for video files (`sudo apt install ffmpeg` or `winget install ffmpeg`). Without it, recordings still keep their still frames and contact sheet. Building these versions from source is covered in [the desktop guide](desktop/README.md#building-from-source).
+
 ## Quick start
+
+The steps below show the macOS keys. On Linux and Windows, use **Ctrl+Alt+S** for a screenshot, **Ctrl+Alt+R** for recording, **Ctrl+N** for a new item and **Ctrl+Shift+C** for Copy Hand-off.
 
 1. Open Snagbook and press **New Session**. The first item, *Item 1*, is ready with its title selected: type what the finding is about and press Return.
 2. Type the note. Paste or drop pictures into it.
@@ -141,7 +155,7 @@ Hover over any button to see its shortcut.
 - **Shortcuts:** the four keys that work in any app, and a list of all the others.
 - **Templates:** the buttons above the note.
 
-The settings are a JSON file you can also edit by hand: `~/Library/Application Support/Snagbook/config.json`. If Snagbook cannot read it, it says so and does not overwrite it.
+The settings are a JSON file you can also edit by hand: `~/Library/Application Support/Snagbook/config.json` on macOS, `~/.config/Snagbook/config.json` on Linux and `%APPDATA%\Snagbook\config.json` on Windows. If Snagbook cannot read it, it says so and does not overwrite it.
 
 ## What it touches
 
@@ -162,7 +176,8 @@ The settings are a JSON file you can also edit by hand: `~/Library/Application S
 - **Its settings file** (above).
 - **The Trash**, when you delete an item or a session.
 - **The clipboard**, only when you copy the hand-off.
-- **The screen**, only while you take a screenshot or record, and only the area you choose; the Mac's sound only if you turn it on in Settings › Capture.
+- **The screen**, only while you take a screenshot or record, and only the area you choose; macOS sound only if you turn it on in Settings › Capture.
+- **ffmpeg** on Linux and Windows, when installed, to encode recordings.
 
 Snagbook makes no network connections. Links in notes open in your browser when you click them.
 
@@ -170,10 +185,12 @@ Snagbook makes no network connections. Links in notes open in your browser when 
 
 - Recordings are of a rectangle you drag, not of a single window that moves.
 - If an open session's folder is deleted elsewhere, Snagbook closes it when you return to the app and never recreates it.
+- On Wayland, global shortcuts are unavailable and recording is not supported; screenshots use the desktop's screen-sharing permission.
+- Linux and Windows recordings have no sound.
 
 ## Linux and Windows
 
-A Linux and Windows version with the same notebook, screenshots, mark-up and recordings — and the same session folders, so a session made on one system opens on the other — lives at [Morass/snagbook-desktop](https://github.com/Morass/snagbook-desktop). It is maintained on a best-effort basis; the Mac app is the main one.
+The Linux and Windows editions have the same notebook, screenshots, mark-up, recordings and session-folder format, so a session made on one system opens on another. Their [platform guide](desktop/README.md) covers shortcuts, dependencies and source builds.
 
 ## License
 
