@@ -877,8 +877,13 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function renameItemDialog(it) {
+    const sessionId = view.session.id;
+    const openToken = view.session.openToken;
+    const itemToken = it.itemToken;
     const t = await ask("Rename item", it.title);
-    if (t != null && t.trim() && t.trim() !== it.title) await apply(await call("rename_item", { id: it.id, title: t }));
+    if (t != null && t.trim() && t.trim() !== it.title) {
+      await apply(await call("rename_item", { sessionId, openToken, itemToken, id: it.id, title: t }));
+    }
   }
 
   async function renameSession() {

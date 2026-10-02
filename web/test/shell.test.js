@@ -421,6 +421,26 @@ test("a pending title cannot rename a replacement item with the same number", as
   assert.equal(t.app.calls.some(([cmd, args]) => cmd === "rename_item" && args.itemToken === oldToken), false);
 });
 
+test("the item menu binds Rename to the item that opened the dialog", async () => {
+  const t = await setup({ session: true });
+  const source = t.shell.view().session;
+  t.$("item-1").dispatchEvent(new t.window.MouseEvent("contextmenu", { bubbles: true }));
+  [...t.$("menu").querySelectorAll("button")].find((button) => button.textContent === "Rename…").click();
+  await t.settle();
+  t.$("modal").querySelector("input").value = "From menu";
+  t.$("modal").querySelector('button[data-value="true"]').click();
+  await t.settle();
+
+  assert.equal(t.shell.view().session.items[0].title, "From menu");
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "rename_item").at(-1)[1], {
+    sessionId: source.id,
+    openToken: source.openToken,
+    itemToken: source.items[0].itemToken,
+    id: 1,
+    title: "From menu",
+  });
+});
+
 test("arrow keys in the list move the selection", async () => {
   const t = await setup({ session: true });
   await t.shell.newItem();
