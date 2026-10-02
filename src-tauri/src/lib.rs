@@ -643,15 +643,18 @@ impl Busy {
     }
 }
 
-fn release_capture(busy: &Busy, session_path: &Path, item: i64, item_identity: FolderIdentity, session: Option<&mut Session>) {
+fn release_capture(busy: &Busy, session_path: &Path, item: i64, item_identity: FolderIdentity, session: Option<&mut Session>) -> Option<String> {
     if busy.release(session_path, item) {
         if let Some(s) = session.filter(|s| s.matches_item_identity(item, &item_identity)) {
             if let Ok(title) = s.item(item).map(|r| r.title.clone()) {
                 drop(item_identity);
-                let _ = s.retitle_item(item, &title, true);
+                if let Err(e) = s.retitle_item(item, &title, true) {
+                    return Some(format!("The capture was saved, but its item folder could not be renamed: {e}"));
+                }
             }
         }
     }
+    None
 }
 
 #[derive(Default)]
@@ -911,13 +914,19 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
     let session_id = pending.session_id.clone();
     let item = pending.item;
     let item_identity = pending.item_identity;
-    release_capture(
+    let rename_warning = release_capture(
         app.state::<Busy>().inner(),
         &session_path,
         item,
         item_identity,
         a.session.as_mut().filter(|s| s.manifest.id == session_id),
     );
+    if let Some(warning) = rename_warning {
+        if selftest_requested() {
+            println!("note {warning}");
+        }
+        let _ = app.emit_to("main", "problem", warning);
+    }
     Ok(())
 }
 
@@ -1570,7 +1579,7 @@ mod tests {
         let busy = Busy::default();
         busy.add(&session_path, id);
 
-        release_capture(&busy, &session_path, id, item_identity, Some(&mut s));
+        assert!(release_capture(&busy, &session_path, id, item_identity, Some(&mut s)).is_none());
 
         assert_eq!(s.item_dir(id).unwrap().file_name().unwrap(), "01-recorded-item");
         assert!(!busy.has(Some(&session_path), id));
@@ -1700,7 +1709,7 @@ mod tests {
         busy.add(&s.dir, id);
         let session_path = s.dir.clone();
 
-        release_capture(&busy, &session_path, id, item_identity, Some(&mut s));
+        assert!(release_capture(&busy, &session_path, id, item_identity, Some(&mut s)).is_none());
 
         assert!(!busy.has(Some(&session_path), id));
     }
