@@ -416,6 +416,30 @@ test("an empty title is refused and the old one comes back", async () => {
   assert.ok(!t.app.calls.some(([c]) => c === "rename_item"));
 });
 
+test("a focused stale title cannot overwrite a newer title", async () => {
+  const t = await setup({ session: true });
+  const session = t.shell.view().session;
+  const item = session.items[0];
+  t.$("item-title").focus();
+  await t.app.invoke("rename_item", {
+    sessionId: session.id,
+    openToken: session.openToken,
+    itemToken: item.itemToken,
+    id: item.id,
+    expectedTitle: item.title,
+    title: "Recorded item",
+  });
+  await t.shell.refresh();
+  const renameCalls = t.app.calls.filter(([cmd]) => cmd === "rename_item").length;
+
+  t.$("item-title").blur();
+  await t.settle();
+
+  assert.equal(t.shell.view().session.items[0].title, "Recorded item");
+  assert.equal(t.$("item-title").value, "Recorded item");
+  assert.equal(t.app.calls.filter(([cmd]) => cmd === "rename_item").length, renameCalls);
+});
+
 test("a pending title cannot rename a replacement item with the same number", async () => {
   const t = await setup({ session: true });
   const oldToken = t.shell.view().session.items[0].itemToken;

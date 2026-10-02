@@ -78,6 +78,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let editorReady = false;
   let titleFor = null;
   let titleForToken = null;
+  let titleForTitle = null;
   let statusTimer = null;
   const pendingCaptureAcks = new Map();
   const pendingOriginAcks = new Map();
@@ -351,13 +352,18 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       if (id === selected) t.value = it?.title ?? "";
       return;
     }
+    if (it.title !== titleForTitle) {
+      if (id === selected) t.value = it.title;
+      titleForTitle = it.title;
+      return;
+    }
     const title = t.value.trim();
     if (!title) {
       if (id === selected) t.value = it.title;
       return;
     }
     if (title === it.title) return;
-    await apply(await call("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, expectedTitle: it.title, title }));
+    await apply(await call("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, expectedTitle: titleForTitle, title }));
   }
 
   async function deleteItem(id) {
@@ -718,7 +724,12 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const it = items().find((i) => i.id === selected);
     const t = $("item-title");
     // Keep what is being typed, but only for the item it belongs to.
-    if (doc.activeElement !== t || titleFor !== selected || titleForToken !== it?.itemToken) t.value = it?.title ?? "";
+    if (doc.activeElement !== t || titleFor !== selected || titleForToken !== it?.itemToken) {
+      t.value = it?.title ?? "";
+      titleForTitle = it?.title ?? null;
+    } else if (t.value.trim() === it?.title) {
+      titleForTitle = it.title;
+    }
     titleFor = selected;
     titleForToken = it?.itemToken ?? null;
     t.disabled = !it;
