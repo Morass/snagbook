@@ -323,6 +323,12 @@ fn require_destination(destination: &Option<(PathBuf, FolderIdentity)>) -> Resul
     destination_current(destination).then_some(()).ok_or_else(|| "the recording's item folder is gone or was replaced".into())
 }
 
+fn write_new(path: &Path, data: &[u8]) -> Result<(), String> {
+    let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| e.to_string())?;
+    output.write_all(data).map_err(|e| e.to_string())?;
+    output.flush().map_err(|e| e.to_string())
+}
+
 fn commit_encoded(temp: &Path, target: &Path, destination: &Option<(PathBuf, FolderIdentity)>) -> Result<(), String> {
     require_destination(destination)?;
     if target.exists() {
@@ -576,7 +582,7 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
     let sheet = match contact_sheet(&tiles) {
         Some(img) => {
             require_destination(&plan.destination)?;
-            std::fs::write(plan.dir.join(&sheet_name), jpeg(&img, 75)?).map_err(|e| e.to_string())?;
+            write_new(&plan.dir.join(&sheet_name), &jpeg(&img, 75)?)?;
             Some(sheet_name)
         }
         None => None,
@@ -596,7 +602,7 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
     };
     let json = serde_json::to_string_pretty(&info).map_err(|e| e.to_string())?;
     require_destination(&plan.destination)?;
-    std::fs::write(plan.dir.join(format!("{}.json", plan.stem)), json).map_err(|e| e.to_string())?;
+    write_new(&plan.dir.join(format!("{}.json", plan.stem)), json.as_bytes())?;
     Ok(Finished { video: video_name, sheet, duration, problem })
 }
 
@@ -641,6 +647,21 @@ mod tests {
         assert_eq!(sheet.dimensions(), (3 * 40 + 4 * 6, 2 * 30 + 3 * 6));
         let white = sheet.pixels().filter(|p| p.0 == [255, 255, 255, 255]).count();
         assert!(white > 20, "the time stamps are drawn: {white} white pixels");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn companion_writes_refuse_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("outside.json");
+        let companion = dir.path().join("clip-001.json");
+        std::fs::write(&target, b"keep target").unwrap();
+        symlink(&target, &companion).unwrap();
+
+        assert!(write_new(&companion, b"recording metadata").is_err());
+        assert_eq!(std::fs::read(target).unwrap(), b"keep target");
     }
 
     fn with_ffmpeg() -> Option<PathBuf> {
