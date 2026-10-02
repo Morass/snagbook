@@ -123,7 +123,7 @@ fn names_in(dir: &Path) -> Vec<String> {
 fn child_folder(dir: &Path, name: &str) -> Result<PathBuf> {
     let mut components = Path::new(name).components();
     match (components.next(), components.next()) {
-        (Some(Component::Normal(_)), None) => {
+        (Some(Component::Normal(component)), None) if component == Path::new(name).as_os_str() => {
             let path = dir.join(name);
             if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
                 return Err(SnagError::Io(format!("The item folder {name:?} is a symbolic link.")));
