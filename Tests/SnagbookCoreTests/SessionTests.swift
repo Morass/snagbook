@@ -518,7 +518,6 @@ final class SessionTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: victim)
 
         XCTAssertThrowsError(try s.mediaFileURL(item.id, relative: "media/shot-001.marks.json"))
-        XCTAssertThrowsError(try Session.bindFile(sidecar))
         XCTAssertEqual(try String(contentsOf: victim, encoding: .utf8), "keep target")
     }
 

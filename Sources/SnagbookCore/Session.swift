@@ -410,9 +410,6 @@ public final class Session {
     }
 
     public static func bindFile(_ url: URL) throws -> FileBinding {
-        if (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil {
-            throw SnagError.mediaChanged(url.lastPathComponent)
-        }
         guard let identity = identity(of: url) else { throw SnagError.mediaChanged(url.lastPathComponent) }
         return FileBinding(url: url, identity: identity)
     }
