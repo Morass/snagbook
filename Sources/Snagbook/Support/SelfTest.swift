@@ -637,6 +637,29 @@ enum SelfTest {
             check(false, "the replacement-picture mark-up window opens")
         }
 
+        let swappedRel = (try? session.saveMedia(id, data: ImageFile.pngData(testImage(240, 160, hue: 0.25))!, prefix: "shot", ext: "png")) ?? ""
+        Annotator.open(item: id, relative: swappedRel, isNew: false, model: model)
+        await settle()
+        if let swapped = Annotator.open.last {
+            let media = try! session.mediaURL(id)
+            let picture = try! session.mediaFileURL(id, relative: swappedRel)
+            let before = try! Data(contentsOf: picture)
+            let heldMedia = session.url.deletingLastPathComponent().appendingPathComponent("selftest-held-media-\(UUID().uuidString)")
+            try? FileManager.default.moveItem(at: media, to: heldMedia)
+            try? FileManager.default.createSymbolicLink(at: media, withDestinationURL: heldMedia)
+            swapped.commit { $0.marks.append(Mark(tool: .rect, points: [Pt(10, 10), Pt(80, 60)], color: "#ff3b30", width: 4)) }
+            swapped.done()
+            await settle()
+            check(Annotator.open.contains(where: { $0 === swapped }), "mark-up refuses a media folder replaced by a symlink")
+            check((try? Data(contentsOf: heldMedia.appendingPathComponent(picture.lastPathComponent))) == before, "mark-up leaves the moved picture unchanged")
+            try? FileManager.default.removeItem(at: media)
+            try? FileManager.default.moveItem(at: heldMedia, to: media)
+            swapped.skip()
+            await settle()
+        } else {
+            check(false, "the media-folder replacement mark-up window opens")
+        }
+
         let liveNote = try! session.noteURL(id)
         let heldNote = liveNote.deletingLastPathComponent().appendingPathComponent(".notes.selftest.md")
         try? FileManager.default.moveItem(at: liveNote, to: heldNote)

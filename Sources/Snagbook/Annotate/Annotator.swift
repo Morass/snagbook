@@ -197,11 +197,10 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     private func finishDone() async {
         do {
             let live = try liveSession()
-            let itemDir = try live.itemURL(item)
-            let fileURL = itemDir.appendingPathComponent(relative)
+            let fileURL = try live.mediaFileURL(item, relative: relative)
             let comp = MarkDocument.companions(of: relative)
-            let origURL = itemDir.appendingPathComponent(comp.orig)
-            let marksURL = itemDir.appendingPathComponent(comp.marks)
+            let origURL = try live.mediaFileURL(item, relative: comp.orig)
+            let marksURL = try live.mediaFileURL(item, relative: comp.marks)
             let pictureBinding = try Session.rebind(self.pictureBinding, to: fileURL)
             let origBinding = try self.origBinding.map { try Session.rebind($0, to: origURL) }
             let marksBinding = try self.marksBinding.map { try Session.rebind($0, to: marksURL) }
@@ -306,17 +305,16 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
         do {
             if isNew {
                 let live = try liveSession()
-                let itemDir = try live.itemURL(item)
                 let comp = MarkDocument.companions(of: relative)
                 if let origBinding {
-                    try Session.remove(Session.rebind(origBinding, to: itemDir.appendingPathComponent(comp.orig)))
+                    try Session.remove(Session.rebind(origBinding, to: live.mediaFileURL(item, relative: comp.orig)))
                     self.origBinding = nil
                 }
                 if let marksBinding {
-                    try Session.remove(Session.rebind(marksBinding, to: itemDir.appendingPathComponent(comp.marks)))
+                    try Session.remove(Session.rebind(marksBinding, to: live.mediaFileURL(item, relative: comp.marks)))
                     self.marksBinding = nil
                 }
-                try Session.remove(Session.rebind(pictureBinding, to: itemDir.appendingPathComponent(relative)))
+                try Session.remove(Session.rebind(pictureBinding, to: live.mediaFileURL(item, relative: relative)))
                 model.flash("Screenshot discarded")
             }
             finished = true
@@ -338,7 +336,7 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
     private func keepUnchanged() async throws {
         if isNew {
             let live = try liveSession()
-            let fileURL = try live.itemURL(item).appendingPathComponent(relative)
+            let fileURL = try live.mediaFileURL(item, relative: relative)
             let pictureBinding = try Session.rebind(self.pictureBinding, to: fileURL)
             self.pictureBinding = pictureBinding
             try await model.annotationFinished(session: live, item: item, itemIdentity: itemIdentity, pictureBinding: pictureBinding, relative: relative, isNew: true, kept: true)
