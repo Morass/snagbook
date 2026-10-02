@@ -83,6 +83,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   const pendingCaptureAcks = new Map();
   const pendingOriginAcks = new Map();
   const originRevisions = new Map();
+  const queuedTitles = new Map();
   const editorWrites = new Set();
   let flushTail = Promise.resolve();
   let noteTail = Promise.resolve();
@@ -358,31 +359,47 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   /// Save the title field into the item it shows. That is `titleFor`, not `selected`: the
   /// field loses focus (and saves) after the selection has already moved on.
   function renameSelected() {
-    const work = titleTail.then(renameSelectedOnce);
+    const t = $("item-title");
+    const intent = {
+      sessionId: view?.session?.id,
+      openToken: view?.session?.openToken,
+      id: titleFor,
+      itemToken: titleForToken,
+      expectedTitle: null,
+      title: t.value.trim(),
+    };
+    const key = `${intent.sessionId}\u0000${intent.openToken}\u0000${intent.itemToken}`;
+    intent.expectedTitle = queuedTitles.get(key) ?? titleForTitle;
+    if (intent.title && intent.title !== intent.expectedTitle) queuedTitles.set(key, intent.title);
+    const work = titleTail.then(() => renameSelectedOnce(intent)).finally(() => {
+      if (queuedTitles.get(key) === intent.title) queuedTitles.delete(key);
+    });
     titleTail = work.catch(() => {});
     return work;
   }
 
-  async function renameSelectedOnce() {
+  async function renameSelectedOnce(intent) {
     const t = $("item-title");
-    const id = titleFor;
+    const { sessionId, openToken, itemToken, id, expectedTitle, title } = intent;
+    if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
     const it = items().find((i) => i.id === id);
-    if (!it || it.itemToken !== titleForToken) {
+    if (!it || it.itemToken !== itemToken) {
       if (id === selected) t.value = it?.title ?? "";
       return;
     }
-    if (it.title !== titleForTitle) {
-      if (id === selected) t.value = it.title;
-      titleForTitle = it.title;
+    if (it.title !== expectedTitle) {
+      if (titleFor === id && titleForToken === itemToken) {
+        if (id === selected) t.value = it.title;
+        titleForTitle = it.title;
+      }
       return;
     }
-    const title = t.value.trim();
     if (!title) {
       if (id === selected) t.value = it.title;
       return;
     }
     if (title === it.title) return;
-    const applied = await callView("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, expectedTitle: titleForTitle, title });
+    const applied = await callView("rename_item", { sessionId, openToken, itemToken, id, expectedTitle, title });
     if (applied && titleFor === id && titleForToken === it.itemToken && t.value.trim() !== title) {
       titleForTitle = title;
     }
