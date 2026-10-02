@@ -681,6 +681,33 @@ fn rename_probe(session: Option<&Session>, item: i64) -> String {
     format!("current {}; target {target} exists: {}; entries: {}", record.folder, s.dir.join(&target).exists(), entries.join(", "))
 }
 
+fn release_pending_capture(busy: &Busy, pending: PendingCapture, current: Option<&mut Session>, fallback_header: &str) -> (Option<String>, String) {
+    let PendingCapture { session, display_path, session_identity, session_id, item, item_identity, link } = pending;
+    let current_matches = current.as_ref().is_some_and(|s| {
+        s.manifest.id == session_id
+            && s.matches_folder_identity(&session_identity)
+            && s.matches_item_identity(item, &item_identity)
+    });
+    let mut other = if current_matches {
+        None
+    } else {
+        Session::reopen_matching(&session, &display_path, &session_identity, &session_id, fallback_header)
+            .ok()
+            .filter(|s| s.matches_item_identity(item, &item_identity))
+    };
+    let mut source = if current_matches { current } else { other.as_mut() };
+    let matched = source.is_some();
+    let before = rename_probe(source.as_deref(), item);
+    let before_count = busy.count(&session, item);
+    let warning = release_capture(busy, &session, item, item_identity, source.as_deref_mut());
+    let trace = format!(
+        "{link}; holds {before_count}->{}; source item matched: {matched}; before: {before}; after: {}",
+        busy.count(&session, item),
+        rename_probe(source.as_deref(), item),
+    );
+    (warning, trace)
+}
+
 #[derive(Default)]
 struct Recorder(Mutex<Option<Active>>);
 
@@ -934,27 +961,10 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
         file_pending_capture(&pending, &a.store.config.header)?;
     }
     app.state::<CaptureAcks>().0.lock().unwrap().remove(&ack);
-    let session_path = pending.session.clone();
-    let session_id = pending.session_id.clone();
-    let item = pending.item;
-    let identity_matches = a.session.as_ref().is_some_and(|s| s.manifest.id == session_id && s.matches_item_identity(item, &pending.item_identity));
-    let before_rename = rename_probe(a.session.as_ref(), item);
-    let item_identity = pending.item_identity;
     let busy = app.state::<Busy>();
-    let busy_before = busy.count(&session_path, item);
-    let rename_warning = release_capture(
-        busy.inner(),
-        &session_path,
-        item,
-        item_identity,
-        a.session.as_mut().filter(|s| s.manifest.id == session_id),
-    );
-    *app.state::<CaptureTrace>().0.lock().unwrap() = format!(
-        "{}; holds {busy_before}->{}; current item matched: {identity_matches}; before: {before_rename}; after: {}",
-        pending.link,
-        busy.count(&session_path, item),
-        rename_probe(a.session.as_ref(), item),
-    );
+    let fallback_header = a.store.config.header.clone();
+    let (rename_warning, trace) = release_pending_capture(busy.inner(), pending, a.session.as_mut(), &fallback_header);
+    *app.state::<CaptureTrace>().0.lock().unwrap() = trace;
     if let Some(warning) = rename_warning {
         if selftest_requested() {
             println!("note {warning}");
@@ -1623,6 +1633,35 @@ mod tests {
         assert!(release_capture(&busy, &session_path, id, item_identity, Some(&mut s)).is_none());
 
         assert_eq!(s.item_dir(id).unwrap().file_name().unwrap(), "01-recorded-item");
+        assert!(!busy.has(Some(&session_path), id));
+    }
+
+    #[test]
+    fn a_last_capture_release_renames_its_origin_after_switching_sessions() {
+        let d = tempfile::tempdir().unwrap();
+        let mut origin = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        let id = origin.add_item(None, Utc::now()).unwrap().id;
+        origin.retitle_item(id, "Recorded item", false).unwrap();
+        let pending = PendingCapture {
+            session: origin.dir.clone(),
+            display_path: origin.display_path.clone(),
+            session_identity: origin.folder_identity(),
+            session_id: origin.manifest.id.clone(),
+            item: id,
+            item_identity: origin.item_identity(id).unwrap(),
+            link: "[Recording](media/clip-001.mp4)".into(),
+        };
+        let session_path = origin.dir.clone();
+        let mut current = Session::create_now(&d.path().to_string_lossy(), &Config::default()).unwrap();
+        current.add_item(None, Utc::now()).unwrap();
+        let busy = Busy::default();
+        busy.add(&session_path, id);
+
+        let (warning, _) = release_pending_capture(&busy, pending, Some(&mut current), "");
+
+        assert!(warning.is_none());
+        let reopened = Session::open(&session_path.to_string_lossy(), "").unwrap();
+        assert_eq!(reopened.item_dir(id).unwrap().file_name().unwrap(), "01-recorded-item");
         assert!(!busy.has(Some(&session_path), id));
     }
 

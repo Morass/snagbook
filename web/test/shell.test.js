@@ -615,6 +615,28 @@ test("an older refresh cannot overwrite newer session state", async () => {
   assert.equal(t.shell.view().session.items[0].title, "Recorded item");
 });
 
+test("an older session-menu refresh cannot overwrite newer session state", async () => {
+  const t = await setup({ session: true });
+  const before = t.shell.view().session;
+  const item = before.items[0];
+  t.app.holdStaleNextState();
+  const staleMenu = t.shell.sessionMenu();
+  await t.app.invoke("rename_item", {
+    sessionId: before.id,
+    openToken: before.openToken,
+    itemToken: item.itemToken,
+    id: item.id,
+    expectedTitle: item.title,
+    title: "Recorded item",
+  });
+
+  await t.shell.refresh();
+  t.app.releaseState();
+  await staleMenu;
+
+  assert.equal(t.shell.view().session.items[0].title, "Recorded item");
+});
+
 test("a session can be deleted from its menu", async () => {
   const t = await setup({ session: true });
   await t.shell.sessionMenu();

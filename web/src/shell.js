@@ -229,10 +229,10 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     await retryOriginCaptures();
   }
 
-  async function refresh() {
+  async function refresh({ select } = {}) {
     const request = ++viewRequest;
     const next = await call("state");
-    if (request === viewRequest) await apply(next, { request });
+    if (request === viewRequest) await apply(next, { request, select });
   }
 
   async function reloadOriginItem(origin) {
@@ -585,7 +585,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       if (filed) flash("The capture stayed in its original session.");
       return;
     }
-    await apply(await call("state"), { select: id });
+    await refresh({ select: id });
     const stillValid = !ack || await call("capture_can_insert", { ack }).catch(() => false);
     if (!stillValid || !stillHere()) {
       const filed = await leaveCaptureInOrigin(ack, origin);
@@ -813,7 +813,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function sessionMenu() {
     const b = $("session-button").getBoundingClientRect();
     // Reconcile the open session and read the folder each time the menu is unrolled.
-    await apply(await call("state"), { select: selected });
+    await refresh({ select: selected });
     const recent = (await call("list_sessions").catch(() => [])).slice(0, 12);
     const cur = view?.session?.path;
     const entries = [];
@@ -1146,7 +1146,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   async function start() {
     wire();
-    await apply(await call("state"));
+    await refresh();
   }
 
   return Object.assign(s, {
