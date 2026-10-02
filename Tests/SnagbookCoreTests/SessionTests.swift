@@ -508,6 +508,20 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: victim.path), [])
     }
 
+    func testAnnotationCannotBindASymlinkedSidecar() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        _ = try s.saveMedia(item.id, data: Data("picture".utf8), prefix: "shot", ext: "png")
+        let victim = s.url.deletingLastPathComponent().appendingPathComponent("sidecar-target.json")
+        try Data("keep target".utf8).write(to: victim)
+        let sidecar = try s.mediaURL(item.id).appendingPathComponent("shot-001.marks.json")
+        try FileManager.default.createSymbolicLink(at: sidecar, withDestinationURL: victim)
+
+        XCTAssertThrowsError(try s.mediaFileURL(item.id, relative: "media/shot-001.marks.json"))
+        XCTAssertThrowsError(try Session.bindFile(sidecar))
+        XCTAssertEqual(try String(contentsOf: victim, encoding: .utf8), "keep target")
+    }
+
     func testRenameDoesNotModifyAReplacementItemFolder() throws {
         let s = try Session.create(root: root, config: Config())
         let item = try s.addItem()

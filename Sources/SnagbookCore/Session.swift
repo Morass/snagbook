@@ -219,7 +219,9 @@ public final class Session {
               parts[1] == path.lastPathComponent, !path.isAbsolutePath else {
             throw SnagError.mediaChanged(relative)
         }
-        return try mediaURL(id).appendingPathComponent(parts[1])
+        let file = try mediaURL(id).appendingPathComponent(parts[1])
+        if (try? fm.destinationOfSymbolicLink(atPath: file.path)) != nil { throw SnagError.mediaChanged(relative) }
+        return file
     }
     public func itemIdentity(_ id: Int) throws -> String? {
         Self.identity(of: try itemURL(id))
@@ -408,6 +410,9 @@ public final class Session {
     }
 
     public static func bindFile(_ url: URL) throws -> FileBinding {
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil {
+            throw SnagError.mediaChanged(url.lastPathComponent)
+        }
         guard let identity = identity(of: url) else { throw SnagError.mediaChanged(url.lastPathComponent) }
         return FileBinding(url: url, identity: identity)
     }
