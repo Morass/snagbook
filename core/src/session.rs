@@ -146,6 +146,13 @@ impl FolderIdentity {
     pub fn matches_path(&self, path: &Path) -> bool {
         same_file::Handle::from_path(path).ok().is_some_and(|current| current == *self.0)
     }
+
+    pub fn matches_file(&self, file: &fs::File) -> bool {
+        file.try_clone()
+            .ok()
+            .and_then(|clone| same_file::Handle::from_file(clone).ok())
+            .is_some_and(|current| current == *self.0)
+    }
 }
 
 pub struct Session {

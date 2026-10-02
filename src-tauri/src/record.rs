@@ -329,8 +329,11 @@ fn write_new(path: &Path, data: &[u8]) -> Result<(), String> {
     output.flush().map_err(|e| e.to_string())
 }
 
-fn copy_new(source: &Path, target: &Path) -> Result<(), String> {
+fn copy_new(source: &Path, source_identity: &FolderIdentity, target: &Path) -> Result<(), String> {
     let mut input = std::fs::File::open(source).map_err(|e| e.to_string())?;
+    if !source_identity.matches_file(&input) {
+        return Err("a recording still was replaced before it could be saved".into());
+    }
     let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| e.to_string())?;
     std::io::copy(&mut input, &mut output).and_then(|_| output.flush()).map_err(|e| e.to_string())?;
     Ok(())
@@ -473,7 +476,7 @@ fn record(
     if !frames_identity.matches_path(frames_dir) {
         return Err("the recording's frames folder is gone or was replaced".into());
     }
-    let mut stills: Vec<(f64, PathBuf)> = vec![];
+    let mut stills: Vec<(f64, PathBuf, FolderIdentity)> = vec![];
     let mut thumbs: Vec<(f64, RgbaImage)> = vec![];
     // Every half second at first; a long recording keeps fewer, further apart, so their
     // memory stays bounded (the contact sheet needs 16).
@@ -511,10 +514,11 @@ fn record(
             }
             written = written.max(due);
             last_good = frame.clone();
-            if stills.last().map_or(true, |(s, _)| t - s >= 1.0 - 0.5 / fps as f64) {
+            if stills.last().map_or(true, |(s, _, _)| t - s >= 1.0 - 0.5 / fps as f64) {
                 let p = frames_dir.join(format!("t{:06}.jpg", stills.len()));
                 write_new(&p, &jpeg(&fit(&frame, 1568), 72)?)?;
-                stills.push((t, p));
+                let identity = FolderIdentity::from_path(&p).map_err(|e| e.to_string())?;
+                stills.push((t, p, identity));
             }
             if thumbs.last().map_or(true, |(s, _)| t - s >= thumb_every - 0.5 / fps as f64) {
                 thumbs.push((t, fit(&frame, 480)));
@@ -590,10 +594,10 @@ fn record(
         }
         let Some(j) = nearest(&have, want) else { continue };
         let name = format!("{:04}.jpg", i + 1);
-        copy_new(&stills[j].1, &frames_dir.join(&name))?;
+        copy_new(&stills[j].1, &stills[j].2, &frames_dir.join(&name))?;
         kept.push(Still { time: (have[j] * 10.0).round() / 10.0, file: format!("{}-frames/{name}", plan.stem) });
     }
-    for (_, p) in &stills {
+    for (_, p, _) in &stills {
         if destination_current(&plan.destination) { let _ = std::fs::remove_file(p); }
     }
 
@@ -951,11 +955,32 @@ mod tests {
         let victim = dir.path().join("victim.jpg");
         let target = dir.path().join("0001.jpg");
         std::fs::write(&source, b"new still").unwrap();
+        let identity = FolderIdentity::from_path(&source).unwrap();
         std::fs::write(&victim, b"keep target").unwrap();
         symlink(&victim, &target).unwrap();
 
-        assert!(copy_new(&source, &target).is_err());
+        assert!(copy_new(&source, &identity, &target).is_err());
         assert_eq!(std::fs::read(victim).unwrap(), b"keep target");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copying_a_still_refuses_a_symlinked_source() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("t000000.jpg");
+        let held = dir.path().join("held.jpg");
+        let victim = dir.path().join("victim.jpg");
+        let target = dir.path().join("0001.jpg");
+        std::fs::write(&source, b"our still").unwrap();
+        let identity = FolderIdentity::from_path(&source).unwrap();
+        std::fs::rename(&source, &held).unwrap();
+        std::fs::write(&victim, b"private bytes").unwrap();
+        symlink(&victim, &source).unwrap();
+
+        assert!(copy_new(&source, &identity, &target).is_err());
+        assert!(!target.exists());
     }
 
     #[cfg(unix)]
