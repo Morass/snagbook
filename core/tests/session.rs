@@ -241,6 +241,23 @@ fn a_trailing_slash_cannot_hide_an_item_directory_symlink() {
     assert_eq!(fs::read_to_string(victim.join("notes.md")).unwrap(), "keep target");
 }
 
+#[cfg(unix)]
+#[test]
+fn adding_an_item_cannot_reuse_a_symlinked_destination() {
+    use std::os::unix::fs::symlink;
+
+    let e = env();
+    let mut s = new(&e);
+    add(&mut s);
+    let victim = s.dir.parent().unwrap().join("new-item-symlink-victim");
+    fs::create_dir(&victim).unwrap();
+    fs::write(victim.join("notes.md"), "keep target").unwrap();
+    symlink(&victim, s.dir.join("02-item-2")).unwrap();
+
+    assert!(s.add_item(None, Utc::now()).is_err());
+    assert_eq!(fs::read_to_string(victim.join("notes.md")).unwrap(), "keep target");
+}
+
 #[test]
 fn write_note_keeps_front_matter_and_updates_readme() {
     let e = env();

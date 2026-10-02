@@ -351,13 +351,11 @@ impl Session {
         let id = self.manifest.next_item;
         let t = title.map(str::trim).filter(|t| !t.is_empty()).map(String::from).unwrap_or_else(|| format!("Item {id}"));
         let folder = Naming::item_folder(id, &t);
-        let dir = self.dir.join(&folder);
+        let dir = child_folder(&self.dir, &folder)?;
         if !self.dir.is_dir() {
             return Err(SnagError::Io(format!("The session folder {} is gone.", self.display_path)));
         }
-        if !dir.is_dir() {
-            fs::create_dir(&dir)?;
-        }
+        fs::create_dir(&dir)?;
         let now = trunc(now);
         let record = ItemRecord { created: now, folder, id, title: t.clone() };
         let note = FrontMatter::join("", &[("title", &t), ("created", &iso_local(now))], "");
