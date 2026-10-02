@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Snagbook",
+  "version": "0.1.0",
+  "identifier": "com.morass.snagbook-desktop",
+  "build": {
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Snagbook",
+        "width": 980,
+        "height": 720,
+        "minWidth": 560,
+        "minHeight": 360,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' snagbook: http://snagbook.localhost data: blob:; media-src 'self' snagbook: http://snagbook.localhost blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src ipc: http://ipc.localhost snagbook: http://snagbook.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png", "icons/icon.ico"],
+    "category": "DeveloperTool",
+    "shortDescription": "Notes, screenshots and recordings from a test session",
+    "linux": { "deb": { "depends": [] } }
+  }
+}

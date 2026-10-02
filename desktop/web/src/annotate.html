@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>Mark up</title>
+<link rel="stylesheet" href="annotate.css">
+</head>
+<body>
+<div id="bar">
+  <span id="tools"></span>
+  <span class="sep"></span>
+  <span id="colors"></span>
+  <span class="sep"></span>
+  <button id="thinner" type="button" title="Thinner  [">−</button><span id="width">4</span><button id="thicker" type="button" title="Thicker  ]">+</button>
+  <span class="sep"></span>
+  <label id="opacity-box" title="How solid marks are: drag left to see the picture through them  , and ."><span class="half">◐</span><input id="opacity" type="range" min="10" max="100" step="5" value="100"><span id="opacity-n">100%</span></label>
+  <span class="grow"></span>
+  <span class="ends">
+    <button id="undo" type="button" class="icon">↶</button>
+    <button id="discard" type="button" class="icon danger" hidden>🗑</button>
+    <button id="skip" type="button" class="icon">✕</button>
+    <button id="done" type="button" class="tick" aria-label="Done">✓</button>
+  </span>
+</div>
+<div id="stage"><canvas id="canvas"></canvas><textarea id="text" hidden rows="1" placeholder="Text"></textarea></div>
+<script src="annotate.js"></script>
+</body>
+</html>

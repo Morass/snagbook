@@ -1,0 +1,245 @@
+import { test, before } from "node:test";
+import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
+
+let api, commands, toolbarState, view;
+const posted = [];
+
+before(async () => {
+  const dom = new JSDOM("<!doctype html><div id=e></div>", { pretendToBeVisual: true });
+  for (const k of ["window", "document", "Node", "HTMLElement", "MutationObserver", "getComputedStyle", "requestAnimationFrame", "DOMParser"])
+    globalThis[k] = k === "window" ? dom.window : dom.window[k];
+  Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true });
+  globalThis.__snagPosted = posted;
+  dom.window.Element.prototype.getClientRects = () => [];
+  dom.window.Range.prototype.getClientRects = () => [];
+  dom.window.Range.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 });
+  const ed = await import("../src/editor/editor.js");
+  ({ api, commands, toolbarState } = ed);
+  view = ed.mount(document.getElementById("e"));
+});
+
+const type = (text) => {
+  for (const ch of text) {
+    const { from, to } = view.state.selection;
+    const handled = view.someProp("handleTextInput", (f) => f(view, from, to, ch));
+    if (!handled) view.dispatch(view.state.tr.insertText(ch, from, to));
+  }
+};
+const md = () => api.markdown();
+const changes = () => posted.filter((m) => m.type === "changed");
+
+test("open, type, flush posts the new Markdown once", () => {
+  api.open({ id: "01", markdown: "Hello\n", base: "snagbook://item/01/", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  type(" world");
+  api.flush();
+  api.flush();
+  const c = changes();
+  assert.equal(c.length, 1);
+  assert.deepEqual(c[0], { type: "changed", id: "01", itemToken: null, markdown: "Hello world\n" });
+});
+
+test("input rules: heading, bullets, checklist, bold", () => {
+  api.open({ id: "02", markdown: "", focus: false });
+  type("## Title");
+  view.dispatch(view.state.tr.split(view.state.selection.from));
+  view.dispatch(view.state.tr.setBlockType(view.state.selection.from, view.state.selection.from, view.state.schema.nodes.paragraph));
+  type("- [ ] task one");
+  assert.match(md(), /^## Title\n\n- \[ \] task one\n$/);
+});
+
+test("mark input rule turns **x** into bold", () => {
+  api.open({ id: "03", markdown: "", focus: false });
+  type("say **loud** now");
+  assert.equal(md(), "say **loud** now\n");
+  let bold = "";
+  view.state.doc.descendants((n) => { if (n.isText && n.marks.some((m) => m.type.name === "strong")) bold += n.text; });
+  assert.equal(bold, "loud");
+});
+
+test("templates insert inline into the current paragraph, or as blocks", () => {
+  api.open({ id: "04", markdown: "Start\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  api.insertMarkdown(" **Expected:** ");
+  assert.equal(md(), "Start **Expected:** \n");
+  api.insertMarkdown("Steps:\n\n1. one\n2. two\n");
+  assert.match(md(), /1\. one\n2\. two/);
+});
+
+test("insertMedia puts a picture in its own paragraph and keeps typing below it", () => {
+  api.open({ id: "05", markdown: "Before\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  api.insertMedia({ kind: "image", src: "media/shot-001.png" });
+  type("After");
+  assert.equal(md(), "Before\n\n![](media/shot-001.png)\n\nAfter\n");
+  api.insertMedia({ kind: "video", src: "media/clip-001.mp4", label: "Video 0:05" });
+  assert.match(md(), /\[Video 0:05\]\(media\/clip-001\.mp4\)/);
+});
+
+test("read-only mode rejects programmatic capture insertion", () => {
+  api.open({ id: "capture-locked", markdown: "before\n", focus: false });
+  api.setReadOnly(true);
+  assert.equal(api.insertMedia({ kind: "image", src: "media/shot.png" }), false);
+  assert.equal(md(), "before\n");
+  api.setReadOnly(false);
+});
+
+test("colour and size marks write inline HTML", () => {
+  api.open({ id: "06", markdown: "paint me\n", focus: false });
+  api.selectAll();
+  commands.color("#e5484d")(view.state, view.dispatch);
+  commands.size("1.5em")(view.state, view.dispatch);
+  const out = md();
+  assert.match(out, /<span style="color:#e5484d">/);
+  assert.match(out, /<span style="font-size:1.5em">/);
+  assert.equal(toolbarState(view.state).color, "#e5484d");
+  commands.color(null)(view.state, view.dispatch);
+  assert.doesNotMatch(md(), /color:/);
+});
+
+test("list toggles switch kinds in place", () => {
+  api.open({ id: "07", markdown: "- a\n- b\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  commands.checklist()(view.state, view.dispatch);
+  assert.equal(md(), "- [ ] a\n- [ ] b\n");
+  commands.numbers()(view.state, view.dispatch);
+  assert.equal(md(), "1. a\n2. b\n");
+});
+
+test("coming back to an item keeps its undo history", () => {
+  api.open({ id: "08", markdown: "x\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  type("yz");
+  api.flush();
+  const saved = changes().at(-1).markdown;
+  api.open({ id: "09", markdown: "other\n", focus: false });
+  api.open({ id: "08", markdown: saved, focus: false });
+  api.undo();
+  assert.equal(md(), "x\n");
+});
+
+test("an item changed on disk reloads instead of reusing the cached state", () => {
+  api.open({ id: "10", markdown: "old\n", focus: false });
+  api.open({ id: "11", markdown: "", focus: false });
+  api.open({ id: "10", markdown: "new from an agent\n", focus: false });
+  assert.equal(md(), "new from an agent\n");
+});
+
+test("a replacement item does not inherit the previous lifetime's undo history", () => {
+  api.open({ id: "10-life", itemToken: "old-life", markdown: "original\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  type(" changed");
+  api.flush();
+  const saved = changes().at(-1).markdown;
+  api.open({ id: "11-life", itemToken: "other-life", markdown: "other\n", focus: false });
+  api.open({ id: "10-life", itemToken: "replacement-life", markdown: saved, focus: false });
+
+  api.undo();
+
+  assert.equal(md(), saved);
+});
+
+test("pasted file bytes go to the app and come back as a picture", async () => {
+  api.open({ id: "12", markdown: "", focus: false });
+  const before = posted.length;
+  const file = new window.File([new Uint8Array([137, 80, 78, 71])], "image.png", { type: "image/png" });
+  const handled = view.someProp("handlePaste", (f) => f(view, { clipboardData: { files: [file] }, preventDefault() {} }));
+  assert.equal(handled, true);
+  await new Promise((r) => setTimeout(r, 30));
+  const msg = posted.slice(before).find((m) => m.type === "media");
+  assert.ok(msg, "media message posted");
+  assert.equal(msg.base64, "iVBORw==");
+  api.mediaSaved(msg.reqId, "media/shot-002.png");
+  assert.match(md(), /!\[\]\(media\/shot-002\.png\)/);
+});
+
+test("pasted bytes cannot enter a replacement item with the same number", async () => {
+  api.open({ id: "12", itemToken: "first-life", markdown: "original\n", focus: false });
+  let release;
+  const file = { name: "slow.png", type: "image/png", arrayBuffer: () => new Promise((resolve) => { release = resolve; }) };
+  const before = posted.length;
+  view.someProp("handlePaste", (f) => f(view, { clipboardData: { files: [file] }, preventDefault() {} }));
+  api.forget("12");
+  api.open({ id: "12", itemToken: "replacement-life", markdown: "replacement\n", focus: false });
+  release(new Uint8Array([137, 80, 78, 71]).buffer);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const msg = posted.slice(before).find((entry) => entry.type === "media");
+  assert.equal(msg.itemToken, "first-life");
+  assert.equal(api.mediaSaved(msg.reqId, "media/shot-003.png"), false);
+  assert.equal(md(), "replacement\n");
+});
+
+test("takePending hands over an unsaved change exactly once", () => {
+  api.open({ id: "20", markdown: "a\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  type("b");
+  assert.deepEqual(api.takePending(), { id: "20", itemToken: null, markdown: "ab\n" });
+  assert.equal(api.takePending(), null);
+  const before = changes().length;
+  api.flush();
+  assert.equal(changes().length, before, "nothing left for the timer to post");
+});
+
+test("read-only mode rejects programmatic template changes", () => {
+  api.open({ id: "locked", markdown: "before\n", focus: false });
+  api.setReadOnly(true);
+  assert.equal(api.insertMarkdown("**Bug:** "), false);
+  assert.equal(api.run("bold"), false);
+  assert.equal(api.markdown(), "before\n");
+  api.setReadOnly(false);
+});
+
+test("locking during an image resize cancels its pending mouse-up change", () => {
+  api.open({ id: "resize-locked", markdown: "![](media/image.png)\n", focus: false });
+  const img = document.querySelector(".img-wrap img");
+  img.getBoundingClientRect = () => ({ width: Number.parseFloat(img.style.width) || 200 });
+  document.querySelector(".img-wrap .resize").dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
+  api.setReadOnly(true);
+  document.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 180 }));
+  document.dispatchEvent(new window.MouseEvent("mouseup", { clientX: 180 }));
+  assert.equal(api.markdown(), "![](media/image.png)\n");
+  assert.equal(api.takePending(), null);
+  api.setReadOnly(false);
+});
+
+test("a resize begun in one item cannot finish in the item opened after a lock", () => {
+  api.open({ id: "resize-old", markdown: "![](media/image.png)\n", focus: false });
+  const img = document.querySelector(".img-wrap img");
+  img.getBoundingClientRect = () => ({ width: Number.parseFloat(img.style.width) || 200 });
+  document.querySelector(".img-wrap .resize").dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
+  document.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 180 }));
+  api.setReadOnly(true);
+  api.open({ id: "resize-new", markdown: "![](media/image.png)\n", focus: false });
+  api.setReadOnly(false);
+  document.dispatchEvent(new window.MouseEvent("mouseup", { clientX: 180 }));
+  assert.equal(api.markdown(), "![](media/image.png)\n");
+  assert.equal(api.takePending(), null);
+});
+
+test("moving to another item with the same picture name shows that item's picture", () => {
+  const md = "Shot\n\n![](media/shot-001.png)\n\n[clip](media/clip-001.mp4)\n";
+  api.open({ id: "21", markdown: md, base: "snagbook://item/21/", focus: false });
+  const img = () => document.querySelector(".img-wrap img");
+  assert.match(img().src, /item\/21\/media\/shot-001\.png/);
+  api.open({ id: "22", markdown: md, base: "snagbook://item/22/", focus: false });
+  assert.match(img().src, /item\/22\/media\/shot-001\.png/, "the picture still points at the previous item");
+  const poster = document.querySelector(".video-card img");
+  if (poster) assert.match(poster.src, /item\/22\//, "the video poster still points at the previous item");
+  api.open({ id: "21", markdown: md, base: "snagbook://item/21/", focus: false });
+  assert.match(img().src, /item\/21\/media\/shot-001\.png/, "coming back shows the first item's picture again");
+});
+
+test("the mounted toolbar cannot edit while the app has locked the editor", async () => {
+  document.body.insertAdjacentHTML("beforeend", '<div id="toolbar"></div><div id="editor"></div>');
+  await import(`../src/editor/main.js?readonly-toolbar=${Date.now()}`);
+  if (!window.snag) {
+    document.dispatchEvent(new window.Event("DOMContentLoaded"));
+  }
+  window.snag.open({ id: "toolbar-locked", markdown: "plain\n", focus: false });
+  window.snag.selectAll();
+  window.snag.setReadOnly(true);
+  document.querySelector('#toolbar button[title^="Bold"]').click();
+  assert.equal(window.snag.markdown(), "plain\n");
+  window.snag.setReadOnly(false);
+});

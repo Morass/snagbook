@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>Snagbook</title>
+<link rel="stylesheet" href="editor.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <button id="session-button" class="session-button" type="button"></button>
+    <ol id="items" tabindex="0" aria-label="Items"></ol>
+    <button id="new-item" class="new-item" type="button"><span class="plus">+</span> New Item<span class="keycap" id="new-item-key"></span></button>
+  </aside>
+  <main id="main">
+    <div id="topbar">
+      <input id="item-title" type="text" placeholder="Item title" spellcheck="false" autocomplete="off">
+      <button id="rec" type="button" class="tool">Record</button>
+      <button id="shot" type="button" class="tool">Screenshot</button>
+      <button id="handoff" type="button" class="tool">Copy Hand-off</button>
+    </div>
+    <div id="templates"></div>
+    <div id="note">
+      <div id="toolbar" role="toolbar"></div>
+      <div id="editor"></div>
+    </div>
+    <div id="empty" hidden></div>
+    <div id="status"><span id="status-text"></span></div>
+  </main>
+</div>
+<div id="menu" class="popup" hidden></div>
+<div id="modal" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
