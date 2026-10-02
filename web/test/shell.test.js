@@ -491,11 +491,15 @@ test("blurring another title while a rename reply is delayed preserves that save
   await t.app.renameStarted();
   t.$("item-title").value = "Second title";
   t.$("item-title").blur();
-  await t.shell.refresh();
+  t.app.holdNextState();
+  const refresh = t.shell.refresh();
+  await t.settle();
 
   t.app.releaseRename();
   await first;
   await t.settle();
+  t.app.releaseState();
+  await refresh;
 
   assert.equal(t.shell.view().session.items[0].title, "Second title");
   assert.equal(t.$("item-title").value, "Second title");

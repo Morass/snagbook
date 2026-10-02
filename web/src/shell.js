@@ -387,18 +387,17 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       if (id === selected) t.value = it?.title ?? "";
       return;
     }
-    if (it.title !== expectedTitle) {
-      if (titleFor === id && titleForToken === itemToken) {
+    if (!title) {
+      if (id === selected) t.value = it.title;
+      return;
+    }
+    if (title === expectedTitle) {
+      if (it.title !== expectedTitle && titleFor === id && titleForToken === itemToken) {
         if (id === selected) t.value = it.title;
         titleForTitle = it.title;
       }
       return;
     }
-    if (!title) {
-      if (id === selected) t.value = it.title;
-      return;
-    }
-    if (title === it.title) return;
     const applied = await callView("rename_item", { sessionId, openToken, itemToken, id, expectedTitle, title });
     if (applied && titleFor === id && titleForToken === it.itemToken && t.value.trim() !== title) {
       titleForTitle = title;
