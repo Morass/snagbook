@@ -676,7 +676,7 @@ fn target_item(a: &mut App) -> Res<i64> {
 /// pasted meanwhile would otherwise be given the same name and be overwritten.
 fn hold_clip_name(s: &Session, id: i64) -> Res<PathBuf> {
     let (_, path) = s.reserve_media_name(id, "clip", "mp4").map_err(err)?;
-    std::fs::write(&path, b"").map_err(|e| e.to_string())?;
+    std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| e.to_string())?;
     Ok(path)
 }
 
@@ -686,9 +686,16 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
     let id = target_item(&mut a)?;
     let cap = a.store.config.capture.clone();
     let path = hold_clip_name(a.session()?, id)?;
-    let (session, session_id, session_identity, item_identity, session_name) = {
+    let (session, session_id, session_identity, item_identity, media_identity, session_name) = {
         let s = a.session()?;
-        (s.dir.clone(), s.manifest.id.clone(), s.folder_identity(), s.item_identity(id).map_err(err)?, s.display_path.clone())
+        (
+            s.dir.clone(),
+            s.manifest.id.clone(),
+            s.folder_identity(),
+            s.item_identity(id).map_err(err)?,
+            s.media_identity(id).map_err(err)?,
+            s.display_path.clone(),
+        )
     };
     app.state::<Busy>().add(&session, id);
     drop(a);
@@ -703,7 +710,7 @@ fn begin_recording(app: &AppHandle, center: (i32, i32), rect: (u32, u32, u32, u3
         max_stills: cap.max_stills,
         ffmpeg: record::find_ffmpeg(),
         source: format!("region {w}×{h} at {x},{y}"),
-        destination: Some((path.parent().and_then(Path::parent).ok_or("no item folder")?.to_path_buf(), item_identity.clone())),
+        destination: Some((path.parent().ok_or("no media folder")?.to_path_buf(), media_identity)),
         finish_timeout: std::time::Duration::from_secs(60),
     };
     let stop = record::Stop::new();

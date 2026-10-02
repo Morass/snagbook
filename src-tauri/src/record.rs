@@ -320,13 +320,20 @@ fn destination_current(destination: &Option<(PathBuf, FolderIdentity)>) -> bool 
 }
 
 fn require_destination(destination: &Option<(PathBuf, FolderIdentity)>) -> Result<(), String> {
-    destination_current(destination).then_some(()).ok_or_else(|| "the recording's item folder is gone or was replaced".into())
+    destination_current(destination).then_some(()).ok_or_else(|| "the recording's media folder is gone or was replaced".into())
 }
 
 fn write_new(path: &Path, data: &[u8]) -> Result<(), String> {
     let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| e.to_string())?;
     output.write_all(data).map_err(|e| e.to_string())?;
     output.flush().map_err(|e| e.to_string())
+}
+
+fn copy_new(source: &Path, target: &Path) -> Result<(), String> {
+    let mut input = std::fs::File::open(source).map_err(|e| e.to_string())?;
+    let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| e.to_string())?;
+    std::io::copy(&mut input, &mut output).and_then(|_| output.flush()).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn commit_encoded(temp: &Path, target: &Path, destination: &Option<(PathBuf, FolderIdentity)>) -> Result<(), String> {
@@ -374,18 +381,34 @@ fn thin(thumbs: &mut Vec<(f64, RgbaImage)>) {
 pub fn run(grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Arc<Stop>) -> Result<Finished, String> {
     let (dir, stem) = (plan.dir.clone(), plan.stem.clone());
     let destination = plan.destination.clone();
-    let result = record(grab, plan, stop);
+    let frames_dir = dir.join(format!("{stem}-frames"));
+    let mut frames_identity = None;
+    let result = (|| {
+        require_destination(&destination)?;
+        std::fs::create_dir(&frames_dir).map_err(|e| e.to_string())?;
+        let identity = FolderIdentity::from_path(&frames_dir).map_err(|e| e.to_string())?;
+        frames_identity = Some(identity.clone());
+        record(grab, plan, stop, &frames_dir, &identity)
+    })();
     if result.is_err() && destination_current(&destination) {
         let placeholder = dir.join(format!("{stem}.mp4"));
         if std::fs::metadata(&placeholder).map(|m| m.len() == 0).unwrap_or(false) {
             let _ = std::fs::remove_file(&placeholder);
         }
-        let _ = std::fs::remove_dir_all(dir.join(format!("{stem}-frames")));
+        if frames_identity.as_ref().is_some_and(|identity| identity.matches_path(&frames_dir)) {
+            let _ = std::fs::remove_dir_all(&frames_dir);
+        }
     }
     result
 }
 
-fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop: Arc<Stop>) -> Result<Finished, String> {
+fn record(
+    mut grab: impl FnMut() -> Result<RgbaImage, String>,
+    plan: Plan,
+    stop: Arc<Stop>,
+    frames_dir: &Path,
+    frames_identity: &FolderIdentity,
+) -> Result<Finished, String> {
     require_destination(&plan.destination)?;
     let first = grab()?;
     let src = first.dimensions();
@@ -446,10 +469,10 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
             Some(done_rx)
         }
     };
-    let frames_dir = plan.dir.join(format!("{}-frames", plan.stem));
     require_destination(&plan.destination)?;
-    let _ = std::fs::remove_dir_all(&frames_dir);
-    std::fs::create_dir_all(&frames_dir).map_err(|e| e.to_string())?;
+    if !frames_identity.matches_path(frames_dir) {
+        return Err("the recording's frames folder is gone or was replaced".into());
+    }
     let mut stills: Vec<(f64, PathBuf)> = vec![];
     let mut thumbs: Vec<(f64, RgbaImage)> = vec![];
     // Every half second at first; a long recording keeps fewer, further apart, so their
@@ -475,6 +498,9 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
     };
     loop {
         require_destination(&plan.destination)?;
+        if !frames_identity.matches_path(frames_dir) {
+            return Err("the recording's frames folder is gone or was replaced".into());
+        }
         let t = start.elapsed().as_secs_f64();
         if frame.dimensions() == src {
             // The video keeps the wall clock: a slow grab repeats the frame instead of
@@ -487,7 +513,7 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
             last_good = frame.clone();
             if stills.last().map_or(true, |(s, _)| t - s >= 1.0 - 0.5 / fps as f64) {
                 let p = frames_dir.join(format!("t{:06}.jpg", stills.len()));
-                std::fs::write(&p, jpeg(&fit(&frame, 1568), 72)?).map_err(|e| e.to_string())?;
+                write_new(&p, &jpeg(&fit(&frame, 1568), 72)?)?;
                 stills.push((t, p));
             }
             if thumbs.last().map_or(true, |(s, _)| t - s >= thumb_every - 0.5 / fps as f64) {
@@ -552,13 +578,19 @@ fn record(mut grab: impl FnMut() -> Result<RgbaImage, String>, plan: Plan, stop:
 
     // The stills that are kept: the macOS app's times, each from the nearest second taken.
     require_destination(&plan.destination)?;
+    if !frames_identity.matches_path(frames_dir) {
+        return Err("the recording's frames folder is gone or was replaced".into());
+    }
     let have: Vec<f64> = stills.iter().map(|s| s.0).collect();
     let mut kept = vec![];
     for (i, want) in capture_math::still_times(duration, plan.max_stills).into_iter().enumerate() {
         require_destination(&plan.destination)?;
+        if !frames_identity.matches_path(frames_dir) {
+            return Err("the recording's frames folder is gone or was replaced".into());
+        }
         let Some(j) = nearest(&have, want) else { continue };
         let name = format!("{:04}.jpg", i + 1);
-        std::fs::copy(&stills[j].1, frames_dir.join(&name)).map_err(|e| e.to_string())?;
+        copy_new(&stills[j].1, &frames_dir.join(&name))?;
         kept.push(Still { time: (have[j] * 10.0).round() / 10.0, file: format!("{}-frames/{name}", plan.stem) });
     }
     for (_, p) in &stills {
@@ -849,15 +881,15 @@ mod tests {
         let mut session = snagbook_core::Session::create_now(&root.path().to_string_lossy(), &snagbook_core::Config::default()).unwrap();
         let id = session.add_item(None, chrono::Utc::now()).unwrap().id;
         let item_dir = session.item_dir(id).unwrap();
-        let identity = session.item_identity(id).unwrap();
         let media = session.media_dir(id).unwrap();
         std::fs::create_dir(&media).unwrap();
+        let identity = session.media_identity(id).unwrap();
         let stop = Stop::new();
         let request = stop.clone();
         let held = session.dir.join("held-recording-item");
         let replacement_frames = media.join("clip-001-frames");
         let mut grabs = 0;
-        let plan = Plan { dir: media, stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), destination: Some((item_dir.clone(), identity)), finish_timeout: Duration::from_secs(60) };
+        let plan = Plan { dir: media.clone(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), destination: Some((media, identity)), finish_timeout: Duration::from_secs(60) };
 
         let result = run(|| {
             grabs += 1;
@@ -876,14 +908,66 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_replacement_media_folder_stops_recording_without_cleaning_its_files() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut session = snagbook_core::Session::create_now(&root.path().to_string_lossy(), &snagbook_core::Config::default()).unwrap();
+        let id = session.add_item(None, chrono::Utc::now()).unwrap().id;
+        let media = session.media_dir(id).unwrap();
+        std::fs::create_dir(&media).unwrap();
+        let identity = session.media_identity(id).unwrap();
+        let held = session.dir.join("held-recording-media");
+        let victim = session.dir.join("replacement-media-target");
+        let replacement_frames = victim.join("clip-001-frames");
+        let stop = Stop::new();
+        let request = stop.clone();
+        let mut grabs = 0;
+        let plan = Plan { dir: media.clone(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: None, source: "test".into(), destination: Some((media.clone(), identity)), finish_timeout: Duration::from_secs(60) };
+
+        let result = run(|| {
+            grabs += 1;
+            if grabs == 2 {
+                std::fs::rename(&media, &held).unwrap();
+                std::fs::create_dir_all(&replacement_frames).unwrap();
+                std::fs::write(replacement_frames.join("keep.jpg"), b"replacement").unwrap();
+                symlink(&victim, &media).unwrap();
+                request.request();
+            }
+            Ok(RgbaImage::from_pixel(10, 10, Rgba([1, 2, 3, 255])))
+        }, plan, stop);
+
+        assert!(result.err().unwrap().contains("replaced"));
+        assert_eq!(std::fs::read(replacement_frames.join("keep.jpg")).unwrap(), b"replacement");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copying_a_still_refuses_a_symlinked_destination() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.jpg");
+        let victim = dir.path().join("victim.jpg");
+        let target = dir.path().join("0001.jpg");
+        std::fs::write(&source, b"new still").unwrap();
+        std::fs::write(&victim, b"keep target").unwrap();
+        symlink(&victim, &target).unwrap();
+
+        assert!(copy_new(&source, &target).is_err());
+        assert_eq!(std::fs::read(victim).unwrap(), b"keep target");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_delayed_encoder_cannot_overwrite_a_replacement_items_video() {
         let root = tempfile::tempdir().unwrap();
         let mut session = snagbook_core::Session::create_now(&root.path().to_string_lossy(), &snagbook_core::Config::default()).unwrap();
         let id = session.add_item(None, chrono::Utc::now()).unwrap().id;
         let item_dir = session.item_dir(id).unwrap();
-        let identity = session.item_identity(id).unwrap();
         let media = session.media_dir(id).unwrap();
         std::fs::create_dir(&media).unwrap();
+        let identity = session.media_identity(id).unwrap();
         std::fs::write(media.join("clip-001.mp4"), b"").unwrap();
         let started = root.path().join("encoder-started");
         let release = root.path().join("encoder-release");
@@ -896,7 +980,7 @@ mod tests {
         let stop = Stop::new();
         let request = stop.clone();
         let mut replaced = false;
-        let plan = Plan { dir: media, stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(ffmpeg), source: "test".into(), destination: Some((item_dir.clone(), identity)), finish_timeout: Duration::from_secs(5) };
+        let plan = Plan { dir: media.clone(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(ffmpeg), source: "test".into(), destination: Some((media, identity)), finish_timeout: Duration::from_secs(5) };
 
         let result = run(|| {
             if started.exists() && !replaced {
@@ -920,10 +1004,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut session = snagbook_core::Session::create_now(&root.path().to_string_lossy(), &snagbook_core::Config::default()).unwrap();
         let id = session.add_item(None, chrono::Utc::now()).unwrap().id;
-        let item_dir = session.item_dir(id).unwrap();
-        let identity = session.item_identity(id).unwrap();
         let media = session.media_dir(id).unwrap();
         std::fs::create_dir(&media).unwrap();
+        let identity = session.media_identity(id).unwrap();
         let video = media.join("clip-001.mp4");
         std::fs::write(&video, b"").unwrap();
         let started = root.path().join("occupied-encoder-started");
@@ -935,7 +1018,7 @@ mod tests {
         let stop = Stop::new();
         let request = stop.clone();
         let mut occupied = false;
-        let plan = Plan { dir: media, stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(ffmpeg), source: "test".into(), destination: Some((item_dir, identity)), finish_timeout: Duration::from_secs(5) };
+        let plan = Plan { dir: media.clone(), stem: "clip-001".into(), fps: 15, max_long_edge: 1920, max_stills: 60, ffmpeg: Some(ffmpeg), source: "test".into(), destination: Some((media, identity)), finish_timeout: Duration::from_secs(5) };
 
         let finished = run(|| {
             if started.exists() && !occupied {

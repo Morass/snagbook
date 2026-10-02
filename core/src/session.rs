@@ -139,6 +139,10 @@ fn child_folder(dir: &Path, name: &str) -> Result<PathBuf> {
 pub struct FolderIdentity(Arc<same_file::Handle>);
 
 impl FolderIdentity {
+    pub fn from_path(path: &Path) -> Result<Self> {
+        Ok(Self(Arc::new(same_file::Handle::from_path(path)?)))
+    }
+
     pub fn matches_path(&self, path: &Path) -> bool {
         same_file::Handle::from_path(path).ok().is_some_and(|current| current == *self.0)
     }
@@ -271,7 +275,7 @@ impl Session {
     }
 
     pub fn item_identity(&self, id: i64) -> Result<FolderIdentity> {
-        Ok(FolderIdentity(Arc::new(same_file::Handle::from_path(self.item_dir(id)?)?)))
+        FolderIdentity::from_path(&self.item_dir(id)?)
     }
 
     pub fn matches_item_identity(&self, id: i64, expected: &FolderIdentity) -> bool {
@@ -343,6 +347,18 @@ impl Session {
 
     pub fn media_dir(&self, id: i64) -> Result<PathBuf> {
         Ok(self.item_dir(id)?.join(MEDIA_NAME))
+    }
+
+    pub fn media_identity(&self, id: i64) -> Result<FolderIdentity> {
+        let media = self.media_dir(id)?;
+        match fs::symlink_metadata(&media) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Err(SnagError::Io(format!("The media folder of item {id} is a symbolic link.")))
+            }
+            Ok(metadata) if metadata.is_dir() => FolderIdentity::from_path(&media),
+            Ok(_) => Err(SnagError::Io(format!("The media folder of item {id} is not a directory."))),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Add an item after the others. With no title it is "Item N".
