@@ -521,6 +521,18 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: victim, encoding: .utf8), "keep target")
     }
 
+    func testAnnotationCannotBindAHardLinkedPicture() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        let relative = try s.saveMedia(item.id, data: Data("picture".utf8), prefix: "shot", ext: "png")
+        let picture = try s.mediaFileURL(item.id, relative: relative)
+        let outside = s.url.deletingLastPathComponent().appendingPathComponent("hard-linked-picture.png")
+        try FileManager.default.linkItem(at: picture, to: outside)
+
+        XCTAssertThrowsError(try s.mediaFileURL(item.id, relative: relative))
+        XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "picture")
+    }
+
     func testRenameDoesNotModifyAReplacementItemFolder() throws {
         let s = try Session.create(root: root, config: Config())
         let item = try s.addItem()

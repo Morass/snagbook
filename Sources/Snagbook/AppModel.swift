@@ -451,12 +451,9 @@ final class AppModel: ObservableObject {
         // editorReady() puts the current item back once the page has reloaded.
     }
 
-    /// An item's file for the editor's media URLs; nil if it escapes the item folder.
+    /// An item's file for the editor's media URLs; nil if it is outside the media folder.
     func fileURL(item id: Int, relative: String) -> URL? {
-        guard let session, let dir = try? session.itemURL(id) else { return nil }
-        let u = dir.appendingPathComponent(relative).standardizedFileURL
-        guard u.path.hasPrefix(dir.standardizedFileURL.path + "/") else { return nil }
-        return u
+        try? session?.mediaFileURL(id, relative: relative)
     }
 
     // MARK: - media

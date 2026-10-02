@@ -110,6 +110,13 @@ enum SelfTest {
             """) as? String ?? ""
         check(loaded.hasPrefix("320,"), "the editor loads the picture through its media URL (\(loaded))")
         check(loaded.hasSuffix(",-1,-1"), "media URLs refuse paths outside the item and unknown items")
+        let mediaVictim = session.url.deletingLastPathComponent().appendingPathComponent("selftest-media-victim.png")
+        let mediaLink = try! session.mediaURL(first).appendingPathComponent("linked-outside.png")
+        try? png.write(to: mediaVictim)
+        try? FileManager.default.createSymbolicLink(at: mediaLink, withDestinationURL: mediaVictim)
+        check(model.fileURL(item: first, relative: "media/linked-outside.png") == nil, "media URLs refuse symlinks outside the item")
+        try? FileManager.default.removeItem(at: mediaLink)
+        try? FileManager.default.removeItem(at: mediaVictim)
 
         // 7. A screenshot goes through the mark-up window and keeps its original.
         _ = try? model.screenshotTaken(testImage(400, 240, hue: 0.1), source: "selftest")

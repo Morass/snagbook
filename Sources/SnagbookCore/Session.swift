@@ -221,6 +221,8 @@ public final class Session {
         }
         let file = try mediaURL(id).appendingPathComponent(parts[1])
         if (try? fm.destinationOfSymbolicLink(atPath: file.path)) != nil { throw SnagError.mediaChanged(relative) }
+        if let count = (try? fm.attributesOfItem(atPath: file.path)[.referenceCount]) as? NSNumber,
+           count.intValue > 1 { throw SnagError.mediaChanged(relative) }
         return file
     }
     public func itemIdentity(_ id: Int) throws -> String? {
