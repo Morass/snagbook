@@ -9,7 +9,7 @@ mod record;
 use base64::Engine;
 use chrono::Utc;
 use serde::Serialize;
-use snagbook_core::{Config, ConfigStore, FolderIdentity, HandoffStyle, Paths, Session, Shortcuts, SnagError, Summary, Template};
+use snagbook_core::{Config, ConfigStore, FolderIdentity, HandoffStyle, Naming, Paths, Session, Shortcuts, SnagError, Summary, Template};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -664,6 +664,20 @@ fn release_capture(busy: &Busy, session_path: &Path, item: i64, item_identity: F
     None
 }
 
+fn rename_probe(session: Option<&Session>, item: i64) -> String {
+    let Some(s) = session else { return "no current session".into() };
+    let Ok(record) = s.item(item) else { return "no current item".into() };
+    let target = Naming::item_folder(item, &record.title);
+    let mut entries = std::fs::read_dir(&s.dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<Vec<_>>();
+    entries.sort();
+    format!("current {}; target {target} exists: {}; entries: {}", record.folder, s.dir.join(&target).exists(), entries.join(", "))
+}
+
 #[derive(Default)]
 struct Recorder(Mutex<Option<Active>>);
 
@@ -921,6 +935,7 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
     let session_id = pending.session_id.clone();
     let item = pending.item;
     let identity_matches = a.session.as_ref().is_some_and(|s| s.manifest.id == session_id && s.matches_item_identity(item, &pending.item_identity));
+    let before_rename = rename_probe(a.session.as_ref(), item);
     let item_identity = pending.item_identity;
     let busy = app.state::<Busy>();
     let busy_before = busy.count(&session_path, item);
@@ -932,9 +947,10 @@ fn capture_filed(app: AppHandle, window: tauri::Window, st: St, ack: String, ins
         a.session.as_mut().filter(|s| s.manifest.id == session_id),
     );
     *app.state::<CaptureTrace>().0.lock().unwrap() = format!(
-        "{}; holds {busy_before}->{}; current item matched: {identity_matches}",
+        "{}; holds {busy_before}->{}; current item matched: {identity_matches}; before: {before_rename}; after: {}",
         pending.link,
         busy.count(&session_path, item),
+        rename_probe(a.session.as_ref(), item),
     );
     if let Some(warning) = rename_warning {
         if selftest_requested() {
