@@ -496,6 +496,17 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: victimNote, encoding: .utf8), "keep target")
     }
 
+    func testSavingMediaCannotFollowASymlinkedMediaDirectory() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        let victim = s.url.deletingLastPathComponent().appendingPathComponent("media-symlink-victim")
+        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: try s.mediaURL(item.id), withDestinationURL: victim)
+
+        XCTAssertThrowsError(try s.saveMedia(item.id, data: Data("outside".utf8), prefix: "image", ext: "png"))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: victim.path), [])
+    }
+
     func testRenameDoesNotModifyAReplacementItemFolder() throws {
         let s = try Session.create(root: root, config: Config())
         let item = try s.addItem()

@@ -576,11 +576,13 @@ public final class Session {
     }
 
     private func ensureMediaDirectory(_ id: Int, _ directory: URL) throws {
+        if (try? fm.destinationOfSymbolicLink(atPath: directory.path)) != nil {
+            throw SnagError.mediaChanged(Self.mediaName)
+        }
         var isDirectory: ObjCBool = false
         if fm.fileExists(atPath: directory.path, isDirectory: &isDirectory) {
             if isDirectory.boolValue { return }
-            try fm.createDirectory(at: directory, withIntermediateDirectories: false)
-            return
+            throw SnagError.mediaChanged(Self.mediaName)
         }
         if try readNote(id).contains(Self.mediaName + "/") {
             throw SnagError.mediaChanged(Self.mediaName)
