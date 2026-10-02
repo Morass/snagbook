@@ -550,8 +550,14 @@ impl Session {
             return Err(SnagError::Io(format!("The folder of item {id} is gone.")));
         }
         let media = item.join(MEDIA_NAME);
-        if !media.is_dir() {
-            fs::create_dir(&media)?;
+        match fs::symlink_metadata(&media) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(SnagError::Io(format!("The media folder of item {id} is a symbolic link.")));
+            }
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Err(SnagError::Io(format!("The media folder of item {id} is not a directory."))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir(&media)?,
+            Err(error) => return Err(error.into()),
         }
         let existing: HashSet<String> = names_in(&media).into_iter().collect();
         let name = Naming::next_media_name(prefix, &ext.to_lowercase(), &existing);

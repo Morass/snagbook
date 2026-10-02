@@ -258,6 +258,22 @@ fn adding_an_item_cannot_reuse_a_symlinked_destination() {
     assert_eq!(fs::read_to_string(victim.join("notes.md")).unwrap(), "keep target");
 }
 
+#[cfg(unix)]
+#[test]
+fn saving_media_cannot_follow_a_symlinked_media_directory() {
+    use std::os::unix::fs::symlink;
+
+    let e = env();
+    let mut s = new(&e);
+    let item = add(&mut s);
+    let victim = s.dir.parent().unwrap().join("media-symlink-victim");
+    fs::create_dir(&victim).unwrap();
+    symlink(&victim, s.item_dir(item.id).unwrap().join("media")).unwrap();
+
+    assert!(s.save_media(item.id, b"outside", "image", "png").is_err());
+    assert!(fs::read_dir(victim).unwrap().next().is_none());
+}
+
 #[test]
 fn write_note_keeps_front_matter_and_updates_readme() {
     let e = env();
