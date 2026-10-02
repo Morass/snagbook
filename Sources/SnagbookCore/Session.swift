@@ -206,7 +206,21 @@ public final class Session {
 
     public func itemURL(_ id: Int) throws -> URL { try itemFolderURL(item(id).folder) }
     public func noteURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.noteName) }
-    public func mediaURL(_ id: Int) throws -> URL { try itemURL(id).appendingPathComponent(Self.mediaName, isDirectory: true) }
+    public func mediaURL(_ id: Int) throws -> URL {
+        let media = try itemURL(id).appendingPathComponent(Self.mediaName, isDirectory: true)
+        if (try? fm.destinationOfSymbolicLink(atPath: media.path)) != nil { throw SnagError.mediaChanged(Self.mediaName) }
+        return media
+    }
+
+    public func mediaFileURL(_ id: Int, relative: String) throws -> URL {
+        let path = relative as NSString
+        let parts = path.pathComponents
+        guard !relative.utf8.contains(0), parts.count == 2, parts[0] == Self.mediaName,
+              parts[1] == path.lastPathComponent, !path.isAbsolutePath else {
+            throw SnagError.mediaChanged(relative)
+        }
+        return try mediaURL(id).appendingPathComponent(parts[1])
+    }
     public func itemIdentity(_ id: Int) throws -> String? {
         Self.identity(of: try itemURL(id))
     }

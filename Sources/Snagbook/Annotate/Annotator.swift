@@ -81,11 +81,10 @@ final class Annotator: NSObject, NSWindowDelegate, ObservableObject {
                 throw SnagError.noSuchItem(item)
             }
             let session = try source.reopenedMatchingItem(item, identity: itemIdentity, fallbackHeader: model.config.header)
-            let itemDir = try session.itemURL(item)
-            let fileURL = itemDir.appendingPathComponent(relative)
             let comp = MarkDocument.companions(of: relative)
-            let origURL = itemDir.appendingPathComponent(comp.orig)
-            let marksURL = itemDir.appendingPathComponent(comp.marks)
+            let fileURL = try session.mediaFileURL(item, relative: relative)
+            let origURL = try session.mediaFileURL(item, relative: comp.orig)
+            let marksURL = try session.mediaFileURL(item, relative: comp.marks)
             let pictureBinding = try Session.bindFile(fileURL)
             let origBinding = FileManager.default.fileExists(atPath: origURL.path) ? try Session.bindFile(origURL) : nil
             let marksBinding = FileManager.default.fileExists(atPath: marksURL.path) ? try Session.bindFile(marksURL) : nil

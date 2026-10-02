@@ -504,6 +504,7 @@ final class SessionTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: try s.mediaURL(item.id), withDestinationURL: victim)
 
         XCTAssertThrowsError(try s.saveMedia(item.id, data: Data("outside".utf8), prefix: "image", ext: "png"))
+        XCTAssertThrowsError(try s.mediaFileURL(item.id, relative: "media/victim.png"))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: victim.path), [])
     }
 
