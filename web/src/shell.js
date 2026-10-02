@@ -229,10 +229,21 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     await retryOriginCaptures();
   }
 
-  async function refresh({ select } = {}) {
+  async function applyReply(request, next, { select } = {}) {
+    if (request !== viewRequest) return false;
+    const wanted = typeof select === "function" ? select(next) : select;
+    await apply(next, { request, select: wanted });
+    return true;
+  }
+
+  async function callView(cmd, args = {}, options = {}) {
     const request = ++viewRequest;
-    const next = await call("state");
-    if (request === viewRequest) await apply(next, { request, select });
+    const next = await call(cmd, args);
+    return applyReply(request, next, options);
+  }
+
+  async function refresh({ select } = {}) {
+    return callView("state", {}, { select });
   }
 
   async function reloadOriginItem(origin) {
@@ -311,9 +322,10 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   async function newItem() {
     await flush();
     const before = new Set(items().map((i) => i.id));
+    const request = ++viewRequest;
     const v = await call("add_item", { title: null });
     const added = v.session.items.find((i) => !before.has(i.id));
-    await apply(v, { select: added?.id });
+    if (!(await applyReply(request, v, { select: added?.id }))) return;
     const t = $("item-title");
     t.focus();
     t.select();
@@ -335,10 +347,10 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     try {
       try { await flush({ required: true }); }
       catch { flash("The note could not be saved, so the session was not changed.", "error"); return false; }
+      const viewRequestId = ++viewRequest;
       const v = await request();
       if (!v) return false;
-      await apply(v);
-      return true;
+      return applyReply(viewRequestId, v);
     } finally { unlock(); }
   }
 
@@ -363,7 +375,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return;
     }
     if (title === it.title) return;
-    await apply(await call("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, expectedTitle: titleForTitle, title }));
+    await callView("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, expectedTitle: titleForTitle, title });
   }
 
   async function deleteItem(id) {
@@ -386,6 +398,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       }
       const index = items().findIndex((i) => i.id === id);
       let v;
+      let request = ++viewRequest;
       try {
         v = await call("delete_item", { sessionId, openToken, itemToken, id, permanently: false });
       } catch (e) {
@@ -400,13 +413,14 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) {
           return flash("The open session changed, so the item was not deleted.", "error");
         }
+        request = ++viewRequest;
         v = await call("delete_item", { sessionId, openToken, itemToken, id, permanently: true });
       }
       if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
       snag()?.forget?.(id);
       epoch++;
       const rest = v.session?.items || [];
-      await apply(v, { select: selected === id ? neighbour(rest, Math.max(0, index - 1)) : selected });
+      await applyReply(request, v, { select: selected === id ? neighbour(rest, Math.max(0, index - 1)) : selected });
     } finally {
       unlock();
     }
@@ -425,6 +439,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       catch { return flash("The note could not be saved, so the session was not deleted.", "error"); }
       if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return flash("The open session changed, so it was not deleted.", "error");
       let v;
+      let request = ++viewRequest;
       try {
         v = await call("delete_session", { sessionId, openToken, permanently: false });
       } catch (e) {
@@ -437,17 +452,18 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
         );
         if (!again) return;
         if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return flash("The open session changed, so it was not deleted.", "error");
+        request = ++viewRequest;
         v = await call("delete_session", { sessionId, openToken, permanently: true });
       }
       if (view?.session?.id !== sessionId || view?.session?.openToken !== openToken) return;
-      await apply(v);
+      await applyReply(request, v);
     } finally {
       unlock();
     }
   }
 
   async function moveItem(id, index) {
-    await apply(await call("move_item", { id, index }));
+    await callView("move_item", { id, index });
   }
 
   async function insertTemplate(t) {
@@ -898,13 +914,13 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const itemToken = it.itemToken;
     const t = await ask("Rename item", it.title);
     if (t != null && t.trim() && t.trim() !== it.title) {
-      await apply(await call("rename_item", { sessionId, openToken, itemToken, id: it.id, expectedTitle: it.title, title: t }));
+      await callView("rename_item", { sessionId, openToken, itemToken, id: it.id, expectedTitle: it.title, title: t });
     }
   }
 
   async function renameSession() {
     const t = await ask("Rename session", view.session.title);
-    if (t != null) await apply(await call("set_session_title", { title: t }));
+    if (t != null) await callView("set_session_title", { title: t });
   }
 
   async function editHeader() {
@@ -931,7 +947,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       text
     );
     const r = await modal("Session header", body, [{ label: "Cancel", value: false }, { label: "Save", value: true, primary: true }]);
-    if (r) await apply(await call("set_session_header", { header: mine.checked ? text.value : null }));
+    if (r) await callView("set_session_header", { header: mine.checked ? text.value : null });
   }
 
   async function settings() {
@@ -1005,8 +1021,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const templates = rows
       .filter((x) => x.label.value.trim())
       .map((x) => ({ id: x.id || undefined, icon: x.icon.value.trim(), label: x.label.value.trim(), body: x.body.value.replace(/\\n/g, "\n") }));
-    await apply(
-      await call("update_config", {
+    await callView(
+      "update_config",
+      {
         patch: {
           sessionsFolder: folder.value,
           folderFormat: format.value,
@@ -1017,7 +1034,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
           templates,
           shortcuts: { screenshot: kShot.value, record: kRec.value, newItem: kNew.value, showNotebook: kShow.value },
         },
-      })
+      }
     );
   }
 

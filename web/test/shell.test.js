@@ -8,7 +8,7 @@ import { rectFraction, formatElapsed } from "../src/rect.js";
 const html = readFileSync(new URL("../src/index.html", import.meta.url), "utf8").replace(/<script[^>]*><\/script>/, "");
 
 /// An in-memory stand-in for the app's commands.
-function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, holdSecondCaptureCheck = false, slowCaptureFiling = false, slowFiledReply = false, slowMedia = false, slowWrite = false, slowDelete = false, failCaptureFiling = false } = {}) {
+function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanInsert = true, slowCaptureCheck = false, holdSecondCaptureCheck = false, slowCaptureFiling = false, slowFiledReply = false, slowMedia = false, slowWrite = false, slowDelete = false, slowRename = false, failCaptureFiling = false } = {}) {
   const calls = [];
   const notes = new Map();
   let slowNote = null;
@@ -27,6 +27,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let releaseMedia;
   let releaseWrite;
   let releaseDelete;
+  let releaseRename;
+  let renameReached;
   let releaseSession;
   let holdSessionReply = false;
   let cancelFolderPick = false;
@@ -44,6 +46,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   const mediaGate = slowMedia ? new Promise((resolve) => { releaseMedia = resolve; }) : null;
   const writeGate = slowWrite ? new Promise((resolve) => { releaseWrite = resolve; }) : null;
   const deleteGate = slowDelete ? new Promise((resolve) => { releaseDelete = resolve; }) : null;
+  const renameGate = slowRename ? new Promise((resolve) => { releaseRename = resolve; }) : null;
+  const renameStarted = slowRename ? new Promise((resolve) => { renameReached = resolve; }) : null;
   const config = { templates: [{ id: "A", label: "Bug", icon: "🐞", body: "**Bug:** " }, { id: "B", label: "Idea", icon: "", body: "**Idea:** " }], header: "H", sessionsFolder: "~/Snagbook" };
   const captureOrigins = new Map();
   const sessionOrigins = new Map();
@@ -106,13 +110,18 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       session.nextItem = id + 1;
       return view();
     },
-    rename_item: ({ sessionId, openToken, itemToken, id, expectedTitle, title }) => {
+    rename_item: async ({ sessionId, openToken, itemToken, id, expectedTitle, title }) => {
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed, so the item was not renamed.";
       const it = session.items.find((i) => i.id === id);
       if (it?.itemToken !== itemToken) throw "The item changed, so it was not renamed.";
       if (it.title !== expectedTitle) throw "The item's title changed, so an older edit was not applied.";
       it.title = title;
-      return view();
+      const renamed = view();
+      if (renameGate) {
+        renameReached();
+        await renameGate;
+      }
+      return renamed;
     },
     delete_item: ({ sessionId, openToken, itemToken, id, permanently }) => {
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed.";
@@ -234,6 +243,8 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseMedia: () => releaseMedia?.(),
     releaseWrite: () => releaseWrite?.(),
     releaseDelete: () => releaseDelete?.(),
+    renameStarted: () => renameStarted,
+    releaseRename: () => releaseRename?.(),
     holdNextSession: () => { sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     holdNextState: () => { stateGate = new Promise((resolve) => { releaseState = resolve; }); },
     holdStaleNextState: () => {
@@ -438,6 +449,22 @@ test("a focused stale title cannot overwrite a newer title", async () => {
   assert.equal(t.shell.view().session.items[0].title, "Recorded item");
   assert.equal(t.$("item-title").value, "Recorded item");
   assert.equal(t.app.calls.filter(([cmd]) => cmd === "rename_item").length, renameCalls);
+});
+
+test("a delayed rename reply cannot replace a newer session", async () => {
+  const t = await setup({ session: true, slowRename: true });
+  const firstSession = t.shell.view().session.id;
+  t.$("item-title").value = "Delayed title";
+  const delayed = t.shell.renameSelected();
+  await t.app.renameStarted();
+
+  await t.shell.newSession();
+  const secondSession = t.shell.view().session.id;
+  assert.notEqual(secondSession, firstSession);
+  t.app.releaseRename();
+  await delayed;
+
+  assert.equal(t.shell.view().session.id, secondSession);
 });
 
 test("a pending title cannot rename a replacement item with the same number", async () => {
