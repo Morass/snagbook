@@ -324,9 +324,15 @@ fn require_destination(destination: &Option<(PathBuf, FolderIdentity)>) -> Resul
 }
 
 fn write_new(path: &Path, data: &[u8]) -> Result<(), String> {
+    write_new_bound(path, data).map(|_| ())
+}
+
+fn write_new_bound(path: &Path, data: &[u8]) -> Result<FolderIdentity, String> {
     let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| e.to_string())?;
+    let identity = FolderIdentity::from_file(&output).map_err(|e| e.to_string())?;
     output.write_all(data).map_err(|e| e.to_string())?;
-    output.flush().map_err(|e| e.to_string())
+    output.flush().map_err(|e| e.to_string())?;
+    Ok(identity)
 }
 
 fn copy_new(source: &Path, source_identity: &FolderIdentity, target: &Path) -> Result<(), String> {
@@ -337,6 +343,12 @@ fn copy_new(source: &Path, source_identity: &FolderIdentity, target: &Path) -> R
     let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| e.to_string())?;
     std::io::copy(&mut input, &mut output).and_then(|_| output.flush()).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn remove_bound_file(path: &Path, identity: &FolderIdentity, parent: &Path, parent_identity: &FolderIdentity) {
+    if parent_identity.matches_path(parent) && identity.matches_path(path) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn commit_encoded(temp: &Path, target: &Path, destination: &Option<(PathBuf, FolderIdentity)>) -> Result<(), String> {
@@ -516,8 +528,7 @@ fn record(
             last_good = frame.clone();
             if stills.last().map_or(true, |(s, _, _)| t - s >= 1.0 - 0.5 / fps as f64) {
                 let p = frames_dir.join(format!("t{:06}.jpg", stills.len()));
-                write_new(&p, &jpeg(&fit(&frame, 1568), 72)?)?;
-                let identity = FolderIdentity::from_path(&p).map_err(|e| e.to_string())?;
+                let identity = write_new_bound(&p, &jpeg(&fit(&frame, 1568), 72)?)?;
                 stills.push((t, p, identity));
             }
             if thumbs.last().map_or(true, |(s, _)| t - s >= thumb_every - 0.5 / fps as f64) {
@@ -597,8 +608,10 @@ fn record(
         copy_new(&stills[j].1, &stills[j].2, &frames_dir.join(&name))?;
         kept.push(Still { time: (have[j] * 10.0).round() / 10.0, file: format!("{}-frames/{name}", plan.stem) });
     }
-    for (_, p, _) in &stills {
-        if destination_current(&plan.destination) { let _ = std::fs::remove_file(p); }
+    for (_, p, identity) in &stills {
+        if destination_current(&plan.destination) {
+            remove_bound_file(p, identity, frames_dir, frames_identity);
+        }
     }
 
     // The app reserves "<stem>.mp4" with an empty file while recording; drop it unless it is
@@ -981,6 +994,29 @@ mod tests {
 
         assert!(copy_new(&source, &identity, &target).is_err());
         assert!(!target.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_still_cleanup_refuses_a_replaced_frames_folder() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let frames = dir.path().join("clip-001-frames");
+        let held = dir.path().join("held-frames");
+        let victim = dir.path().join("victim");
+        std::fs::create_dir(&frames).unwrap();
+        let parent_identity = FolderIdentity::from_path(&frames).unwrap();
+        let original = frames.join("t000000.jpg");
+        std::fs::write(&original, b"our still").unwrap();
+        let identity = FolderIdentity::from_path(&original).unwrap();
+        std::fs::rename(&frames, &held).unwrap();
+        std::fs::create_dir(&victim).unwrap();
+        std::fs::write(victim.join("t000000.jpg"), b"keep target").unwrap();
+        symlink(&victim, &frames).unwrap();
+
+        remove_bound_file(&original, &identity, &frames, &parent_identity);
+        assert_eq!(std::fs::read(victim.join("t000000.jpg")).unwrap(), b"keep target");
     }
 
     #[cfg(unix)]

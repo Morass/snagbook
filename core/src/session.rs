@@ -143,15 +143,16 @@ impl FolderIdentity {
         Ok(Self(Arc::new(same_file::Handle::from_path(path)?)))
     }
 
+    pub fn from_file(file: &fs::File) -> Result<Self> {
+        Ok(Self(Arc::new(same_file::Handle::from_file(file.try_clone()?)?)))
+    }
+
     pub fn matches_path(&self, path: &Path) -> bool {
         same_file::Handle::from_path(path).ok().is_some_and(|current| current == *self.0)
     }
 
     pub fn matches_file(&self, file: &fs::File) -> bool {
-        file.try_clone()
-            .ok()
-            .and_then(|clone| same_file::Handle::from_file(clone).ok())
-            .is_some_and(|current| current == *self.0)
+        Self::from_file(file).ok().is_some_and(|current| current == *self)
     }
 }
 
