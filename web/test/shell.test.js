@@ -33,6 +33,7 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   let sessionGate = null;
   let stateGate = null;
   let releaseState = null;
+  let staleState = false;
   let captureFilingBlocked = failCaptureFiling;
   let noteReadFailures = 0;
   const captureGate = slowCaptureCheck ? new Promise((resolve) => { releaseCaptureCheck = resolve; }) : null;
@@ -62,7 +63,12 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
   };
   const handlers = {
     state: async () => {
-      if (stateGate) { await stateGate; stateGate = null; }
+      const gate = stateGate;
+      const held = staleState ? view() : null;
+      stateGate = null;
+      staleState = false;
+      if (gate) await gate;
+      if (held) return held;
       return view();
     },
     list_sessions: () => list.map((s) => ({ ...s })),
@@ -229,6 +235,10 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
     releaseDelete: () => releaseDelete?.(),
     holdNextSession: () => { sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     holdNextState: () => { stateGate = new Promise((resolve) => { releaseState = resolve; }); },
+    holdStaleNextState: () => {
+      staleState = true;
+      stateGate = new Promise((resolve) => { releaseState = resolve; });
+    },
     releaseState: () => releaseState?.(),
     holdNextSessionReply: () => { holdSessionReply = true; sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
     cancelNextFolderPick: () => { cancelFolderPick = true; sessionGate = new Promise((resolve) => { releaseSession = resolve; }); },
@@ -555,6 +565,27 @@ test("refresh replaces the visible editor when the item lifetime changed", async
   const opened = t.editor.log.filter(([kind]) => kind === "open").at(-1)[1];
   assert.notEqual(opened.itemToken, oldToken);
   assert.equal(opened.markdown, "replacement\n");
+});
+
+test("an older refresh cannot overwrite newer session state", async () => {
+  const t = await setup({ session: true });
+  const before = t.shell.view().session;
+  const item = before.items[0];
+  t.app.holdStaleNextState();
+  const stale = t.shell.refresh();
+  await t.app.invoke("rename_item", {
+    sessionId: before.id,
+    openToken: before.openToken,
+    itemToken: item.itemToken,
+    id: item.id,
+    title: "Recorded item",
+  });
+
+  await t.shell.refresh();
+  t.app.releaseState();
+  await stale;
+
+  assert.equal(t.shell.view().session.items[0].title, "Recorded item");
 });
 
 test("a session can be deleted from its menu", async () => {

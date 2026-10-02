@@ -89,6 +89,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let originTail = Promise.resolve();
   let editorLocks = 0;
   let loadingUnlock = null;
+  let viewRequest = 0;
   const s = { view: () => view, selected: () => selected };
 
   function lockEditor() {
@@ -195,7 +196,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     else pendingCaptureAcks.delete(id);
   }
 
-  async function apply(v, { select } = {}) {
+  async function apply(v, { select, request } = {}) {
+    if (request == null) viewRequest++;
+    else if (request !== viewRequest) return;
     const newSession = v.session?.path !== shownPath || v.session?.openToken !== shownOpenToken;
     const oldIds = items().map((i) => i.id);
     const oldSelected = selected;
@@ -226,7 +229,9 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   }
 
   async function refresh() {
-    await apply(await call("state"));
+    const request = ++viewRequest;
+    const next = await call("state");
+    if (request === viewRequest) await apply(next, { request });
   }
 
   async function reloadOriginItem(origin) {
