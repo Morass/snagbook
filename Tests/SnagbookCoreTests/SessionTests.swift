@@ -463,6 +463,23 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: victim.appendingPathComponent(Session.noteName), encoding: .utf8), "keep me")
     }
 
+    func testNullSuffixedParentPathCannotEscapeItsSession() throws {
+        let s = try Session.create(root: root, config: Config())
+        let item = try s.addItem()
+        let parentNote = s.url.deletingLastPathComponent().appendingPathComponent(Session.noteName)
+        try Data("keep parent".utf8).write(to: parentNote)
+        let manifestURL = s.url.appendingPathComponent(Session.manifestName)
+        var json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any])
+        var items = try XCTUnwrap(json["items"] as? [[String: Any]])
+        items[0]["folder"] = "..\u{0}"
+        json["items"] = items
+        try JSONSerialization.data(withJSONObject: json).write(to: manifestURL)
+        let corrupt = try Session.open(s.url.path)
+
+        try corrupt.deleteItem(item.id)
+        XCTAssertEqual(try String(contentsOf: parentNote, encoding: .utf8), "keep parent")
+    }
+
     func testRenameDoesNotModifyAReplacementItemFolder() throws {
         let s = try Session.create(root: root, config: Config())
         let item = try s.addItem()

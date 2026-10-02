@@ -193,10 +193,13 @@ public final class Session {
 
     private func itemFolderURL(_ folder: String) throws -> URL {
         let path = folder as NSString
-        guard !folder.isEmpty, folder != ".", folder != "..", !path.isAbsolutePath, path.pathComponents.count == 1 else {
+        let candidate = url.appendingPathComponent(folder, isDirectory: true)
+        guard !folder.isEmpty, !folder.utf8.contains(0), folder != ".", folder != "..", !path.isAbsolutePath,
+              path.pathComponents.count == 1,
+              candidate.deletingLastPathComponent().standardizedFileURL == url.standardizedFileURL else {
             throw SnagError.badName(folder)
         }
-        return url.appendingPathComponent(folder, isDirectory: true)
+        return candidate
     }
 
     public func itemURL(_ id: Int) throws -> URL { try itemFolderURL(item(id).folder) }
