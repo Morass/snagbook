@@ -123,7 +123,13 @@ fn names_in(dir: &Path) -> Vec<String> {
 fn child_folder(dir: &Path, name: &str) -> Result<PathBuf> {
     let mut components = Path::new(name).components();
     match (components.next(), components.next()) {
-        (Some(Component::Normal(_)), None) => Ok(dir.join(name)),
+        (Some(Component::Normal(_)), None) => {
+            let path = dir.join(name);
+            if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+                return Err(SnagError::Io(format!("The item folder {name:?} is a symbolic link.")));
+            }
+            Ok(path)
+        }
         _ => Err(SnagError::Io(format!("The item folder name {name:?} is unsafe."))),
     }
 }
@@ -287,7 +293,8 @@ impl Session {
                 continue;
             }
             let Some(num) = Naming::folder_number(&name) else { continue };
-            let note = self.dir.join(&name).join(NOTE_NAME);
+            let Ok(folder) = child_folder(&self.dir, &name) else { continue };
+            let note = folder.join(NOTE_NAME);
             if !note.is_file() || self.manifest.items.iter().any(|r| r.id == num) {
                 continue;
             }

@@ -200,6 +200,26 @@ fn an_item_path_cannot_escape_its_session() {
     assert_eq!(fs::read_to_string(victim.join("notes.md")).unwrap(), "keep me");
 }
 
+#[cfg(unix)]
+#[test]
+fn an_item_directory_symlink_cannot_escape_its_session() {
+    use std::os::unix::fs::symlink;
+
+    let e = env();
+    let mut s = new(&e);
+    let item = add(&mut s);
+    let item_dir = s.item_dir(item.id).unwrap();
+    let victim = s.dir.parent().unwrap().join("symlink-victim");
+    fs::create_dir(&victim).unwrap();
+    fs::write(victim.join("notes.md"), "keep target").unwrap();
+    fs::remove_dir_all(&item_dir).unwrap();
+    symlink(&victim, &item_dir).unwrap();
+    let mut corrupt = Session::open(&path(&s), "").unwrap();
+
+    assert!(corrupt.write_note(item.id, "must stay inside").is_err());
+    assert_eq!(fs::read_to_string(victim.join("notes.md")).unwrap(), "keep target");
+}
+
 #[test]
 fn write_note_keeps_front_matter_and_updates_readme() {
     let e = env();
