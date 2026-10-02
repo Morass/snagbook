@@ -261,7 +261,7 @@ export async function runSelfTest(shell, invoke) {
     check(pasted === "media/clip-002.mp4", "a video pasted during the recording gets its own name: " + pasted);
     // Renaming the item while it records: its folder keeps its name until the recording ends.
     const folderBefore = items().find((i) => i.id === 1)?.folder;
-    await invoke("rename_item", { id: 1, title: "Recorded item" });
+    await invoke("rename_item", { ...sessionArgs(1), title: "Recorded item" });
     await shell.refresh();
     check(items().find((i) => i.id === 1)?.folder === folderBefore, "renaming an item while it records keeps its folder for now: " + folderBefore);
     let bar = null;
