@@ -106,10 +106,11 @@ function fakeApp({ platform = "linux", trash = true, sessions = [], captureCanIn
       session.nextItem = id + 1;
       return view();
     },
-    rename_item: ({ sessionId, openToken, itemToken, id, title }) => {
+    rename_item: ({ sessionId, openToken, itemToken, id, expectedTitle, title }) => {
       if (session?.id !== sessionId || session?.openToken !== openToken) throw "The open session changed, so the item was not renamed.";
       const it = session.items.find((i) => i.id === id);
       if (it?.itemToken !== itemToken) throw "The item changed, so it was not renamed.";
+      if (it.title !== expectedTitle) throw "The item's title changed, so an older edit was not applied.";
       it.title = title;
       return view();
     },
@@ -404,7 +405,7 @@ test("typing a title and pressing Enter renames the item", async () => {
   t.key(t.$("item-title"), { key: "Enter" });
   await t.settle();
   assert.equal(t.shell.view().session.items[0].title, "Main menu");
-  assert.ok(t.app.calls.some(([c, a]) => c === "rename_item" && a.title === "Main menu"));
+  assert.ok(t.app.calls.some(([c, a]) => c === "rename_item" && a.expectedTitle === "Item 1" && a.title === "Main menu"));
 });
 
 test("an empty title is refused and the old one comes back", async () => {
@@ -447,6 +448,7 @@ test("the item menu binds Rename to the item that opened the dialog", async () =
     openToken: source.openToken,
     itemToken: source.items[0].itemToken,
     id: 1,
+    expectedTitle: "Item 1",
     title: "From menu",
   });
 });
@@ -578,6 +580,7 @@ test("an older refresh cannot overwrite newer session state", async () => {
     openToken: before.openToken,
     itemToken: item.itemToken,
     id: item.id,
+    expectedTitle: item.title,
     title: "Recorded item",
   });
 

@@ -232,7 +232,7 @@ fn add_item(st: St, title: Option<String>) -> Res<View> {
 }
 
 #[tauri::command]
-fn rename_item(app: AppHandle, st: St, session_id: String, open_token: String, item_token: String, id: i64, title: String) -> Res<View> {
+fn rename_item(app: AppHandle, st: St, session_id: String, open_token: String, item_token: String, id: i64, expected_title: String, title: String) -> Res<View> {
     let mut a = st.lock().unwrap();
     if a.session.as_ref().is_none_or(|s| s.manifest.id != session_id || s.open_token != open_token) {
         return Err("The open session changed, so the item was not renamed.".into());
@@ -240,6 +240,9 @@ fn rename_item(app: AppHandle, st: St, session_id: String, open_token: String, i
     let item_identity = a.item_origins.iter().find_map(|(identity, token)| (token == &item_token).then(|| identity.clone())).ok_or("The item is no longer known.")?;
     if a.session.as_ref().is_none_or(|s| !s.matches_item_identity(id, &item_identity)) {
         return Err("The item changed, so it was not renamed.".into());
+    }
+    if a.session.as_ref().and_then(|s| s.item(id).ok()).is_none_or(|item| item.title != expected_title) {
+        return Err("The item's title changed, so an older edit was not applied.".into());
     }
     // A recording is writing into this item's folder: the folder is renamed when it is done.
     let recording = app.state::<Busy>().has(a.session.as_ref().map(|s| s.dir.as_path()), id);

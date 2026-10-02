@@ -357,7 +357,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
       return;
     }
     if (title === it.title) return;
-    await apply(await call("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, title }));
+    await apply(await call("rename_item", { sessionId: view.session.id, openToken: view.session.openToken, itemToken: titleForToken, id, expectedTitle: it.title, title }));
   }
 
   async function deleteItem(id) {
@@ -887,7 +887,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
     const itemToken = it.itemToken;
     const t = await ask("Rename item", it.title);
     if (t != null && t.trim() && t.trim() !== it.title) {
-      await apply(await call("rename_item", { sessionId, openToken, itemToken, id: it.id, title: t }));
+      await apply(await call("rename_item", { sessionId, openToken, itemToken, id: it.id, expectedTitle: it.title, title: t }));
     }
   }
 
