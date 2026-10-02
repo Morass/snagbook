@@ -88,6 +88,7 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
   let noteTail = Promise.resolve();
   let acknowledgementTail = Promise.resolve();
   let originTail = Promise.resolve();
+  let titleTail = Promise.resolve();
   let editorLocks = 0;
   let loadingUnlock = null;
   let viewRequest = 0;
@@ -356,7 +357,13 @@ export function createShell({ invoke, snag, doc = globalThis.document, win = glo
 
   /// Save the title field into the item it shows. That is `titleFor`, not `selected`: the
   /// field loses focus (and saves) after the selection has already moved on.
-  async function renameSelected() {
+  function renameSelected() {
+    const work = titleTail.then(renameSelectedOnce);
+    titleTail = work.catch(() => {});
+    return work;
+  }
+
+  async function renameSelectedOnce() {
     const t = $("item-title");
     const id = titleFor;
     const it = items().find((i) => i.id === id);

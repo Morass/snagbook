@@ -483,6 +483,23 @@ test("typing another title while a rename reply is delayed keeps the newer draft
   assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "rename_item").map(([, args]) => args.title), ["First title", "Second title"]);
 });
 
+test("committing another title while a rename reply is delayed serializes both saves", async () => {
+  const t = await setup({ session: true, slowRename: true });
+  t.$("item-title").focus();
+  t.$("item-title").value = "First title";
+  const first = t.shell.renameSelected();
+  await t.app.renameStarted();
+  t.$("item-title").value = "Second title";
+  const second = t.shell.renameSelected();
+
+  t.app.releaseRename();
+  await Promise.all([first, second]);
+
+  assert.equal(t.shell.view().session.items[0].title, "Second title");
+  assert.equal(t.$("item-title").value, "Second title");
+  assert.deepEqual(t.app.calls.filter(([cmd]) => cmd === "rename_item").map(([, args]) => args.title), ["First title", "Second title"]);
+});
+
 test("a pending title cannot rename a replacement item with the same number", async () => {
   const t = await setup({ session: true });
   const oldToken = t.shell.view().session.items[0].itemToken;
