@@ -154,6 +154,7 @@ public final class ConfigStore {
 }
 
 public enum SnagError: Error, LocalizedError, Equatable {
+    case destinationUnrecognized(String)
     case configUnreadable(String)
     case sessionUnreadable(String)
     case notASession(String)
@@ -163,6 +164,7 @@ public enum SnagError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
+        case .destinationUnrecognized(let path): return "The destination’s storage could not be identified: \(path). Reconnect it or choose a folder on an available drive."
         case .configUnreadable(let s): return "The settings file could not be read, so it was not overwritten: \(s)"
         case .sessionUnreadable(let s): return "The session could not be read, so it was left open and unchanged: \(s)"
         case .notASession(let s): return "\(s) is not a Snagbook session (no session.json)."

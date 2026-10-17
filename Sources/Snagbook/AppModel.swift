@@ -42,6 +42,10 @@ final class AppModel: ObservableObject {
     private var syncTimer: Timer?
     let localStore: LocalSessionStore?
     let backgroundStorage = ProcessInfo.processInfo.environment["SNAGBOOK_DIRECT_STORAGE"] != "1"
+    private var storageLocations: [String: StorageLocation] = [:]
+    private var storageChecks: [String: Task<StorageLocation, Never>] = [:]
+    private var recognizedOffDiskRoots: Set<String> = []
+    private var storageLocationsURL: URL!
     private var readerQueues: [String: DispatchQueue] = [:]
     private let syncRunner = SessionSyncRunner { entry in
         SessionSync(trash: DestinationTrash.handler(for: Paths.url(entry.target).deletingLastPathComponent()), acknowledgementCheckInterval: 30)
@@ -136,10 +140,63 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func storageKey(_ path: String) -> String { Paths.url(path).standardizedFileURL.path }
+
+    private func rememberLocation(_ location: StorageLocation, for root: String) {
+        let key = storageKey(root)
+        storageLocations[key] = location
+        if location == .offDisk { recognizedOffDiskRoots.insert(key) }
+        else if location == .internalDisk { recognizedOffDiskRoots.remove(key) }
+        do { try JSONEncoder().encode(recognizedOffDiskRoots).write(to: storageLocationsURL, options: .atomic) }
+        catch { show(error) }
+    }
+
+    func prepareSessionStorage() async -> Bool {
+        guard backgroundStorage else { return true }
+        let root = config.sessionsFolder
+        let key = storageKey(root)
+        let check: Task<StorageLocation, Never>
+        if let existing = storageChecks[key] { check = existing }
+        else {
+            let previouslyOffDisk = recognizedOffDiskRoots.contains(key)
+            let queue = DispatchQueue(label: "snagbook.storage-check", qos: .utility)
+            check = Task {
+                await withCheckedContinuation { continuation in
+                    queue.async {
+                        let observed = Self.inspectStorage(at: Paths.url(root))
+                        continuation.resume(returning: observed.retainingRecognition(previouslyOffDisk ? .offDisk : nil))
+                    }
+                }
+            }
+            storageChecks[key] = check
+        }
+        let location = await check.value
+        storageChecks[key] = nil
+        rememberLocation(location, for: root)
+        if root != config.sessionsFolder { return await prepareSessionStorage() }
+        guard location != .unknown else {
+            show(SnagError.destinationUnrecognized(root))
+            return false
+        }
+        return true
+    }
+
+    nonisolated private static func inspectStorage(at url: URL) -> StorageLocation {
+        let env = ProcessInfo.processInfo.environment
+        if env["SNAGBOOK_SELFTEST"] != nil, let value = env["SNAGBOOK_SELFTEST_STORAGE"],
+           let injected = StorageLocation(rawValue: value) { return injected }
+        return StorageLocation.detect(at: url)
+    }
+
     private func createSession() throws -> Session {
         if backgroundStorage {
-            guard let localStore else { throw SnagError.configUnreadable("Local session storage is unavailable") }
-            return try localStore.create(destinationRoot: config.sessionsFolder, config: config)
+            guard let location = storageLocations[storageKey(config.sessionsFolder)], location != .unknown else {
+                throw SnagError.destinationUnrecognized(config.sessionsFolder)
+            }
+            if location == .offDisk {
+                guard let localStore else { throw SnagError.configUnreadable("Local session storage is unavailable") }
+                return try localStore.create(destinationRoot: config.sessionsFolder, config: config)
+            }
         }
         return try Session.create(root: config.sessionsFolder, config: config)
     }
@@ -169,6 +226,10 @@ final class AppModel: ObservableObject {
             localStore = nil
             alert = AlertInfo(title: "Local storage is unavailable", message: error.localizedDescription)
         }
+        storageLocationsURL = support.appendingPathComponent("off-disk-destinations.json")
+        if let data = try? Data(contentsOf: storageLocationsURL), let roots = try? JSONDecoder().decode(Set<String>.self, from: data) {
+            recognizedOffDiskRoots = roots
+        }
         editor.model = self
         if let err = configStore.loadError {
             alert = AlertInfo(title: "Settings could not be read", message: "\(err)\n\nSnagbook is using its defaults and will not change that file until it can read it.")
@@ -178,6 +239,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.syncInBackground() }
         }
         refreshRecentSessions()
+        Task { _ = await prepareSessionStorage() }
     }
 
     // MARK: - settings
@@ -190,7 +252,11 @@ final class AppModel: ObservableObject {
         }
         let previousRoot = config.sessionsFolder
         config = configStore.config
-        if previousRoot != config.sessionsFolder { recentSessions = []; refreshRecentSessions() }
+        if previousRoot != config.sessionsFolder {
+            recentSessions = []
+            refreshRecentSessions()
+            Task { _ = await prepareSessionStorage() }
+        }
         if session?.fallbackHeader != config.header { session?.fallbackHeader = config.header; markSyncPending() }
     }
 
@@ -199,6 +265,7 @@ final class AppModel: ObservableObject {
     func newSession() {
         Task {
             guard await editor.flush() else { return }
+            guard await prepareSessionStorage() else { return }
             do {
                 let s = try createSession()
                 navigationGeneration &+= 1
@@ -220,24 +287,31 @@ final class AppModel: ObservableObject {
             let generation = navigationGeneration
             do {
                 if !backgroundStorage { use(try Session.open(path, fallbackHeader: config.header)); return }
-                guard let localStore else { throw SnagError.configUnreadable("Local session storage is unavailable") }
-                if let entry = try localStore.entry(target: path) {
+                let localStore = self.localStore
+                if let localStore, let entry = try localStore.entry(target: path) {
                     use(try localStore.session(entry, header: config.header))
                     return
                 }
                 isOpeningSession = true
                 let header = config.header
                 readerQueue(for: Paths.url(path).deletingLastPathComponent().path).async { [weak self] in
-                    let result = Result { _ = try localStore.importSession(path, header: header); return true }
+                    let result = Result { () -> (Session, StorageLocation) in
+                        let location = Self.inspectStorage(at: Paths.url(path))
+                        switch location {
+                        case .offDisk:
+                            guard let localStore else { throw SnagError.configUnreadable("Local session storage is unavailable") }
+                            return (try localStore.importSession(path, header: header), location)
+                        case .internalDisk: return (try Session.open(path, fallbackHeader: header), location)
+                        case .unknown: throw SnagError.destinationUnrecognized(path)
+                        }
+                    }
                     Task { @MainActor in
                         guard let self, self.navigationGeneration == generation else { return }
                         self.isOpeningSession = false
                         switch result {
-                        case .success:
-                            do {
-                                guard let entry = try localStore.entry(target: path) else { throw SyncError.invalidPath }
-                                self.use(try localStore.session(entry, header: header))
-                            } catch { self.show(error) }
+                        case .success(let (opened, location)):
+                            self.rememberLocation(location, for: Paths.url(path).deletingLastPathComponent().path)
+                            self.use(opened)
                         case .failure(let error): self.show(error)
                         }
                     }
@@ -401,6 +475,7 @@ final class AppModel: ObservableObject {
     func newItemFromMenu() {
         Task {
             guard await editor.flush() else { return }
+            if session == nil, !(await prepareSessionStorage()) { return }
             do { try addItem() } catch { show(error) }
         }
     }
@@ -657,11 +732,25 @@ final class AppModel: ObservableObject {
     }
 
     func insertImageData(_ png: Data) {
+        if session == nil {
+            Task {
+                guard await prepareSessionStorage() else { return }
+                do { _ = try ensureItem(); insertImageData(png) } catch { show(error) }
+            }
+            return
+        }
         guard let rel = savePasted(data: png, mime: "image/png", name: "") else { return }
         editor.insertMedia(kind: "image", src: rel, label: "")
     }
 
     func importFile(_ url: URL) {
+        if session == nil {
+            Task {
+                guard await prepareSessionStorage() else { return }
+                do { _ = try ensureItem(); importFile(url) } catch { show(error) }
+            }
+            return
+        }
         do {
             switch MediaKind.of(url) {
             case .image:
@@ -775,7 +864,16 @@ final class AppModel: ObservableObject {
     // MARK: - templates
 
     func insertTemplate(_ t: Template) {
-        if selectedID == nil { _ = try? ensureItem() }
+        if session == nil {
+            Task {
+                guard await prepareSessionStorage() else { return }
+                do { _ = try ensureItem(); insertTemplate(t) } catch { show(error) }
+            }
+            return
+        }
+        if selectedID == nil {
+            do { _ = try ensureItem() } catch { show(error); return }
+        }
         editor.insertMarkdown(t.body)
         editor.focus()
     }

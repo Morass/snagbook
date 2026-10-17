@@ -25,7 +25,9 @@ enum SelfTest {
         Task {
             // Give the window and the page a moment.
             for _ in 0..<100 where !(await pageReady(model)) { try? await Task.sleep(nanoseconds: 100_000_000) }
-            if env["SNAGBOOK_SELFTEST"] == "bundle-check" {
+            if env["SNAGBOOK_SELFTEST"] == "storage-transitions" {
+                await storageTransitions(model)
+            } else if env["SNAGBOOK_SELFTEST"] == "bundle-check" {
                 if Bundle.main.url(forResource: "KeyboardShortcuts_KeyboardShortcuts", withExtension: "bundle") == nil {
                     check(false, "shortcut resources are included in the app")
                 } else {
@@ -54,6 +56,39 @@ enum SelfTest {
             for f in failures { print("  - \(f)") }
             exit(1)
         }
+    }
+
+    static func storageTransitions(_ model: AppModel) async {
+        func newSession() async -> Session? {
+            let previous = model.session?.url
+            model.newSession()
+            for _ in 0..<100 where model.session?.url == previous { await settle(50) }
+            guard model.session?.url != previous else { check(false, "storage transition creates a new session"); return nil }
+            return model.session
+        }
+        guard let initial = await newSession() else { return }
+        check(!model.isLocalSession(initial), "an internal volume starts with direct saving")
+        setenv("SNAGBOOK_SELFTEST_STORAGE", "offDisk", 1)
+        guard let external = await newSession() else { return }
+        check(model.isLocalSession(external), "a newly mounted off-disc volume switches new sessions to background saving")
+        setenv("SNAGBOOK_SELFTEST_STORAGE", "unknown", 1)
+        guard let offline = await newSession() else { return }
+        check(model.isLocalSession(offline), "disconnecting retains prior off-disc recognition")
+        unsetenv("SNAGBOOK_SELFTEST_STORAGE")
+        guard let internalAgain = await newSession() else { return }
+        check(!model.isLocalSession(internalAgain), "an internal replacement switches new sessions back to direct saving")
+        check(exists(initial.url) && exists(external.url) && exists(offline.url), "storage changes preserve earlier session copies")
+        model.deleteSession(confirm: false)
+        for _ in 0..<100 where model.session != nil { await settle(50) }
+        check(model.session == nil, "a fresh paste can start without an open session")
+        setenv("SNAGBOOK_SELFTEST_STORAGE", "offDisk", 1)
+        model.insertImageData(ImageFile.pngData(testImage(40, 40, hue: 0.2))!)
+        for _ in 0..<100 where model.selectedID == nil { await settle(50) }
+        check(model.session.map { model.isLocalSession($0) } == true, "a pasted image also rechecks off-disc eligibility before creating its session")
+        if let pasted = model.session, let item = model.selectedID {
+            check(exists(try! pasted.mediaURL(item).appendingPathComponent("image-001.png")), "the first pasted image reaches its local media folder")
+        }
+        unsetenv("SNAGBOOK_SELFTEST_STORAGE")
     }
 
     static func syncStorage(_ model: AppModel, recovering: Bool) async {
@@ -118,6 +153,11 @@ enum SelfTest {
                 check(model.alert?.title == "The shared copy is still pending", "a new item cannot bypass the hand-off warning after a previous sync: \(model.alert?.title ?? "none"), local \(model.session.map { model.isLocalSession($0) } ?? false), state \(model.syncMessages)")
                 model.alert = nil
                 try FileManager.default.moveItem(at: offline, to: destination)
+                let previousSession = model.session?.url
+                model.newSession()
+                for _ in 0..<100 where model.session?.url == previousSession { await settle(50) }
+                check(model.session.map { model.isLocalSession($0) } == true && model.session?.url != previousSession,
+                      "a previously recognized off-disc destination can start a queued session after restart")
             } catch { check(false, "new-item hand-off state: \(error)") }
 
         }
@@ -152,6 +192,9 @@ enum SelfTest {
         guard var session = model.session, session.url != before, let first = model.selectedID else {
             return check(false, "new session creates a session with a first item")
         }
+        check(!model.isLocalSession(session) && session.url.deletingLastPathComponent().standardizedFileURL == Paths.url(model.config.sessionsFolder).standardizedFileURL,
+              "an internal destination saves directly without a local mirror")
+        check((try? model.localStore?.entries().isEmpty) == true, "internal storage creates no background queue")
         check(session.url.lastPathComponent.range(of: #"^[0-9a-f]{8}_\d\d-\d\d-\d{4}$"#, options: .regularExpression) != nil, "session folder is hash_dd-mm-yyyy: \(session.url.lastPathComponent)")
         check(model.titleDraft == "Item 1", "first item is called Item 1")
 

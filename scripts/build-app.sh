@@ -24,9 +24,13 @@ if [ "$CONFIG" = release ]; then
     SWIFT_ARGS+=(-Xswiftc -file-prefix-map -Xswiftc "$ROOT=." -Xswiftc -debug-prefix-map -Xswiftc "$ROOT=.")
 fi
 swift build "${SWIFT_ARGS[@]}"
-BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
-python3 scripts/prepare-resource-accessors.py "$BIN_DIR"
-swift build "${SWIFT_ARGS[@]}"
+BIN_DIR="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
+# Refreshing SwiftPM's build plan can regenerate the derived resource lookups.
+for attempt in 1 2 3; do
+    python3 scripts/prepare-resource-accessors.py "$BIN_DIR"
+    swift build "${SWIFT_ARGS[@]}"
+    if python3 scripts/prepare-resource-accessors.py "$BIN_DIR" --check; then break; fi
+done
 python3 scripts/prepare-resource-accessors.py "$BIN_DIR" --check
 BIN="$BIN_DIR/Snagbook"
 

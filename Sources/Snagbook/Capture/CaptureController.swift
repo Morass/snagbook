@@ -75,16 +75,18 @@ final class CaptureController: ObservableObject {
     }
 
     func pick(_ intent: Intent) {
-        guard Permissions.ensureScreenRecording(model) else { return }
-        phase = .picking
-        // Started from the notebook: step aside so whatever is behind it can be selected.
-        if NSApp.isActive, let w = WindowPlacement.notebook, w.isVisible {
-            restoreNotebook = true
-            w.orderOut(nil)
-            NSApp.deactivate()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.overlay.startPicking(intent: intent) }
-        } else {
-            overlay.startPicking(intent: intent)
+        Task {
+            if model.session == nil, !(await model.prepareSessionStorage()) { return }
+            guard phase == .idle, Permissions.ensureScreenRecording(model) else { return }
+            phase = .picking
+            if NSApp.isActive, let w = WindowPlacement.notebook, w.isVisible {
+                restoreNotebook = true
+                w.orderOut(nil)
+                NSApp.deactivate()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.overlay.startPicking(intent: intent) }
+            } else {
+                overlay.startPicking(intent: intent)
+            }
         }
     }
 

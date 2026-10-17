@@ -25,6 +25,10 @@ def run(mode, root, direct=False):
                        SNAGBOOK_SELFTEST=mode, SNAGBOOK_CONFIG=str(root / 'config.json'))
     if direct:
         environment['SNAGBOOK_DIRECT_STORAGE'] = '1'
+    if mode == 'sync-offline':
+        environment['SNAGBOOK_SELFTEST_STORAGE'] = 'offDisk'
+    elif mode == 'sync-recover':
+        environment['SNAGBOOK_SELFTEST_STORAGE'] = 'unknown'
     command = ['/usr/bin/sandbox-exec', '-p', profile, str(binary)]
     try:
         result = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL,
@@ -50,6 +54,10 @@ if os.environ.get('SNAGBOOK_SELFTEST_BUNDLE_ONLY'):
     shutil.rmtree(root)
 else:
     root = fixture()
+    (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
+    run('storage-transitions', root)
+    shutil.rmtree(root)
+    root = fixture()
     (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'destination')}))
     (root / 'disconnected').mkdir()
     run('bundle-check', root)
@@ -59,5 +67,5 @@ else:
     shutil.rmtree(root)
     root = fixture()
     (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
-    run('1', root, direct=True)
+    run('1', root)
     shutil.rmtree(root)
