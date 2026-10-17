@@ -22,7 +22,7 @@ def run(mode, root, direct=False):
     temporary.mkdir(exist_ok=True)
     environment = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL') if key in os.environ}
     environment.update(HOME=str(sandbox_home), CFFIXED_USER_HOME=str(sandbox_home), TMPDIR=str(temporary),
-                       SNAGBOOK_SELFTEST=mode, SNAGBOOK_CONFIG=str(root / 'config.json'))
+                       SNAGBOOK_SELFTEST=mode, SNAGBOOK_CONFIG=str(root / 'config.json'), NSUnbufferedIO='YES')
     if direct:
         environment['SNAGBOOK_DIRECT_STORAGE'] = '1'
     if mode == 'sync-offline':
@@ -39,7 +39,7 @@ def run(mode, root, direct=False):
         raise SystemExit(1)
     print(result.stdout, end='', flush=True)
     if result.returncode or 'SELFTEST PASS' not in result.stdout:
-        print('Failed; fixture kept at', root, flush=True)
+        print('Failed with exit', result.returncode, '; fixture kept at', root, flush=True)
         raise SystemExit(1)
 
 
@@ -47,7 +47,12 @@ def fixture():
     return Path(tempfile.mkdtemp(prefix='snagbook-selftest-'))
 
 
-if os.environ.get('SNAGBOOK_SELFTEST_BUNDLE_ONLY'):
+if os.environ.get('SNAGBOOK_SELFTEST_LEGACY_ONLY'):
+    root = fixture()
+    (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
+    run('1', root)
+    shutil.rmtree(root)
+elif os.environ.get('SNAGBOOK_SELFTEST_BUNDLE_ONLY'):
     root = fixture()
     (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
     run('bundle-check', root)
