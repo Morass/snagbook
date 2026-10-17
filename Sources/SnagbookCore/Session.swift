@@ -79,14 +79,24 @@ public final class Session {
     }
 
     /// Open an existing session folder. `path` may use "~".
-    public static func open(_ path: String, fallbackHeader: String = Config.defaultHeader) throws -> Session {
+    public static func open(_ path: String, fallbackHeader: String = Config.defaultHeader, displayPath: String? = nil) throws -> Session {
         let url = Paths.url(path).resolvingSymlinksInPath()
         let data: Data
         do { data = try Data(contentsOf: url.appendingPathComponent(manifestName)) } catch { throw SnagError.notASession(path) }
         let manifest = try decoder.decode(Manifest.self, from: data)
-        let s = Session(url: url, displayPath: Paths.abbreviate(Paths.expand(path)), manifest: manifest, fallbackHeader: fallbackHeader)
+        let s = Session(url: url, displayPath: displayPath ?? Paths.abbreviate(Paths.expand(path)), manifest: manifest, fallbackHeader: fallbackHeader)
         s.repair()
         return s
+    }
+
+    static func loadManifest(_ url: URL) throws -> Manifest {
+        try decoder.decode(Manifest.self, from: Data(contentsOf: url.appendingPathComponent(manifestName)))
+    }
+
+    public static func summary(at url: URL, displayPath: String) throws -> Summary {
+        let manifest = try loadManifest(url)
+        return Summary(path: displayPath, title: manifest.title ?? defaultTitle(manifest.created), created: manifest.created,
+                       items: manifest.items.count, firstTitles: Array(manifest.items.prefix(3).map(\.title)))
     }
 
     public struct Summary: Equatable {
@@ -234,19 +244,19 @@ public final class Session {
     }
 
     public func reopenedMatchingItem(_ id: Int, identity: String, fallbackHeader: String) throws -> Session {
-        let current = try Session.loadWithoutRepair(url.path, fallbackHeader: fallbackHeader)
+        let current = try Session.loadWithoutRepair(url.path, fallbackHeader: fallbackHeader, displayPath: displayPath)
         guard current.isSameSession(as: self) else { throw SnagError.notASession(displayPath) }
         current.repair()
         guard current.isSameItem(id, identity: identity) else { throw SnagError.noSuchItem(id) }
         return current
     }
 
-    private static func loadWithoutRepair(_ path: String, fallbackHeader: String) throws -> Session {
+    private static func loadWithoutRepair(_ path: String, fallbackHeader: String, displayPath: String) throws -> Session {
         let url = Paths.url(path).resolvingSymlinksInPath()
         let data: Data
         do { data = try Data(contentsOf: url.appendingPathComponent(manifestName)) } catch { throw SnagError.notASession(path) }
         let manifest = try decoder.decode(Manifest.self, from: data)
-        return Session(url: url, displayPath: Paths.abbreviate(Paths.expand(path)), manifest: manifest, fallbackHeader: fallbackHeader)
+        return Session(url: url, displayPath: displayPath, manifest: manifest, fallbackHeader: fallbackHeader)
     }
 
     /// Add an item after the others. With no title it is "Item N".
