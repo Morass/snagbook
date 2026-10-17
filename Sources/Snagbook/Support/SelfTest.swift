@@ -184,6 +184,25 @@ enum SelfTest {
             check(read(media.appendingPathComponent("clip-001.json")).contains("\"duration\""), "clip-001.json describes it")
             check(read(try! saved.session.noteURL(first)).contains("[Video 0:03](media/clip-001.mp4)"), "a recording uses the current item folder and is linked there after the selection changes")
             check(model.session?.manifest.items.first(where: { $0.id == first })?.folder == "01-renamed-outside", "an external item rename is adopted before the recording enters the editor")
+            model.select(first)
+            await settle()
+            let maximized = await js(model, """
+            (() => {
+              const card = document.querySelector('.video-card');
+              const button = card?.querySelector('.maximize');
+              if (!button) return false;
+              button.click();
+              const video = card.querySelector('video');
+              const rect = card.getBoundingClientRect();
+              const fits = rect.width >= innerWidth - 20 && rect.height >= innerHeight - 20;
+              button.click();
+              const restored = !card.classList.contains('maximized') && card.querySelector('video') === video;
+              button.click();
+              document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}));
+              return fits && restored && !card.classList.contains('maximized');
+            })()
+            """) as? Bool
+            check(maximized == true, "video maximizes to the editor viewport and restores with the button and Escape")
             model.rename(first, to: "Main menu restored")
             model.rename(first, to: "Main menu")
             await settle()

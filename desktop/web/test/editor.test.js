@@ -243,3 +243,29 @@ test("the mounted toolbar cannot edit while the app has locked the editor", asyn
   assert.equal(window.snag.markdown(), "plain\n");
   window.snag.setReadOnly(false);
 });
+
+
+test("maximize and restore keep the same video and playback position without editing notes", () => {
+  api.open({ id: "maximize", markdown: "[Clip](media/clip-001.mp4)\n", focus: false });
+  const original = md();
+  const card = document.querySelector(".video-card");
+  const button = card.querySelector(".maximize");
+  assert.ok(button, "video cards offer Maximize before playback");
+  button.click();
+  const video = card.querySelector("video");
+  assert.ok(video?.controls);
+  video.currentTime = 12;
+  assert.ok(card.classList.contains("maximized"));
+  assert.equal(button.textContent, "Restore");
+  button.click();
+  assert.ok(!card.classList.contains("maximized"));
+  assert.equal(card.querySelector("video"), video);
+  assert.equal(video.currentTime, 12);
+  button.click();
+  document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.ok(!card.classList.contains("maximized"));
+  assert.equal(md(), original);
+  button.click();
+  api.open({ id: "next", markdown: "Empty\n", focus: false });
+  assert.equal(document.querySelector(".video-card.maximized"), null);
+});

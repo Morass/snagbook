@@ -345,13 +345,29 @@ class VideoView {
     this.dom = document.createElement("span");
     this.dom.className = "video-card";
     this.dom.contentEditable = "false";
+    this.onEscape = (e) => {
+      if (e.key === "Escape" && this.dom.classList.contains("maximized")) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.setMaximized(false);
+      }
+    };
+    document.addEventListener("keydown", this.onEscape, true);
     this.render();
     mediaViews.add(this);
   }
   destroy() {
+    document.removeEventListener("keydown", this.onEscape, true);
     mediaViews.delete(this);
   }
+  setMaximized(value) {
+    this.dom.classList.toggle("maximized", value);
+    this.maximize.textContent = value ? "Restore" : "Maximize";
+    this.maximize.setAttribute("aria-expanded", String(value));
+    this.maximize.title = value ? "Restore video (Esc)" : "Maximize video";
+  }
   render() {
+    this.dom.classList.remove("maximized");
     const { src, label } = this.node.attrs;
     this.dom.textContent = "";
     const poster = document.createElement("img");
@@ -366,19 +382,31 @@ class VideoView {
     const cap = document.createElement("span");
     cap.className = "caption";
     cap.textContent = label || src.split("/").pop();
+    this.maximize = document.createElement("button");
+    this.maximize.className = "maximize";
+    this.maximize.type = "button";
+    this.maximize.textContent = "Maximize";
+    this.maximize.title = "Maximize video";
+    this.maximize.setAttribute("aria-expanded", "false");
     const open = () => {
+      if (this.dom.querySelector("video")) return;
       const video = document.createElement("video");
       video.src = resolveSrc(src);
       video.controls = true;
       video.autoplay = true;
-      this.dom.replaceChildren(video, cap);
+      this.dom.replaceChildren(video, this.maximize, cap);
     };
     play.addEventListener("click", (e) => {
       e.preventDefault();
       open();
     });
     poster.addEventListener("click", open);
-    this.dom.append(poster, play, cap);
+    this.maximize.addEventListener("click", (e) => {
+      e.preventDefault();
+      open();
+      this.setMaximized(!this.dom.classList.contains("maximized"));
+    });
+    this.dom.append(poster, play, this.maximize, cap);
   }
   update(node) {
     if (node.type !== this.node.type) return false;

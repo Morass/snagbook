@@ -165,3 +165,17 @@ body { display: flex; flex-direction: column; }
 .ProseMirror-focused .ProseMirror-gapcursor { display: block; }
 .ProseMirror-hideselection *::selection { background: transparent; }
 .ProseMirror-hideselection { caret-color: transparent; }
+
+.video-card .maximize {
+  position: absolute; top: 8px; right: 8px; padding: 6px 10px;
+  border: 1px solid #888; border-radius: 5px; background: #202024; color: #fff;
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.video-card .maximize:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.video-card.maximized {
+  position: fixed; inset: 8px; z-index: 10000; margin: 0; max-width: none;
+  display: flex; justify-content: center; background: #000;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.9);
+}
+.video-card.maximized video { width: 100%; height: 100%; min-height: 0; max-height: none; object-fit: contain; }
+.video-card.maximized .caption { flex-shrink: 0; }

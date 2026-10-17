@@ -206,3 +206,29 @@ test("moving to another item with the same picture name shows that item's pictur
   api.open({ id: "21", markdown: md, base: "snagbook://item/21/", focus: false });
   assert.match(img().src, /item\/21\/media\/shot-001\.png/, "coming back shows the first item's picture again");
 });
+
+
+test("maximize and restore keep the same video and playback position without editing notes", () => {
+  api.open({ id: "maximize", markdown: "[Clip](media/clip-001.mp4)\n", focus: false });
+  const original = md();
+  const card = document.querySelector(".video-card");
+  const button = card.querySelector(".maximize");
+  assert.ok(button, "video cards offer Maximize before playback");
+  button.click();
+  const video = card.querySelector("video");
+  assert.ok(video?.controls);
+  video.currentTime = 12;
+  assert.ok(card.classList.contains("maximized"));
+  assert.equal(button.textContent, "Restore");
+  button.click();
+  assert.ok(!card.classList.contains("maximized"));
+  assert.equal(card.querySelector("video"), video);
+  assert.equal(video.currentTime, 12);
+  button.click();
+  document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.ok(!card.classList.contains("maximized"));
+  assert.equal(md(), original);
+  button.click();
+  api.open({ id: "next", markdown: "Empty\n", focus: false });
+  assert.equal(document.querySelector(".video-card.maximized"), null);
+});

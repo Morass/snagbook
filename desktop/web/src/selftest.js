@@ -292,6 +292,17 @@ export async function runSelfTest(shell, invoke) {
     if (video) {
       const poster = [...document.querySelectorAll("#editor .video-card img")].find((i) => i.src.includes("clip-001-frames"));
       check(await imageLoaded(poster), "the video card shows its first still");
+      const card = poster.closest(".video-card");
+      const maximize = card.querySelector(".maximize");
+      maximize.click();
+      const player = card.querySelector("video");
+      const rect = card.getBoundingClientRect();
+      check(rect.width >= innerWidth - 20 && rect.height >= innerHeight - 20, "maximized video fills the viewport");
+      maximize.click();
+      check(!card.classList.contains("maximized") && card.querySelector("video") === player, "Restore keeps the same video");
+      maximize.click();
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      check(!card.classList.contains("maximized"), "Escape restores the inline video");
     }
     const sheet = new Image();
     sheet.src = base() + "media/clip-001-contact.jpg";
