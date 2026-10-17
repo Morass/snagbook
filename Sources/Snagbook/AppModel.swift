@@ -295,23 +295,29 @@ final class AppModel: ObservableObject {
                 isOpeningSession = true
                 let header = config.header
                 readerQueue(for: Paths.url(path).deletingLastPathComponent().path).async { [weak self] in
-                    let result = Result { () -> (Session, StorageLocation) in
+                    let result = Result { () -> StorageLocation in
                         let location = Self.inspectStorage(at: Paths.url(path))
                         switch location {
                         case .offDisk:
                             guard let localStore else { throw SnagError.configUnreadable("Local session storage is unavailable") }
-                            return (try localStore.importSession(path, header: header), location)
-                        case .internalDisk: return (try Session.open(path, fallbackHeader: header), location)
+                            _ = try localStore.importSession(path, header: header)
+                        case .internalDisk: break
                         case .unknown: throw SnagError.destinationUnrecognized(path)
                         }
+                        return location
                     }
                     Task { @MainActor in
                         guard let self, self.navigationGeneration == generation else { return }
                         self.isOpeningSession = false
                         switch result {
-                        case .success(let (opened, location)):
+                        case .success(let location):
                             self.rememberLocation(location, for: Paths.url(path).deletingLastPathComponent().path)
-                            self.use(opened)
+                            do {
+                                if location == .offDisk {
+                                    guard let localStore, let entry = try localStore.entry(target: path) else { throw SyncError.invalidPath }
+                                    self.use(try localStore.session(entry, header: header))
+                                } else { self.use(try Session.open(path, fallbackHeader: header)) }
+                            } catch { self.show(error) }
                         case .failure(let error): self.show(error)
                         }
                     }
@@ -490,6 +496,10 @@ final class AppModel: ObservableObject {
 
     private func show(_ id: Int, record: Bool = true) {
         guard let session, let rec = items.first(where: { $0.id == id }) else { return }
+        if isOpeningSession {
+            navigationGeneration &+= 1
+            isOpeningSession = false
+        }
         if record, let cur = selectedID, cur != id {
             back.append(cur)
             forward.removeAll()
