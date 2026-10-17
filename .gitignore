@@ -5,3 +5,5 @@ web/node_modules/
 *.xcodeproj
 .DS_Store
 Resources/editor/
+
+__pycache__/

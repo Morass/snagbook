@@ -12,6 +12,7 @@ import WebKit
 @MainActor
 enum SelfTest {
     static var failures: [String] = []
+    static var trashedFiles: [Session.FileBinding] = []
 
     static func runIfRequested(_ model: AppModel) {
         let env = ProcessInfo.processInfo.environment
@@ -24,7 +25,14 @@ enum SelfTest {
         Task {
             // Give the window and the page a moment.
             for _ in 0..<100 where !(await pageReady(model)) { try? await Task.sleep(nanoseconds: 100_000_000) }
-            if let mode = env["SNAGBOOK_SELFTEST"], mode.hasPrefix("sync-") {
+            if env["SNAGBOOK_SELFTEST"] == "bundle-check" {
+                if Bundle.main.url(forResource: "KeyboardShortcuts_KeyboardShortcuts", withExtension: "bundle") == nil {
+                    check(false, "shortcut resources are included in the app")
+                } else {
+                    let recorder = KeyboardShortcuts.RecorderCocoa(for: .record)
+                    check(recorder.placeholderString?.isEmpty == false, "shortcut settings load their packaged resources")
+                }
+            } else if let mode = env["SNAGBOOK_SELFTEST"], mode.hasPrefix("sync-") {
                 await syncStorage(model, recovering: mode == "sync-recover")
             } else if env["SNAGBOOK_SELFTEST"] != nil {
                 await run(model)
@@ -32,6 +40,12 @@ enum SelfTest {
             }
             if let shot = env["SNAGBOOK_SCREENSHOT"] { await screenshot(model, to: shot) }
             model.pasteboard.releaseGlobally()
+            if failures.isEmpty {
+                for binding in trashedFiles {
+                    do { try Session.remove(binding) }
+                    catch { check(false, "self-test Trash cleanup: \(error)") }
+                }
+            }
             if failures.isEmpty {
                 print("SELFTEST PASS")
                 exit(0)
@@ -100,8 +114,8 @@ enum SelfTest {
                 for _ in 0..<50 where model.selectedID == previous { await settle(50) }
                 check(model.selectedID != previous && model.syncMessage != "Synced", "a new item immediately marks the shared copy pending")
                 model.copyHandoff()
-                await settle()
-                check(model.alert?.title == "The shared copy is still pending", "a new item cannot bypass the hand-off warning after a previous sync")
+                for _ in 0..<100 where model.alert == nil { await settle(50) }
+                check(model.alert?.title == "The shared copy is still pending", "a new item cannot bypass the hand-off warning after a previous sync: \(model.alert?.title ?? "none"), local \(model.session.map { model.isLocalSession($0) } ?? false), state \(model.syncMessages)")
                 model.alert = nil
                 try FileManager.default.moveItem(at: offline, to: destination)
             } catch { check(false, "new-item hand-off state: \(error)") }

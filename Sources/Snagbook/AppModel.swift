@@ -333,7 +333,7 @@ final class AppModel: ObservableObject {
                     return
                 }
                 try live.delete(discard: Session.trashOrDelete(
-                    trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
+                    trash: { try self.trash($0) },
                     deletePermanently: { _ in
                         guard confirm else { return true }
                         let a = NSAlert()
@@ -524,7 +524,7 @@ final class AppModel: ObservableObject {
                 current = try live.reopenedMatchingItem(id, identity: itemIdentity, fallbackHeader: config.header)
                 guard let current else { return }
                 try current.deleteItem(id, expectedIdentity: itemIdentity, discard: Session.trashOrDelete(
-                    trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
+                    trash: { try self.trash($0) },
                     deletePermanently: { _ in
                         guard confirm else { return true }
                         let a = NSAlert()
@@ -547,6 +547,16 @@ final class AppModel: ObservableObject {
                 }
                 show(error)
             }
+        }
+    }
+
+    private func trash(_ url: URL) throws {
+        var result: NSURL?
+        try FileManager.default.trashItem(at: url, resultingItemURL: &result)
+        if ProcessInfo.processInfo.environment["SNAGBOOK_SELFTEST"] != nil,
+           url.standardizedFileURL.path.hasPrefix(Self.configURL.deletingLastPathComponent().standardizedFileURL.path + "/"),
+           let result, let binding = try? Session.bindFile(result as URL) {
+            SelfTest.trashedFiles.append(binding)
         }
     }
 

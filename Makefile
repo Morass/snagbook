@@ -15,7 +15,7 @@ DESTDIR ?= /Applications
 all: build
 
 build:
-	./Scripts/build-app.sh release
+	./scripts/build-app.sh release
 
 run: build
 	open build/Snagbook.app
@@ -33,12 +33,10 @@ test:
 	cd web && { [ -d node_modules ] || npm ci --silent; } && npm test
 
 selftest: build
-	@tmp=$$(mktemp -d); echo '{"sessionsFolder":"'$$tmp'/sessions"}' > $$tmp/config.json; \
-	SNAGBOOK_SELFTEST=1 SNAGBOOK_CONFIG=$$tmp/config.json build/Snagbook.app/Contents/MacOS/Snagbook 2>/dev/null; \
-	status=$$?; rm -rf $$tmp; exit $$status
+	python3 scripts/selftest.py build/Snagbook.app/Contents/MacOS/Snagbook
 
 icon:
-	swift Scripts/make-icon.swift .build/AppIcon-1024.png
+	swift scripts/make-icon.swift .build/AppIcon-1024.png
 	rm -rf .build/AppIcon.iconset && mkdir -p .build/AppIcon.iconset
 	for s in 16 32 128 256 512; do \
 		sips -z $$s $$s .build/AppIcon-1024.png --out .build/AppIcon.iconset/icon_$${s}x$${s}.png >/dev/null; \

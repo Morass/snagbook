@@ -42,10 +42,14 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     /// Resources/editor inside the app, or the repository copy when run from `swift run`.
     static var editorDirectory: URL? {
         if let u = Bundle.main.url(forResource: "editor", withExtension: nil), FileManager.default.fileExists(atPath: u.appendingPathComponent("index.html").path) { return u }
+        #if DEBUG
         var dir = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { dir.deleteLastPathComponent() }
         let dev = dir.appendingPathComponent("Resources/editor")
         return FileManager.default.fileExists(atPath: dev.appendingPathComponent("index.html").path) ? dev : nil
+        #else
+        return nil
+        #endif
     }
 
     // MARK: - calls into the page
