@@ -287,6 +287,12 @@ final class AppModel: ObservableObject {
             let generation = navigationGeneration
             do {
                 if !backgroundStorage { use(try Session.open(path, fallbackHeader: config.header)); return }
+                if let current = session, !isLocalSession(current),
+                   Paths.url(current.displayPath).standardizedFileURL == Paths.url(path).standardizedFileURL,
+                   let id = selectedID, let identity = itemIdentities[id] {
+                    use(try current.reopenedMatchingItem(id, identity: identity, fallbackHeader: config.header))
+                    return
+                }
                 let localStore = self.localStore
                 if let localStore, let entry = try localStore.entry(target: path) {
                     use(try localStore.session(entry, header: config.header))
@@ -335,6 +341,7 @@ final class AppModel: ObservableObject {
         if p.runModal() == .OK, let u = p.url { openSession(u.path) }
     }
 
+    @inline(never)
     private func use(_ s: Session) {
         session = s
         itemIdentities.removeAll()
