@@ -11,7 +11,10 @@ final class AppModel: ObservableObject {
 
     let configStore: ConfigStore
     @Published private(set) var config: Config
-    @Published private(set) var session: Session?
+    @Published private(set) var session: Session? { didSet { markSyncPending() } }
+    @Published private(set) var recentSessions: [Session.Summary] = []
+    @Published private(set) var syncMessages: [String: String] = [:]
+    @Published private(set) var isOpeningSession = false
     @Published private(set) var items: [ItemRecord] = []
     @Published private(set) var selectedID: Int?
     @Published var titleDraft = ""
@@ -36,6 +39,111 @@ final class AppModel: ObservableObject {
     private var editorItemIdentity: String?
     private var itemIdentities: [Int: String] = [:]
     private var statusTimer: Timer?
+    private var syncTimer: Timer?
+    let localStore: LocalSessionStore?
+    let backgroundStorage = ProcessInfo.processInfo.environment["SNAGBOOK_DIRECT_STORAGE"] != "1"
+    private var readerQueues: [String: DispatchQueue] = [:]
+    private let syncRunner = SessionSyncRunner { entry in
+        SessionSync(trash: DestinationTrash.handler(for: Paths.url(entry.target).deletingLastPathComponent()), acknowledgementCheckInterval: 30)
+    }
+    private var listingRoots: Set<String> = []
+    private var syncGeneration: UInt64 = 0
+    private var navigationGeneration: UInt64 = 0
+
+    var syncMessage: String? {
+        if let session, isLocalSession(session) {
+            if capture.syncBlockedSessions.contains(LocalSessionStore.key(for: session.url)) || Annotator.open.contains(where: { $0.session.url.standardizedFileURL == session.url.standardizedFileURL }) {
+                return "Capture or picture editing in progress · sync resumes when finished"
+            }
+            let current = syncMessages[LocalSessionStore.key(for: session.url)] ?? "Saved locally · syncing"
+            let others = syncMessages.filter { $0.key != LocalSessionStore.key(for: session.url) && $0.value != "Synced" }.count
+            return current == "Synced" && others > 0 ? "Synced · \(others) other session(s) waiting" : current
+        }
+        return syncMessages.values.first { $0 != "Synced" }
+    }
+
+    func isLocalSession(_ session: Session) -> Bool {
+        guard backgroundStorage, let localStore else { return false }
+        return session.url.lastPathComponent == "session" && session.url.deletingLastPathComponent().deletingLastPathComponent().standardizedFileURL == localStore.root.standardizedFileURL
+    }
+
+    func markSyncPending() {
+        guard let session, isLocalSession(session) else { return }
+        syncGeneration &+= 1
+        syncMessages[LocalSessionStore.key(for: session.url)] = "Saved locally · syncing"
+    }
+
+    func syncInBackground() {
+        guard let localStore else { return }
+        do {
+            let scan = try localStore.scan()
+            let keys = Set(scan.entries.map(\.key)).union(scan.issues.keys)
+            syncMessages = syncMessages.filter { keys.contains($0.key) }
+            for (key, message) in scan.issues { syncMessages[key] = message }
+            let blocked = capture.syncBlockedSessions.union(Annotator.open.map { LocalSessionStore.key(for: $0.session.url) })
+            let entries = scan.entries.filter { !blocked.contains($0.key) }
+            for entry in scan.entries where syncMessages[entry.key] == nil { syncMessages[entry.key] = "Saved locally · syncing" }
+            let generation = syncGeneration
+            syncRunner.submit(entries) { [weak self] entry, outcome in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let message: String?
+                    switch outcome {
+                    case .synced: message = "Synced"
+                    case .pending: message = "Saved locally · syncing"
+                    case .deleted: message = nil
+                    case .failed(let error): message = error
+                    }
+                    if message == "Synced", self.session.map({ LocalSessionStore.key(for: $0.url) }) == entry.key, generation != self.syncGeneration {
+                        self.syncMessages[entry.key] = "Saved locally · syncing"
+                    } else { self.syncMessages[entry.key] = message }
+                }
+            }
+        } catch { syncMessages[session.map { LocalSessionStore.key(for: $0.url) } ?? "storage"] = error.localizedDescription }
+    }
+
+    private func readerQueue(for root: String) -> DispatchQueue {
+        let key = Paths.url(root).standardizedFileURL.path
+        if let queue = readerQueues[key] { return queue }
+        let queue = DispatchQueue(label: "snagbook.destination-reader", qos: .utility)
+        readerQueues[key] = queue
+        return queue
+    }
+
+    private func mergeCachedSessions(_ remote: [Session.Summary], root: String) -> [Session.Summary] {
+        var sessions = remote.filter { Paths.url($0.path).deletingLastPathComponent().standardizedFileURL == Paths.url(root).standardizedFileURL }
+        if let localStore, let entries = try? localStore.entries() {
+            for entry in entries where Paths.url(entry.target).deletingLastPathComponent().standardizedFileURL == Paths.url(root).standardizedFileURL {
+                sessions.removeAll { Paths.url($0.path).standardizedFileURL == Paths.url(entry.target).standardizedFileURL }
+                if !entry.deleteRequested, let local = try? Session.summary(at: entry.content, displayPath: entry.target) { sessions.append(local) }
+            }
+        }
+        return sessions.sorted { $0.created > $1.created }
+    }
+
+    func refreshRecentSessions() {
+        let root = config.sessionsFolder
+        recentSessions = mergeCachedSessions(recentSessions, root: root)
+        guard listingRoots.insert(root).inserted else { return }
+        readerQueue(for: root).async { [weak self] in
+            let sessions = Session.list(root: root)
+            Task { @MainActor in
+                guard let self else { return }
+                self.listingRoots.remove(root)
+                if self.config.sessionsFolder == root { self.recentSessions = self.mergeCachedSessions(sessions, root: root) }
+                else { self.refreshRecentSessions() }
+            }
+        }
+    }
+
+    private func createSession() throws -> Session {
+        if backgroundStorage {
+            guard let localStore else { throw SnagError.configUnreadable("Local session storage is unavailable") }
+            return try localStore.create(destinationRoot: config.sessionsFolder, config: config)
+        }
+        return try Session.create(root: config.sessionsFolder, config: config)
+    }
+
 
     struct AlertInfo: Identifiable {
         let id = UUID()
@@ -53,13 +161,23 @@ final class AppModel: ObservableObject {
     private init() {
         configStore = ConfigStore(url: Self.configURL)
         config = configStore.config
+        let support = ProcessInfo.processInfo.environment["SNAGBOOK_SELFTEST"] != nil
+            ? Self.configURL.deletingLastPathComponent()
+            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!.appendingPathComponent("Snagbook")
+        do { localStore = try LocalSessionStore(root: support.appendingPathComponent("LocalSessions", isDirectory: true)) }
+        catch {
+            localStore = nil
+            alert = AlertInfo(title: "Local storage is unavailable", message: error.localizedDescription)
+        }
         editor.model = self
         if let err = configStore.loadError {
             alert = AlertInfo(title: "Settings could not be read", message: "\(err)\n\nSnagbook is using its defaults and will not change that file until it can read it.")
         }
-        if let last = config.lastSession, let s = try? Session.open(last, fallbackHeader: config.header) {
-            use(s)
+        if let last = config.lastSession { openSession(last) }
+        syncTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.syncInBackground() }
         }
+        refreshRecentSessions()
     }
 
     // MARK: - settings
@@ -70,8 +188,10 @@ final class AppModel: ObservableObject {
         } catch {
             show(error)
         }
+        let previousRoot = config.sessionsFolder
         config = configStore.config
-        if session?.fallbackHeader != config.header { session?.fallbackHeader = config.header }
+        if previousRoot != config.sessionsFolder { recentSessions = []; refreshRecentSessions() }
+        if session?.fallbackHeader != config.header { session?.fallbackHeader = config.header; markSyncPending() }
     }
 
     // MARK: - sessions
@@ -80,7 +200,9 @@ final class AppModel: ObservableObject {
         Task {
             guard await editor.flush() else { return }
             do {
-                let s = try Session.create(root: config.sessionsFolder, config: config)
+                let s = try createSession()
+                navigationGeneration &+= 1
+                isOpeningSession = false
                 use(s)
                 try addItem(focusTitle: true)
                 WindowPlacement.show()
@@ -94,7 +216,33 @@ final class AppModel: ObservableObject {
     func openSession(_ path: String) {
         Task {
             guard await editor.flush() else { return }
-            do { use(try Session.open(path, fallbackHeader: config.header)) } catch { show(error) }
+            navigationGeneration &+= 1
+            let generation = navigationGeneration
+            do {
+                if !backgroundStorage { use(try Session.open(path, fallbackHeader: config.header)); return }
+                guard let localStore else { throw SnagError.configUnreadable("Local session storage is unavailable") }
+                if let entry = try localStore.entry(target: path) {
+                    use(try localStore.session(entry, header: config.header))
+                    return
+                }
+                isOpeningSession = true
+                let header = config.header
+                readerQueue(for: Paths.url(path).deletingLastPathComponent().path).async { [weak self] in
+                    let result = Result { _ = try localStore.importSession(path, header: header); return true }
+                    Task { @MainActor in
+                        guard let self, self.navigationGeneration == generation else { return }
+                        self.isOpeningSession = false
+                        switch result {
+                        case .success:
+                            do {
+                                guard let entry = try localStore.entry(target: path) else { throw SyncError.invalidPath }
+                                self.use(try localStore.session(entry, header: header))
+                            } catch { self.show(error) }
+                        case .failure(let error): self.show(error)
+                        }
+                    }
+                }
+            } catch { isOpeningSession = false; show(error) }
         }
     }
 
@@ -122,6 +270,7 @@ final class AppModel: ObservableObject {
         selectedID = nil
         editorItemIdentity = nil
         if let first = items.last { show(first.id, record: false) } else { titleDraft = "" }
+        refreshRecentSessions()
     }
 
     func refreshSessionFromDisk() {
@@ -161,7 +310,7 @@ final class AppModel: ObservableObject {
         if confirm {
             let a = NSAlert()
             a.messageText = "Delete “\(session.title)”?"
-            a.informativeText = "The whole session folder, with every item, note, picture and video, goes to the Trash."
+            a.informativeText = "The whole session folder, with every item, note, picture and video, goes to the Trash. If the destination has no Trash, it is kept in .snagbook-trash beside your sessions."
             a.addButton(withTitle: "Move to Trash")
             a.addButton(withTitle: "Cancel")
             a.buttons.first?.hasDestructiveAction = true
@@ -175,6 +324,14 @@ final class AppModel: ObservableObject {
                 return flash("The session changed or a capture started, so it was not deleted")
             }
             do {
+                if isLocalSession(live), let localStore {
+                    try localStore.requestDeletion(live.url)
+                    recentSessions.removeAll { $0.path == live.displayPath }
+                    syncMessages[LocalSessionStore.key(for: live.url)] = "Saved locally · deletion queued"
+                    closeSession()
+                    syncInBackground()
+                    return
+                }
                 try live.delete(discard: Session.trashOrDelete(
                     trash: { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
                     deletePermanently: { _ in
@@ -212,7 +369,9 @@ final class AppModel: ObservableObject {
             }
         }
         if session == nil {
-            let s = try Session.create(root: config.sessionsFolder, config: config)
+            navigationGeneration &+= 1
+            isOpeningSession = false
+            let s = try createSession()
             use(s)
         }
         if let id = selectedID { return id }
@@ -224,13 +383,16 @@ final class AppModel: ObservableObject {
     @discardableResult
     func addItem(title: String? = nil, focusTitle: Bool = true) throws -> Int {
         if session == nil {
-            let s = try Session.create(root: config.sessionsFolder, config: config)
+            navigationGeneration &+= 1
+            isOpeningSession = false
+            let s = try createSession()
             use(s)
         }
         guard let session else { throw SnagError.noSuchItem(0) }
         let rec = try session.addItem(title: title)
         if let identity = try session.itemIdentity(rec.id) { itemIdentities[rec.id] = identity }
         items = session.manifest.items
+        markSyncPending()
         show(rec.id)
         if focusTitle { self.focusTitle = true }
         return rec.id
@@ -548,6 +710,7 @@ final class AppModel: ObservableObject {
                 }
             }
         } else if isOpen {
+            markSyncPending()
             editor.refreshMedia(relative)
         }
     }
@@ -633,26 +796,53 @@ final class AppModel: ObservableObject {
             guard let session else { return flash("No session open") }
             try? session.writeReadme()
             let text = session.handoff(style: config.handoff)
-            pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
-            flash("Copied: \(session.displayPath)/README.md", success: true)
+            let copy = { [weak self] in
+                guard let self else { return }
+                self.pasteboard.clearContents()
+                self.pasteboard.setString(text, forType: .string)
+                self.flash("Copied: \(session.displayPath)/README.md", success: true)
+            }
+            if !sharedCopyIsAcknowledged(session) {
+                markSyncPending()
+                alert = AlertInfo(title: "The shared copy is still pending", message: "Your work is saved locally, but the destination may not have the latest notes and media yet. Copy its path anyway?",
+                    action: (label: "Copy Shared Path Anyway", run: copy))
+                syncInBackground()
+                return
+            }
+            copy()
         }
+    }
+
+    private func sharedCopyIsAcknowledged(_ session: Session) -> Bool {
+        guard isLocalSession(session) else { return true }
+        if capture.syncBlockedSessions.contains(LocalSessionStore.key(for: session.url)) || Annotator.open.contains(where: { $0.session.url.standardizedFileURL == session.url.standardizedFileURL }) { return false }
+        guard syncMessages[LocalSessionStore.key(for: session.url)] == "Synced", let localStore,
+              let entry = try? localStore.entry(content: session.url) else { return false }
+        return (try? SessionSync.hasAcknowledgedContent(entry)) == true
     }
 
     func revealSession() {
         guard let session else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([session.url.appendingPathComponent(Session.readmeName)])
+        let url = isLocalSession(session) && syncMessages[LocalSessionStore.key(for: session.url)] == "Synced" ? Paths.url(session.displayPath) : session.url
+        NSWorkspace.shared.activateFileViewerSelecting([url.appendingPathComponent(Session.readmeName)])
+    }
+
+    func revealLocalSession() {
+        guard let session else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([session.url])
     }
 
     func renameSession(_ name: String) {
         guard let session else { return }
         do { try session.setTitle(name) } catch { show(error) }
+        markSyncPending()
         objectWillChange.send()
     }
 
     func setSessionHeader(_ text: String?) {
         guard let session else { return }
         do { try session.setHeader(text) } catch { show(error) }
+        markSyncPending()
         objectWillChange.send()
     }
 

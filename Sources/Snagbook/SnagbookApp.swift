@@ -175,7 +175,7 @@ struct MenuBarContent: View {
         Divider()
         Button("New Session") { model.newSession() }
         Menu("Continue a Session") {
-            ForEach(Array(Session.list(root: model.config.sessionsFolder).prefix(10)), id: \.path) { r in
+            ForEach(Array(model.recentSessions.prefix(10)), id: \.path) { r in
                 Button(r.title + (r.path == model.session?.displayPath ? "  ✓" : "")) { model.openSession(r.path); WindowPlacement.show() }
             }
         }

@@ -12,6 +12,11 @@ When you play-test a game or click through an app, the findings pile up faster t
 
 Everything is saved as ordinary files while you type: a folder per session, a folder per item, Markdown notes, PNG pictures and MP4 videos. Every video gets a still frame per second and a contact sheet beside it, so someone (or something) that cannot play it can still see what happened. There is nothing to export.
 
+On **macOS**, Snagbook saves an active session locally first and sends changes to your chosen destination in the background. A slow or disconnected shared drive does not hold up typing or captures. The status bar shows **Synced** or explains what is waiting. Pending changes survive quitting and resume when you reopen Snagbook; leave the app running to finish a sync. Copy Hand-off warns before copying a destination path that is still pending.
+
+The first opening of an existing session copies it locally in the background. Previously opened sessions remain available offline. Snagbook keeps its working copies in `~/Library/Application Support/Snagbook/LocalSessions`; **Local Copy** in the status bar opens yours. Keep this folder until all pending work has synced. If a destination file changes outside Snagbook, it keeps both copies and asks you to compare them rather than overwriting that file. Use one running Snagbook instance per session; it does not merge simultaneous edits from multiple computers. If the destination has no system Trash, deletions are moved to `.snagbook-trash` beside your session folders.
+
+
 ## Contents
 
 - [Install](#install)

@@ -40,6 +40,8 @@ struct NotebookView: View {
             return Alert(title: Text(a.title), message: Text(a.message))
         }
         .frame(minWidth: 640, minHeight: 420)
+        .task { model.refreshRecentSessions() }
+        .onChange(of: model.showingSessions) { _, shown in if shown { model.refreshRecentSessions() } }
     }
 }
 
@@ -159,7 +161,7 @@ struct SessionMenu: View {
     var body: some View {
         if let s = model.session {
             Menu {
-                let recent = Session.list(root: model.config.sessionsFolder).prefix(12)
+                let recent = model.recentSessions.prefix(12)
                 Section("Recent sessions") {
                     ForEach(Array(recent), id: \.path) { r in
                         Button {
@@ -343,6 +345,13 @@ struct StatusBar: View {
                     .textSelection(.enabled)
             }
             Spacer()
+            if let sync = model.syncMessage {
+                Text(sync).lineLimit(1).help(sync)
+                Button("Retry") { model.syncInBackground() }.buttonStyle(.link)
+            }
+            if let session = model.session, model.isLocalSession(session) {
+                Button("Local Copy") { model.revealLocalSession() }.buttonStyle(.link)
+            }
             if model.session != nil {
                 Button("Show in Finder") { model.revealSession() }.buttonStyle(.link)
             }
@@ -358,10 +367,12 @@ struct StatusBar: View {
 struct WelcomeView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
-        let recent = Array(Session.list(root: model.config.sessionsFolder).prefix(6))
+        let recent = Array(model.recentSessions.prefix(6))
         VStack(spacing: 16) {
             Image(systemName: "note.text.badge.plus").font(.system(size: 44)).foregroundStyle(.secondary)
-            Text("Start a session").font(.title2.weight(.semibold))
+            Text(model.isOpeningSession ? "Opening session…" : "Start a session").font(.title2.weight(.semibold))
+            if model.isOpeningSession { Text("You can start another session while the destination responds.").foregroundStyle(.secondary) }
+            if let sync = model.syncMessage { Text(sync).font(.caption).foregroundStyle(.secondary) }
             Text("A session is one sitting of testing: numbered items, each with a note, screenshots and recordings.")
                 .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 420)
             Button("New Session") { model.newSession() }.keyboardShortcut(.defaultAction).controlSize(.large)
@@ -393,7 +404,7 @@ struct SessionPicker: View {
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        let sessions = Session.list(root: model.config.sessionsFolder)
+        let sessions = model.recentSessions
         VStack(alignment: .leading, spacing: 12) {
             Text("Sessions in \(model.config.sessionsFolder)").font(.headline)
             if sessions.isEmpty {

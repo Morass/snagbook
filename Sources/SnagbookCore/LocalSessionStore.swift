@@ -4,8 +4,8 @@ import Foundation
 public final class LocalSessionStore: Sendable {
     public let root: URL
     public init(root: URL) throws {
-        self.root = root
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        self.root = root.resolvingSymlinksInPath().standardizedFileURL
     }
 
     public struct Entry: Codable, Equatable, Sendable {
@@ -14,26 +14,40 @@ public final class LocalSessionStore: Sendable {
         public var sessionID: String
         public var deleteRequested = false
         public var allowCreateParent = false
+        public var key: String { directory.lastPathComponent }
         public var content: URL { directory.appendingPathComponent("session", isDirectory: true) }
         var descriptor: URL { directory.appendingPathComponent("destination.json") }
     }
 
-    public func entries() throws -> [Entry] {
-        try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-            .filter { !$0.lastPathComponent.hasPrefix(".") }
-            .compactMap { directory in
-                let descriptor = directory.appendingPathComponent("destination.json")
-                guard FileManager.default.fileExists(atPath: descriptor.path) else { return nil }
+    public struct Scan {
+        public var entries: [Entry]
+        public var issues: [String: String]
+    }
+
+    public func scan() throws -> Scan {
+        var result = Scan(entries: [], issues: [:])
+        for directory in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) where !directory.lastPathComponent.hasPrefix(".") {
+            let descriptor = directory.appendingPathComponent("destination.json")
+            guard FileManager.default.fileExists(atPath: descriptor.path) else { continue }
+            do {
                 var entry = try JSONDecoder().decode(Entry.self, from: Data(contentsOf: descriptor))
                 entry.directory = directory
-                return entry
-            }
+                result.entries.append(entry)
+            } catch { result.issues[directory.lastPathComponent] = "A local queue record needs attention: " + error.localizedDescription }
+        }
+        return result
     }
+
+    public func entries() throws -> [Entry] { try scan().entries }
 
     public func entry(target: String) throws -> Entry? {
         let path = Paths.url(target).standardizedFileURL.path
-        return try entries().first { Paths.url($0.target).standardizedFileURL.path == path }
+        return try entries().first {
+            Paths.url($0.target).standardizedFileURL.path == path && (try? SessionSync.load($0).deleted) != true
+        }
     }
+
+    public static func key(for content: URL) -> String { content.deletingLastPathComponent().lastPathComponent }
 
     public func entry(content: URL) throws -> Entry? {
         try entries().first { $0.content.standardizedFileURL == content.standardizedFileURL }
@@ -50,7 +64,11 @@ public final class LocalSessionStore: Sendable {
         let made = try Session.create(root: directory.path, config: config)
         let content = directory.appendingPathComponent("session", isDirectory: true)
         try FileManager.default.moveItem(at: made.url, to: content)
-        let target = Paths.url(destinationRoot).appendingPathComponent(made.url.lastPathComponent).path
+        let prefix = made.url.lastPathComponent + (config.folderFormat.contains("{hash}") ? "" : "-" + made.manifest.id)
+        let taken = Set(try entries().map { Paths.url($0.target).standardizedFileURL.path })
+        var name = prefix
+        while taken.contains(Paths.url(destinationRoot).appendingPathComponent(name).path) { name = prefix + "-" + UUID().uuidString.prefix(8) }
+        let target = Paths.url(destinationRoot).appendingPathComponent(name).path
         let entry = Entry(directory: directory, target: Paths.abbreviate(target), sessionID: made.manifest.id,
                           allowCreateParent: destinationRoot == Config().sessionsFolder)
         try save(entry)
@@ -60,11 +78,11 @@ public final class LocalSessionStore: Sendable {
     }
 
     /// Reads the destination; call on a worker. Publishing the descriptor commits the import.
-    public func importSession(_ target: String, header: String) throws -> Session {
+    public func importSession(_ target: String, header: String, afterCommit: (@Sendable () throws -> Void)? = nil) throws -> Session {
         if let entry = try entry(target: target) { return try session(entry, header: header) }
-        let remote = Paths.url(target)
+        let remote = Paths.url(target).resolvingSymlinksInPath()
         let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let entry = Entry(directory: directory, target: Paths.abbreviate(remote.path), sessionID: try Session.loadManifest(remote).id)
+        let entry = Entry(directory: directory, target: Paths.abbreviate(Paths.url(target).path), sessionID: try Session.loadManifest(remote).id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         do {
             try SessionSync.copyTree(from: remote, to: entry.content)
@@ -74,12 +92,15 @@ public final class LocalSessionStore: Sendable {
             guard checkpoint.files == (try SessionSync.digests(in: remote)) else { throw SyncError.changing }
             checkpoint.targetIdentity = try SessionSync.directoryIdentity(remote)
             checkpoint.parentIdentity = try SessionSync.directoryIdentity(remote.deletingLastPathComponent())
+            checkpoint.resolvedParent = remote.deletingLastPathComponent().path
             checkpoint.localStamps = try SessionSync.stamps(in: entry.content)
+            checkpoint.localDigests = checkpoint.files
             try SessionSync.save(checkpoint, entry: entry)
             try save(entry)
+            try afterCommit?()
             return try session(entry, header: header)
         } catch {
-            try? FileManager.default.removeItem(at: directory)
+            if !FileManager.default.fileExists(atPath: entry.descriptor.path) { try? FileManager.default.removeItem(at: directory) }
             throw error
         }
     }
@@ -105,5 +126,17 @@ public enum SyncError: Error, LocalizedError {
         case .pendingDeletion: return "This session is waiting to be moved to the destination’s Trash."
         case .changing: return "Saved locally; waiting for the current save to finish."
         }
+    }
+}
+
+
+extension LocalSessionStore.Entry {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        directory = try c.decode(URL.self, forKey: .directory)
+        target = try c.decode(String.self, forKey: .target)
+        sessionID = try c.decode(String.self, forKey: .sessionID)
+        deleteRequested = try c.decodeIfPresent(Bool.self, forKey: .deleteRequested) ?? false
+        allowCreateParent = try c.decodeIfPresent(Bool.self, forKey: .allowCreateParent) ?? false
     }
 }

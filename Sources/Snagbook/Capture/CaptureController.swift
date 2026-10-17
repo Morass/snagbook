@@ -37,6 +37,8 @@ final class CaptureController: ObservableObject {
 
     var isRecording: Bool { phase == .recording }
 
+    var syncBlockedSessions: Set<String> { Set([recordingSession?.url, savingSession?.url].compactMap { $0 }.map { LocalSessionStore.key(for: $0) }) }
+
     func isUsing(_ session: Session, item: Int) -> Bool {
         let recordingHere = recordingItem == item && recordingSession?.isSameSession(as: session) == true
         let savingHere = savingItem == item && savingSession?.isSameSession(as: session) == true
@@ -297,7 +299,7 @@ final class CaptureController: ObservableObject {
 
     private func liveSession(for source: Session, item: Int, identity: String?) throws -> Session {
         guard let identity else {
-            let current = try Session.open(source.url.path, fallbackHeader: model.config.header)
+            let current = try Session.open(source.url.path, fallbackHeader: model.config.header, displayPath: source.displayPath)
             guard current.isSameSession(as: source) else { throw SnagError.notASession(source.displayPath) }
             _ = try current.item(item)
             return current

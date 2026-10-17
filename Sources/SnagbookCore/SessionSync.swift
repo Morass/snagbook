@@ -12,22 +12,27 @@ public final class SessionSync: Sendable {
         var modified: Date
         var identity: String
     }
-    struct Receipt: Codable { var desired: String? }
+    struct Receipt: Codable { var desired: String?; var temporary: String? = nil }
     struct Checkpoint: Codable {
         var files: [String: String] = [:]
         var receipts: [String: Receipt] = [:]
         var localStamps: [String: Stamp]? = nil
+        var localDigests: [String: String]? = nil
         var parentIdentity: String? = nil
+        var resolvedParent: String? = nil
         var targetIdentity: String? = nil
+        var lastChecked: Date? = nil
         var deleted = false
         var creatingTarget = false
     }
     private let trash: @Sendable (URL) throws -> Void
     // The injected boundary also proves a stalled destination never runs on the UI thread.
     private let beforeDestinationAccess: (@Sendable () -> Void)?
-    public init(trash: @escaping @Sendable (URL) throws -> Void, beforeDestinationAccess: (@Sendable () -> Void)? = nil) {
+    private let acknowledgementCheckInterval: TimeInterval
+    public init(trash: @escaping @Sendable (URL) throws -> Void, beforeDestinationAccess: (@Sendable () -> Void)? = nil, acknowledgementCheckInterval: TimeInterval = 0) {
         self.trash = trash
         self.beforeDestinationAccess = beforeDestinationAccess
+        self.acknowledgementCheckInterval = acknowledgementCheckInterval
     }
 
     public func run(_ entry: LocalSessionStore.Entry) throws -> Result {
@@ -37,12 +42,19 @@ public final class SessionSync: Sendable {
         guard flock(lease, LOCK_EX | LOCK_NB) == 0 else { return .pending }
         let fm = FileManager.default
         var checkpoint = try Self.load(entry)
-        if checkpoint.deleted { return .deleted }
+        if checkpoint.deleted { return try Self.retire(checkpoint, entry: entry) }
         let stamps = try Self.stamps(in: entry.content)
-        if !entry.deleteRequested, checkpoint.receipts.isEmpty, checkpoint.localStamps == stamps { return .synced }
+        let unchanged = !entry.deleteRequested && checkpoint.receipts.isEmpty && checkpoint.localStamps == stamps
+        if unchanged, let checked = checkpoint.lastChecked {
+            let elapsed = Date().timeIntervalSince(checked)
+            if elapsed >= 0 && elapsed < acknowledgementCheckInterval { return .synced }
+        }
         beforeDestinationAccess?()
-        let destination = Paths.url(entry.target)
-        let parent = destination.deletingLastPathComponent()
+        let requested = Paths.url(entry.target)
+        let parent = requested.deletingLastPathComponent().resolvingSymlinksInPath()
+        let destination = parent.appendingPathComponent(requested.lastPathComponent)
+        let sameSession = (try? Session.loadManifest(destination).id) == entry.sessionID
+        if let expected = checkpoint.resolvedParent, expected != parent.path, !sameSession { throw SyncError.conflict("destination path") }
         if entry.allowCreateParent, !fm.fileExists(atPath: parent.path), !parent.path.hasPrefix("/Volumes/") {
             try fm.createDirectory(at: parent, withIntermediateDirectories: true)
         }
@@ -54,14 +66,19 @@ public final class SessionSync: Sendable {
         }
         #endif
         let parentIdentity = try Self.directoryIdentity(parent)
-        if let expected = checkpoint.parentIdentity, expected != parentIdentity { throw SyncError.conflict("destination folder") }
-        if checkpoint.parentIdentity == nil { checkpoint.parentIdentity = parentIdentity; try Self.save(checkpoint, entry: entry) }
+        if let expected = checkpoint.parentIdentity, expected != parentIdentity,
+           !sameSession, checkpoint.targetIdentity != nil { throw SyncError.conflict("destination folder") }
+        if checkpoint.parentIdentity != parentIdentity || checkpoint.resolvedParent != parent.path {
+            checkpoint.parentIdentity = parentIdentity
+            checkpoint.resolvedParent = parent.path
+            try Self.save(checkpoint, entry: entry)
+        }
         if !fm.fileExists(atPath: destination.path) {
             if checkpoint.targetIdentity != nil {
-                if entry.deleteRequested { checkpoint.deleted = true; try Self.save(checkpoint, entry: entry); return .deleted }
+                if entry.deleteRequested { return try Self.retire(checkpoint, entry: entry) }
                 throw SyncError.unavailable
             }
-            if entry.deleteRequested { checkpoint.deleted = true; try Self.save(checkpoint, entry: entry); return .deleted }
+            if entry.deleteRequested { return try Self.retire(checkpoint, entry: entry) }
             checkpoint.creatingTarget = true
             try Self.save(checkpoint, entry: entry)
             try fm.createDirectory(at: destination, withIntermediateDirectories: false)
@@ -75,7 +92,11 @@ public final class SessionSync: Sendable {
                 checkpoint.creatingTarget = false
                 try Self.save(checkpoint, entry: entry)
             }
-            guard checkpoint.targetIdentity == identity else { throw SyncError.conflict("session folder") }
+            if checkpoint.targetIdentity != identity {
+                guard sameSession else { throw SyncError.conflict("session folder") }
+                checkpoint.targetIdentity = identity
+                try Self.save(checkpoint, entry: entry)
+            }
         }
         if let manifest = checkpoint.files[Session.manifestName] {
             let current = try Self.digestIfPresent(destination.appendingPathComponent(Session.manifestName))
@@ -84,6 +105,13 @@ public final class SessionSync: Sendable {
         // A write may have reached the drive immediately before the process exited.
         for (path, receipt) in checkpoint.receipts {
             let remote = try Self.file(path, under: destination)
+            if let name = receipt.temporary {
+                let temporary = try Self.file(name, under: destination)
+                guard temporary.deletingLastPathComponent() == remote.deletingLastPathComponent(),
+                      temporary.lastPathComponent.hasPrefix(".snagbook-"),
+                      UUID(uuidString: String(temporary.lastPathComponent.dropFirst(".snagbook-".count))) != nil else { throw SyncError.invalidPath }
+                if try Self.digestIfPresent(temporary) != nil { try fm.removeItem(at: temporary) }
+            }
             let actual = try Self.digestIfPresent(remote)
             if actual == receipt.desired {
                 checkpoint.files[path] = actual
@@ -96,16 +124,30 @@ public final class SessionSync: Sendable {
         if entry.deleteRequested {
             guard try Self.digests(in: destination) == checkpoint.files else { throw SyncError.conflict("session contents") }
             try trash(destination)
-            checkpoint.deleted = true
+            return try Self.retire(checkpoint, entry: entry)
+        }
+        if unchanged {
+            let readme = try Self.digestIfPresent(destination.appendingPathComponent(Session.readmeName))
+            guard readme == checkpoint.files[Session.readmeName] else { throw SyncError.conflict(Session.readmeName) }
+            checkpoint.lastChecked = Date()
             try Self.save(checkpoint, entry: entry)
-            return .deleted
+            return .synced
         }
         let snapshot = entry.directory.appendingPathComponent(".snapshot")
         if fm.fileExists(atPath: snapshot.path) { try fm.removeItem(at: snapshot) }
         defer { try? fm.removeItem(at: snapshot) }
         try Self.copyTree(from: entry.content, to: snapshot)
-        let desired = try Self.digests(in: snapshot)
-        guard stamps == (try Self.stamps(in: entry.content)), desired == (try Self.digests(in: entry.content)) else { return .pending }
+        var desired: [String: String] = [:]
+        for (path, stamp) in stamps {
+            if checkpoint.localStamps?[path] == stamp, let cached = checkpoint.localDigests?[path] {
+                desired[path] = cached
+            } else {
+                let copied = try ContentDigest.file(Self.file(path, under: snapshot))
+                guard copied == (try ContentDigest.file(Self.file(path, under: entry.content))) else { return .pending }
+                desired[path] = copied
+            }
+        }
+        guard stamps == (try Self.stamps(in: entry.content)) else { return .pending }
         let changed = Set(desired.keys).union(checkpoint.files.keys).filter { desired[$0] != checkpoint.files[$0] }
         // Preflight the entire change before publishing any part of it.
         for path in changed {
@@ -121,13 +163,19 @@ public final class SessionSync: Sendable {
             let remote = try Self.file(path, under: destination)
             let actual = try Self.digestIfPresent(remote)
             guard actual == checkpoint.files[path] || actual == desired[path] else { throw SyncError.conflict(path) }
-            checkpoint.receipts[path] = Receipt(desired: desired[path])
+            let temporaryName = ".snagbook-\(UUID().uuidString)"
+            let components = path.split(separator: "/").dropLast().map(String.init)
+            let temporaryPath = (components + [temporaryName]).joined(separator: "/")
+            checkpoint.receipts[path] = Receipt(desired: desired[path], temporary: desired[path] == nil ? nil : temporaryPath)
             try Self.save(checkpoint, entry: entry)
             if let digest = desired[path] {
                 try Self.makeParents(of: remote, under: destination)
-                let temporary = remote.deletingLastPathComponent().appendingPathComponent(".snagbook-\(UUID().uuidString)")
+                let temporary = try Self.file(temporaryPath, under: destination)
                 defer { try? fm.removeItem(at: temporary) }
                 try fm.copyItem(at: snapshot.appendingPathComponent(path), to: temporary)
+                let handle = try FileHandle(forWritingTo: temporary)
+                do { try handle.synchronize(); try handle.close() }
+                catch { try? handle.close(); throw error }
                 let current = try Self.digestIfPresent(remote)
                 guard current == actual else { throw SyncError.conflict(path) }
                 // rename is atomic on the destination filesystem; copying from local storage is not.
@@ -135,14 +183,41 @@ public final class SessionSync: Sendable {
                 checkpoint.files[path] = digest
             } else {
                 if actual != nil { try trash(remote) }
+                var directory = remote.deletingLastPathComponent()
+                while directory.path != destination.path && directory.path.hasPrefix(destination.path + "/") {
+                    guard rmdir(directory.path) == 0 else { break }
+                    directory.deleteLastPathComponent()
+                }
                 checkpoint.files[path] = nil
             }
             checkpoint.receipts[path] = nil
             try Self.save(checkpoint, entry: entry)
         }
         checkpoint.localStamps = stamps
+        checkpoint.localDigests = desired
+        checkpoint.lastChecked = Date()
         try Self.save(checkpoint, entry: entry)
         return try Self.stamps(in: entry.content) == stamps ? .synced : .pending
+    }
+
+    private static func retire(_ checkpoint: Checkpoint, entry: LocalSessionStore.Entry) throws -> Result {
+        var done = checkpoint
+        done.deleted = true
+        try save(done, entry: entry)
+        let retired = entry.directory.deletingLastPathComponent().appendingPathComponent(".retired", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: retired.path) { try FileManager.default.createDirectory(at: retired, withIntermediateDirectories: false) }
+        _ = try directoryIdentity(retired)
+        let target = retired.appendingPathComponent(entry.directory.lastPathComponent)
+        try FileManager.default.moveItem(at: entry.directory, to: target)
+        try? FileManager.default.removeItem(at: target)
+        return .deleted
+    }
+
+    public static func hasAcknowledgedContent(_ entry: LocalSessionStore.Entry) throws -> Bool {
+        guard !entry.deleteRequested else { return false }
+        let checkpoint = try load(entry)
+        let current = try stamps(in: entry.content)
+        return !checkpoint.deleted && checkpoint.receipts.isEmpty && checkpoint.localStamps == current
     }
 
     static func load(_ entry: LocalSessionStore.Entry) throws -> Checkpoint {

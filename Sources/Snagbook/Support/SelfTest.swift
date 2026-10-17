@@ -24,7 +24,9 @@ enum SelfTest {
         Task {
             // Give the window and the page a moment.
             for _ in 0..<100 where !(await pageReady(model)) { try? await Task.sleep(nanoseconds: 100_000_000) }
-            if env["SNAGBOOK_SELFTEST"] != nil {
+            if let mode = env["SNAGBOOK_SELFTEST"], mode.hasPrefix("sync-") {
+                await syncStorage(model, recovering: mode == "sync-recover")
+            } else if env["SNAGBOOK_SELFTEST"] != nil {
                 await run(model)
                 await interactions(model)
             }
@@ -37,6 +39,73 @@ enum SelfTest {
             print("SELFTEST FAIL")
             for f in failures { print("  - \(f)") }
             exit(1)
+        }
+    }
+
+    static func syncStorage(_ model: AppModel, recovering: Bool) async {
+        if !recovering {
+            model.newSession()
+            for _ in 0..<100 where model.selectedID == nil { await settle(50) }
+            guard let session = model.session, let item = model.selectedID else { return check(false, "a local session opens while the destination is offline") }
+            check(model.isLocalSession(session), "the working session is on local storage")
+            _ = await js(model, "snag.insertMarkdown('Saved while the destination is offline.')")
+            check(await model.editor.flush(), "the real editor saves locally while offline")
+            model.updateConfig { $0.capture.annotateScreenshots = false }
+            do {
+                _ = try model.screenshotTaken(testImage(240, 160, hue: 0.4), source: "self-test")
+                await settle()
+                check(await model.editor.flush(), "the screenshot link saves locally while offline")
+                let note = try session.readNote(item)
+                check(note.contains("Saved while the destination is offline.") && note.contains("media/shot-001.png"), "the offline note and screenshot are both durable")
+                check(!exists(Paths.url(session.displayPath)), "saving offline does not invent a destination folder")
+                model.copyHandoff()
+                await settle()
+                check(model.alert?.title == "The shared copy is still pending", "Copy Hand-off warns before copying an unsynced path")
+                check(model.pasteboard.string(forType: .string) == nil, "the warning does not silently replace the clipboard")
+                model.alert = nil
+            } catch { check(false, "offline storage: \(error)") }
+        } else {
+            for _ in 0..<100 where model.selectedID == nil { await settle(50) }
+            guard let session = model.session, let item = model.selectedID else { return check(false, "the local queue restores the last session on restart") }
+            check((try? session.readNote(item).contains("Saved while the destination is offline.")) == true, "restart preserves the offline note")
+            for _ in 0..<150 where model.syncMessage != "Synced" { await settle(100) }
+            check(model.syncMessage == "Synced", "the restarted queue syncs after the destination returns: \(model.syncMessages); local \(session.url.path)")
+            do {
+                let remote = try Session.open(session.displayPath)
+                check(try remote.readNote(item) == session.readNote(item), "the shared note equals the local note")
+                check(exists(try remote.mediaURL(item).appendingPathComponent("shot-001.png")), "the queued screenshot reaches the destination")
+                let readme = read(remote.url.appendingPathComponent(Session.readmeName))
+                check(readme.contains(session.displayPath) && !readme.contains("LocalSessions"), "the shared README uses the destination path")
+            } catch { check(false, "recovered shared copy: \(error)") }
+            model.copyHandoff()
+            await settle()
+            check(model.pasteboard.string(forType: .string)?.contains(session.displayPath) == true, "synced hand-off copies the destination path")
+            do {
+                let parent = AppModel.configURL.deletingLastPathComponent()
+                let original = parent.appendingPathComponent("trash-fallback-proof.txt")
+                try Data("recoverable".utf8).write(to: original)
+                let discard = DestinationTrash.handler(for: parent, systemTrash: { _ in throw CocoaError(.fileWriteUnknown) })
+                try discard(original)
+                let archive = parent.appendingPathComponent(".snagbook-trash")
+                let files = try FileManager.default.contentsOfDirectory(at: archive, includingPropertiesForKeys: nil)
+                check(!exists(original) && files.count == 1 && read(files[0]) == "recoverable", "a destination without Trash retains a recoverable archived deletion")
+            } catch { check(false, "destination Trash fallback: \(error)") }
+
+            do {
+                let destination = Paths.url(model.config.sessionsFolder)
+                let offline = destination.deletingLastPathComponent().appendingPathComponent("offline-again")
+                try FileManager.default.moveItem(at: destination, to: offline)
+                let previous = model.selectedID
+                model.newItemFromMenu()
+                for _ in 0..<50 where model.selectedID == previous { await settle(50) }
+                check(model.selectedID != previous && model.syncMessage != "Synced", "a new item immediately marks the shared copy pending")
+                model.copyHandoff()
+                await settle()
+                check(model.alert?.title == "The shared copy is still pending", "a new item cannot bypass the hand-off warning after a previous sync")
+                model.alert = nil
+                try FileManager.default.moveItem(at: offline, to: destination)
+            } catch { check(false, "new-item hand-off state: \(error)") }
+
         }
     }
 
