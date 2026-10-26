@@ -921,20 +921,15 @@ final class AppModel: ObservableObject {
             guard let session else { return flash("No session open") }
             try? session.writeReadme()
             let text = session.handoff(style: config.handoff)
-            let copy = { [weak self] in
-                guard let self else { return }
-                self.pasteboard.clearContents()
-                self.pasteboard.setString(text, forType: .string)
-                self.flash("Copied: \(session.displayPath)/README.md", success: true)
-            }
-            if !sharedCopyIsAcknowledged(session) {
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            if sharedCopyIsAcknowledged(session) {
+                flash("Copied: \(session.displayPath)/README.md", success: true)
+            } else {
                 markSyncPending()
-                alert = AlertInfo(title: "The shared copy is still pending", message: "Your work is saved locally, but the destination may not have the latest notes and media yet. Copy its path anyway?",
-                    action: (label: "Copy Shared Path Anyway", run: copy))
                 syncInBackground()
-                return
+                flash("Copied: \(session.displayPath)/README.md (shared copy still syncing)", success: true)
             }
-            copy()
         }
     }
 

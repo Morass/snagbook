@@ -109,9 +109,9 @@ enum SelfTest {
                 check(!exists(Paths.url(session.displayPath)), "saving offline does not invent a destination folder")
                 model.copyHandoff()
                 await settle()
-                check(model.alert?.title == "The shared copy is still pending", "Copy Hand-off warns before copying an unsynced path")
-                check(model.pasteboard.string(forType: .string) == nil, "the warning does not silently replace the clipboard")
-                model.alert = nil
+                check(model.alert == nil, "Copy Hand-off does not wait on the shared copy")
+                check(model.pasteboard.string(forType: .string)?.contains(session.displayPath) == true, "Copy Hand-off copies the destination path while unsynced")
+                check(model.status?.contains("still syncing") == true, "the unsynced hand-off says the shared copy is still syncing")
             } catch { check(false, "offline storage: \(error)") }
         } else {
             for _ in 0..<100 where model.selectedID == nil { await settle(50) }
@@ -148,10 +148,11 @@ enum SelfTest {
                 model.newItemFromMenu()
                 for _ in 0..<50 where model.selectedID == previous { await settle(50) }
                 check(model.selectedID != previous && model.syncMessage != "Synced", "a new item immediately marks the shared copy pending")
+                model.pasteboard.clearContents()
                 model.copyHandoff()
-                for _ in 0..<100 where model.alert == nil { await settle(50) }
-                check(model.alert?.title == "The shared copy is still pending", "a new item cannot bypass the hand-off warning after a previous sync: \(model.alert?.title ?? "none"), local \(model.session.map { model.isLocalSession($0) } ?? false), state \(model.syncMessages)")
-                model.alert = nil
+                for _ in 0..<100 where model.pasteboard.string(forType: .string) == nil { await settle(50) }
+                check(model.alert == nil && model.pasteboard.string(forType: .string) != nil, "a new item's unsynced hand-off still copies: \(model.alert?.title ?? "no alert"), state \(model.syncMessages)")
+                check(model.status?.contains("still syncing") == true, "a new item after a previous sync reports the hand-off as still syncing")
                 try FileManager.default.moveItem(at: offline, to: destination)
                 let previousSession = model.session?.url
                 model.newSession()
