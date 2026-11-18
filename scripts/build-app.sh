@@ -19,7 +19,8 @@ if [ ! -f "$ROOT/Resources/editor/editor.js" ] || [ -n "$(find "$ROOT/web/src" "
     (cd "$ROOT/web" && { [ -d node_modules ] || npm ci --silent; } && node build.mjs >/dev/null)
 fi
 
-SWIFT_ARGS=(-c "$CONFIG" --product Snagbook)
+# The resource-lookup patch below expects the native build layout; Swift 6.4 defaults to swiftbuild.
+SWIFT_ARGS=(-c "$CONFIG" --product Snagbook --build-system native)
 if [ "$CONFIG" = release ]; then
     SWIFT_ARGS+=(-Xswiftc -file-prefix-map -Xswiftc "$ROOT=." -Xswiftc -debug-prefix-map -Xswiftc "$ROOT=.")
 fi

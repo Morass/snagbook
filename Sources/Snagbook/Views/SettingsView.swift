@@ -107,6 +107,9 @@ struct ShortcutSettings: View {
                 KeyboardShortcuts.Recorder("Screenshot:", name: .screenshot)
                 KeyboardShortcuts.Recorder("New item:", name: .newItem)
                 KeyboardShortcuts.Recorder("Show or hide the notebook:", name: .showNotebook)
+                if DictationController.isSupported {
+                    KeyboardShortcuts.Recorder("Dictate / stop:", name: .dictate)
+                }
             }
             Section("In the notebook") {
                 shortcut("New item", "⌘N")

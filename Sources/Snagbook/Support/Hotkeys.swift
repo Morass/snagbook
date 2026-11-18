@@ -11,6 +11,8 @@ extension KeyboardShortcuts.Name {
     static let newItem = Self("newItem", default: .init(.n, modifiers: [.control, .command]))
     /// Bring the notebook to the front (or hide it when it is in front).
     static let showNotebook = Self("showNotebook", default: .init(.b, modifiers: [.control, .command]))
+    /// Start dictating into the shown item; press again to stop.
+    static let dictate = Self("dictate", default: .init(.m, modifiers: [.control, .command]))
 }
 
 extension KeyboardShortcuts.Name {

@@ -34,6 +34,8 @@ enum SelfTest {
                     let recorder = KeyboardShortcuts.RecorderCocoa(for: .record)
                     check(recorder.placeholderString?.isEmpty == false, "shortcut settings load their packaged resources")
                 }
+            } else if env["SNAGBOOK_SELFTEST"] == "dictation" {
+                await dictation(model)
             } else if let mode = env["SNAGBOOK_SELFTEST"], mode.hasPrefix("sync-") {
                 await syncStorage(model, recovering: mode == "sync-recover")
             } else if env["SNAGBOOK_SELFTEST"] != nil {
@@ -162,6 +164,58 @@ enum SelfTest {
             } catch { check(false, "new-item hand-off state: \(error)") }
 
         }
+    }
+
+    /// Dictation through the real recogniser, fed a spoken sentence instead of the microphone.
+    static func dictation(_ model: AppModel) async {
+        let env = ProcessInfo.processInfo.environment
+        guard DictationController.isSupported else { return check(false, "dictation needs macOS 26 or newer") }
+        guard let audio = env["SNAGBOOK_SELFTEST_AUDIO"].map(URL.init(fileURLWithPath:)),
+              let file = try? AVAudioFile(forReading: audio) else { return check(false, "SNAGBOOK_SELFTEST_AUDIO names a sound file") }
+        let seconds = Double(file.length) / file.processingFormat.sampleRate
+        let phrase = "door is stuck in level"
+
+        let languages = await DictationController.languages()
+        check(languages.contains { $0.id == "cs-CZ" } && languages.contains { $0.id == "en-US" }, "the language menu lists the system's dictation languages (\(languages.count))")
+        model.updateConfig { $0.dictationLanguage = "en-US" }
+        let saved = (try? JSONSerialization.jsonObject(with: Data(contentsOf: AppModel.configURL))) as? [String: Any]
+        check(saved?["dictationLanguage"] as? String == "en-US", "the chosen dictation language is saved in the settings file")
+
+        func dictate(during: () async -> Void = {}) async -> Bool {
+            model.dictation.start(audioFile: audio)
+            for _ in 0..<1800 where model.dictation.phase != .listening && model.dictation.phase != .idle { await settle(100) }
+            guard model.dictation.phase == .listening else { return false }
+            await during()
+            await settle(UInt64((seconds + 1) * 1000))
+            model.dictation.stop()
+            for _ in 0..<600 where model.dictation.phase != .idle { await settle(100) }
+            return model.dictation.phase == .idle
+        }
+
+        let before = model.session?.url
+        model.newSession()
+        for _ in 0..<50 where model.session?.url == before || model.selectedID == nil { await settle(100) }
+        guard let session = model.session, let first = model.selectedID else { return check(false, "a session for dictation") }
+        await settle()
+        _ = await js(model, "snag.focus(); snag.typeText('Seen:')")
+        check(await dictate(), "dictation starts, listens and stops")
+        _ = await model.editor.flush()
+        let firstNote = try! session.noteURL(first)
+        let text = read(firstNote).lowercased()
+        check(text.contains("seen: hello") && text.contains(phrase), "dictated words reach the note at the caret, after a space: \(read(firstNote))")
+        check(text.contains("snag book, the door") && text.contains("level two.\n\nit happens every time."),
+              "spoken comma, period and new line become punctuation and a new paragraph")
+
+        // Switching items while speaking: the words still go to the item dictation began in.
+        check(await dictate {
+            do { _ = try model.addItem(title: "Other", focusTitle: false) } catch { check(false, "add an item: \(error)") }
+        }, "dictation survives switching items")
+        _ = await model.editor.flush()
+        guard let second = model.selectedID, second != first, let live = model.session else { return check(false, "a second item is shown") }
+        let firstText = read(try! live.noteURL(first)).lowercased()
+        check(firstText.components(separatedBy: phrase).count == 3, "words spoken after switching items go to the item dictation began in: \(firstText)")
+        check(firstText.components(separatedBy: "level two.\n\nit happens").count == 3, "a spoken new line is a new paragraph in the saved note too")
+        check(!read(try! live.noteURL(second)).lowercased().contains(phrase), "the newly shown item gets none of them")
     }
 
     static func pageReady(_ model: AppModel) async -> Bool {

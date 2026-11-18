@@ -111,6 +111,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     }
 
     func insertMarkdown(_ text: String) { call("snag.insertMarkdown(\(Self.json(text)))") }
+    func insertText(_ text: String) { call("snag.insertText(\(Self.json(text)))") }
 
     func insertMedia(kind: String, src: String, label: String) {
         call("snag.insertMedia(\(Self.json(["kind": kind, "src": src, "label": label])))")

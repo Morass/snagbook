@@ -10,8 +10,8 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>Snagbook</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.2</string>
-    <key>CFBundleVersion</key><string>4</string>
+    <key>CFBundleShortVersionString</key><string>0.3.0</string>
+    <key>CFBundleVersion</key><string>5</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
@@ -19,6 +19,6 @@
     <key>NSSupportsAutomaticTermination</key><false/>
     <key>NSSupportsSuddenTermination</key><false/>
     <key>NSScreenCaptureUsageDescription</key><string>Snagbook records the part of the screen you choose, and takes screenshots of it, for your notes.</string>
-    <key>NSMicrophoneUsageDescription</key><string>Snagbook can record your voice with a screen recording, when you turn that on.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Snagbook listens when you dictate into a note, and can record your voice with a screen recording when you turn that on.</string>
 </dict>
 </plist>

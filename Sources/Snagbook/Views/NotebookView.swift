@@ -72,12 +72,49 @@ struct NotebookToolbar: ToolbarContent {
                   : tip("Record", KeyboardShortcuts.Name.record.hint, then: "drag a rectangle; recording starts when you let go"))
             Button { capture.screenshotAction() } label: { Label("Screenshot", systemImage: "camera.viewfinder") }
                 .help(tip("Screenshot", KeyboardShortcuts.Name.screenshot.hint, then: "drag a rectangle"))
+            if DictationController.isSupported {
+                DictateButton()
+            }
             Divider()
             Button { model.copyHandoff() } label: { Label("Copy Hand-off", systemImage: "arrowshape.turn.up.right") }
                 .help(tip("Copy hand-off", "⇧⌘C", then: "the text that hands this session to an agent"))
                 .disabled(model.session == nil)
         }
         .withoutGlassWhenCapturing()
+    }
+}
+
+/// Click to dictate into the note; the arrow beside it picks the language.
+struct DictateButton: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var dictation: DictationController
+    @State private var languages: [(id: String, name: String)] = []
+
+    var body: some View {
+        Menu {
+            Toggle("System Language (\(DictationController.displayName(Locale.current.identifier(.bcp47))))", isOn: choose(nil))
+            Divider()
+            ForEach(languages, id: \.id) { l in Toggle(l.name, isOn: choose(l.id)) }
+        } label: {
+            Label(dictation.buttonTitle, systemImage: dictation.phase == .listening ? "mic.fill" : "mic")
+                .foregroundStyle(dictation.phase == .listening ? .red : .primary)
+        } primaryAction: {
+            dictation.toggle()
+        }
+        .disabled(dictation.phase == .finishing)
+        .help(tip(dictation.phase == .listening ? "Stop dictating" : "Dictate", KeyboardShortcuts.Name.dictate.hint,
+                  then: "in \(languageName); the arrow picks the language"))
+        .task { languages = await DictationController.languages() }
+    }
+
+    var languageName: String {
+        DictationController.displayName(model.config.dictationLanguage ?? Locale.current.identifier(.bcp47))
+    }
+
+    func choose(_ id: String?) -> Binding<Bool> {
+        Binding(get: { model.config.dictationLanguage == id }, set: { on in
+            if on { model.updateConfig { $0.dictationLanguage = id } }
+        })
     }
 }
 

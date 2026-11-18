@@ -34,6 +34,7 @@ final class AppModel: ObservableObject {
     /// Where Copy Hand-off writes; the self-test swaps in a private one.
     var pasteboard = NSPasteboard.general
     lazy var capture = CaptureController(model: self)
+    lazy var dictation = DictationController(model: self)
     private var back: [Int] = []
     private var forward: [Int] = []
     private var editorItemIdentity: String?
@@ -876,6 +877,33 @@ final class AppModel: ObservableObject {
         } else if let id = editor.shownItem, let file = fileURL(item: id, relative: href.removingPercentEncoding ?? href) {
             NSWorkspace.shared.open(file)
         }
+    }
+
+    // MARK: - dictation
+
+    /// The item dictated words go to: the shown one, made first if there is none.
+    func dictationTarget() async throws -> (Session, Int) {
+        if session == nil, !(await prepareSessionStorage()) { throw DictationError("No session to dictate into.") }
+        let id = try ensureItem()
+        guard let session else { throw SnagError.noSuchItem(id) }
+        return (session, id)
+    }
+
+    /// Words recognised while dictating into `id`: at the caret while that item is shown,
+    /// otherwise added to the end of its note. A replaced or deleted item gets nothing.
+    func dictated(_ text: String, session source: Session, item id: Int, identity: String) throws {
+        if session?.isSameSession(as: source) == true, selectedID == id, editor.shownItem == id,
+           editorItemIdentity == identity {
+            editor.insertText(text)
+            return
+        }
+        let live = try source.reopenedMatchingItem(id, identity: identity, fallbackHeader: config.header)
+        let old = try live.readNote(id)
+        let body = old.trimmingCharacters(in: .whitespacesAndNewlines)
+        let paragraphs = text.split(whereSeparator: \.isNewline).joined(separator: "\n\n")
+        let joined = body.isEmpty ? paragraphs : old.hasSuffix("\n\n") ? body + "\n\n" + paragraphs : body + " " + paragraphs
+        try live.writeNote(id, body: joined + "\n")
+        if session?.isSameSession(as: live) == true { markSyncPending() }
     }
 
     // MARK: - templates

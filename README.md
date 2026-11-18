@@ -12,7 +12,7 @@ When you play-test a game or click through an app, the findings pile up faster t
 
 Everything is saved as ordinary files while you type: a folder per session, a folder per item, Markdown notes, PNG pictures and MP4 videos. Every video gets a still frame per second and a contact sheet beside it, so someone (or something) that cannot play it can still see what happened. There is nothing to export.
 
-On **macOS 0.2.2 builds from source**, Snagbook saves directly to folders on an internal drive. For destinations macOS identifies as a network share or external drive, it saves locally first and sends changes in the background. A slow or disconnected shared drive does not hold up typing or captures. The status bar shows **Synced** or explains what is waiting. Pending changes survive quitting and resume when you reopen Snagbook; leave the app running to finish a sync. Copy Hand-off copies at once even while changes are pending; the status line says when the shared copy is still syncing.
+On **macOS (0.2.2 and later, built from source)**, Snagbook saves directly to folders on an internal drive. For destinations macOS identifies as a network share or external drive, it saves locally first and sends changes in the background. A slow or disconnected shared drive does not hold up typing or captures. The status bar shows **Synced** or explains what is waiting. Pending changes survive quitting and resume when you reopen Snagbook; leave the app running to finish a sync. Copy Hand-off copies at once even while changes are pending; the status line says when the shared copy is still syncing.
 
 The first opening of an existing off-disc session copies it locally in the background. Previously mirrored sessions remain available offline. A previously identified off-disc destination stays recognized while disconnected; unknown locations must be reconnected before starting a session. Any sessions already queued by an earlier build keep their local copies so pending work can finish. Snagbook keeps its working copies in `~/Library/Application Support/Snagbook/LocalSessions`; **Local Copy** in the status bar opens yours. Keep this folder until all pending work has synced. If a destination file changes outside Snagbook, it keeps both copies and asks you to compare them rather than overwriting that file. Use one running Snagbook instance per session; it does not merge simultaneous edits from multiple computers. If the destination has no system Trash, deletions are moved to `.snagbook-trash` beside your session folders.
 
@@ -94,6 +94,12 @@ Press **⌃⌘R** anywhere (or the record button), drag the area to record, and 
 
 Beside every video Snagbook writes what a reader who cannot play it needs: a still frame for each second in `clip-001-frames/`, a contact sheet with timestamps (`clip-001-contact.jpg`), and `clip-001.json` with the length, the size and the list of stills.
 
+### Dictation
+
+On macOS 26 (Tahoe) or newer, click the microphone button, or press **⌃⌘M** anywhere, and speak: the words are typed into the note at the cursor as each phrase is recognised. Click it or press **⌃⌘M** again to stop. The arrow beside the button chooses the language; **System Language** follows your Mac's. Dictation keeps writing into the item it started in: if you switch to another item while you speak, the rest still goes to the end of the first item's note.
+
+Say punctuation as you would to any Mac dictation: "comma", "period", "question mark", "new line" (a new paragraph). The first time you dictate in a language, macOS downloads its speech model once; the button shows **Preparing…** until it is ready. Speech is recognised on your Mac and no recording is kept.
+
 ### Hand-off
 
 **⇧⌘C** copies a short text for whoever reads the session next: a header you write yourself (Settings › General), with the session's folder filled in. **⇧⌘H** gives one session its own header. Every session also keeps a `README.md` with the header and every item's note in order, so the whole session is one file to read.
@@ -112,6 +118,7 @@ The menu bar icon starts a recording or a screenshot, adds an item, starts or co
 | ⌃⌘R | Record: drag the area; again to stop |
 | ⌃⌘N | New item |
 | ⌃⌘B | Show or hide the notebook |
+| ⌃⌘M | Dictate; again to stop (macOS 26 or newer) |
 
 **In the notebook:**
 
@@ -157,7 +164,7 @@ Hover over any button to see its shortcut.
 
 - **General:** where new sessions go (`~/Snagbook` to start with), the folder name of a new session (`{hash}`, `{yyyy}`, `{MM}`, `{dd}`, `{HH}`, `{mm}`), what Copy Hand-off copies (the header, or only the path of the session's `README.md`), keeping the notebook above other windows (also over full-screen apps), and the header for sessions (`{session}`, `{readme}`, `{date}`, `{items}`).
 - **Capture:** the frame rate (10, 15 or 30), the largest video size (1280, 1920 or 2560 pixels), the sound the Mac plays, the mouse pointer, opening new screenshots in the mark-up window, and the Screen Recording permission.
-- **Shortcuts:** the four keys that work in any app, and a list of all the others.
+- **Shortcuts:** the keys that work in any app, and a list of all the others.
 - **Templates:** the buttons above the note.
 
 The settings are a JSON file you can also edit by hand: `~/Library/Application Support/Snagbook/config.json` on macOS, `~/.config/Snagbook/config.json` on Linux and `%APPDATA%\Snagbook\config.json` on Windows. If Snagbook cannot read it, it says so and does not overwrite it.
@@ -182,9 +189,10 @@ The settings are a JSON file you can also edit by hand: `~/Library/Application S
 - **The Trash**, when you delete an item or a session.
 - **The clipboard**, only when you copy the hand-off.
 - **The screen**, only while you take a screenshot or record, and only the area you choose; macOS sound only if you turn it on in Settings › Capture.
+- **The microphone**, only while you dictate or record with sound turned on. macOS asks once for permission.
 - **ffmpeg** on Linux and Windows, when installed, to encode recordings.
 
-Snagbook makes no network connections. Links in notes open in your browser when you click them.
+Snagbook makes no network connections. The first time you dictate in a language, macOS itself downloads that language's speech model. Links in notes open in your browser when you click them.
 
 ## Limits
 
@@ -192,6 +200,7 @@ Snagbook makes no network connections. Links in notes open in your browser when 
 - If an open session's folder is deleted elsewhere, Snagbook closes it when you return to the app and never recreates it.
 - On Wayland, global shortcuts are unavailable and recording is not supported; screenshots use the desktop's screen-sharing permission.
 - Linux and Windows recordings have no sound.
+- Dictation needs macOS 26 or newer and is not in the Linux and Windows editions. It adds punctuation only when you say it.
 
 ## Linux and Windows
 

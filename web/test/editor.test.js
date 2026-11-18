@@ -87,6 +87,13 @@ test("insertText at the start of an empty note or after a space adds no space", 
   assert.equal(md(), "Hello world\n");
 });
 
+test("insertText starts a new paragraph for each spoken new line", () => {
+  api.open({ id: "14", markdown: "Seen\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  api.insertText("the door is stuck.\nThe music stops.\n\nNext");
+  assert.equal(md(), "Seen the door is stuck.\n\nThe music stops.\n\nNext\n");
+});
+
 test("insertText replaces a selection", () => {
   api.open({ id: "13", markdown: "wrong word\n", focus: false });
   api.selectAll();

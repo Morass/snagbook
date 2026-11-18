@@ -698,7 +698,12 @@ export const api = {
     const { $from } = view.state.selection;
     const before = $from.parent.textBetween(Math.max(0, $from.parentOffset - 1), $from.parentOffset, "", "\ufffc");
     const glue = before && !/\s/.test(before) && !/^[\s.,;:!?)\]}…]/.test(text) ? " " : "";
-    view.dispatch(view.state.tr.insertText(glue + text).scrollIntoView());
+    const tr = view.state.tr;
+    text.split(/\n+/).forEach((line, i) => {
+      if (i) tr.split(tr.selection.from);
+      if (line) tr.insertText(i ? line : glue + line);
+    });
+    view.dispatch(tr.scrollIntoView());
     return true;
   },
 

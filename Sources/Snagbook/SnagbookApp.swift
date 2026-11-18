@@ -21,9 +21,10 @@ struct SnagbookApp: App {
             NotebookView()
                 .environmentObject(model)
                 .environmentObject(model.capture)
+                .environmentObject(model.dictation)
         }
         .defaultSize(width: 980, height: 720)
-        .commands { SnagbookCommands(model: model, capture: model.capture) }
+        .commands { SnagbookCommands(model: model, capture: model.capture, dictation: model.dictation) }
 
         Settings {
             SettingsView()
@@ -49,6 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 model.newItemFromMenu()
             }
             KeyboardShortcuts.onKeyUp(for: .showNotebook) { WindowPlacement.toggle(model) }
+            if DictationController.isSupported {
+                KeyboardShortcuts.onKeyUp(for: .dictate) { model.dictation.toggle() }
+            }
             SelfTest.runIfRequested(model)
             Shots.runIfRequested(model)
         }
@@ -79,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .terminateLater
             }
             Task {
+                await model.dictation.stopAndWait()
                 sender.reply(toApplicationShouldTerminate: await model.editor.flush())
             }
             return .terminateLater
@@ -110,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct SnagbookCommands: Commands {
     @ObservedObject var model: AppModel
     @ObservedObject var capture: CaptureController
+    @ObservedObject var dictation: DictationController
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -124,6 +130,9 @@ struct SnagbookCommands: Commands {
         CommandMenu("Capture") {
             Button(capture.recordButtonTitle) { capture.recordAction() }
             Button("Screenshot") { capture.screenshotAction() }
+            if DictationController.isSupported {
+                Button(dictation.buttonTitle) { dictation.toggle() }.disabled(dictation.phase == .finishing)
+            }
             if capture.phase != .idle {
                 Button("Cancel Capture") { capture.cancel() }
             }

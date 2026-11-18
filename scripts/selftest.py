@@ -2,6 +2,7 @@
 """Exercise a packaged release app while its SwiftPM build directory is unreadable."""
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import subprocess
@@ -15,7 +16,7 @@ if str(repo).encode() in binary.read_bytes():
 profile = '(version 1)(allow default)(deny file-read* (subpath ' + json.dumps(str(repo / '.build'), ensure_ascii=False) + '))'
 
 
-def run(mode, root, direct=False):
+def run(mode, root, direct=False, audio=None):
     sandbox_home = root / 'home'
     temporary = root / 'tmp'
     sandbox_home.mkdir(exist_ok=True)
@@ -25,6 +26,8 @@ def run(mode, root, direct=False):
                        SNAGBOOK_SELFTEST=mode, SNAGBOOK_CONFIG=str(root / 'config.json'), NSUnbufferedIO='YES')
     if direct:
         environment['SNAGBOOK_DIRECT_STORAGE'] = '1'
+    if audio:
+        environment['SNAGBOOK_SELFTEST_AUDIO'] = str(audio)
     if mode == 'sync-offline':
         environment['SNAGBOOK_SELFTEST_STORAGE'] = 'offDisk'
     elif mode == 'sync-recover':
@@ -74,3 +77,12 @@ else:
     (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
     run('1', root)
     shutil.rmtree(root)
+    if int(platform.mac_ver()[0].split('.')[0]) >= 26:
+        root = fixture()
+        (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
+        subprocess.run(['say', '-v', 'Samantha', '-o', str(root / 'speech.aiff'),
+                        'Hello snagbook comma the door is stuck in level two period new line it happens every time period'], check=True)
+        run('dictation', root, audio=root / 'speech.aiff')
+        shutil.rmtree(root)
+    else:
+        print('Dictation self-test skipped: it needs macOS 26 or newer', flush=True)
