@@ -572,6 +572,18 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(c.templates, Config.defaultTemplates)
     }
 
+    // The dictation language survives a restart; unset, the file carries no key at all, so
+    // an older Snagbook reading the same file sees nothing new.
+    func testDictationLanguageRoundTripsAndIsOmittedWhenUnset() throws {
+        let u = tmp()
+        let store = ConfigStore(url: u)
+        try store.update { $0.alwaysOnTop = true }
+        XCTAssertNil(ConfigStore(url: u).config.dictationLanguage)
+        XCTAssertFalse(try String(contentsOf: u, encoding: .utf8).contains("dictationLanguage"))
+        try store.update { $0.dictationLanguage = "cs-CZ" }
+        XCTAssertEqual(ConfigStore(url: u).config.dictationLanguage, "cs-CZ")
+    }
+
     func testBrokenFileIsNeverOverwritten() throws {
         let u = tmp()
         try FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -76,6 +76,8 @@ public struct Config: Codable, Equatable {
     public var alwaysOnTop: Bool = false
     /// The session that was open last, reopened on launch.
     public var lastSession: String?
+    /// BCP-47 language for dictation ("cs-CZ"); nil follows the system language.
+    public var dictationLanguage: String?
 
     public static let defaultHeader = """
     These are notes from a test session. Each numbered folder is one finding: read its \
@@ -105,6 +107,7 @@ public struct Config: Codable, Equatable {
         capture = try c.decodeIfPresent(CaptureSettings.self, forKey: .capture) ?? d.capture
         alwaysOnTop = try c.decodeIfPresent(Bool.self, forKey: .alwaysOnTop) ?? d.alwaysOnTop
         lastSession = try c.decodeIfPresent(String.self, forKey: .lastSession)
+        dictationLanguage = try c.decodeIfPresent(String.self, forKey: .dictationLanguage)
     }
 }
 

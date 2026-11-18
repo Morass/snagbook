@@ -692,6 +692,16 @@ export const api = {
     return true;
   },
 
+  /** Dictated words: plain text at the caret (never parsed as Markdown), with a space
+   *  before them when they would otherwise run into the previous word. */
+  insertText(text) {
+    const { $from } = view.state.selection;
+    const before = $from.parent.textBetween(Math.max(0, $from.parentOffset - 1), $from.parentOffset, "", "\ufffc");
+    const glue = before && !/\s/.test(before) && !/^[\s.,;:!?)\]}…]/.test(text) ? " " : "";
+    view.dispatch(view.state.tr.insertText(glue + text).scrollIntoView());
+    return true;
+  },
+
   /** Insert a picture or video as its own paragraph after the caret's block. */
   insertMedia({ kind, src, label = "", pos = null }) {
     const node = kind === "video" ? nodes.video.create({ src, label }) : nodes.image.create({ src, alt: label });

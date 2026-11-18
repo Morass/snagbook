@@ -67,6 +67,33 @@ test("templates insert inline into the current paragraph, or as blocks", () => {
   assert.match(md(), /1\. one\n2\. two/);
 });
 
+test("insertText adds dictated words as plain text, spaced from what is before the caret", () => {
+  api.open({ id: "11", markdown: "The door\n", focus: false });
+  view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
+  api.insertText("is stuck *again* # 2");
+  assert.equal(md(), "The door is stuck \\*again\\* # 2\n");
+  api.insertText(". Then it opens");
+  assert.equal(md(), "The door is stuck \\*again\\* # 2. Then it opens\n");
+  api.insertText(" twice");
+  assert.equal(md(), "The door is stuck \\*again\\* # 2. Then it opens twice\n");
+});
+
+test("insertText at the start of an empty note or after a space adds no space", () => {
+  api.open({ id: "12", markdown: "", focus: false });
+  api.insertText("Hello");
+  assert.equal(md(), "Hello\n");
+  type(" ");
+  api.insertText("world");
+  assert.equal(md(), "Hello world\n");
+});
+
+test("insertText replaces a selection", () => {
+  api.open({ id: "13", markdown: "wrong word\n", focus: false });
+  api.selectAll();
+  api.insertText("right");
+  assert.equal(md(), "right\n");
+});
+
 test("insertMedia puts a picture in its own paragraph and keeps typing below it", () => {
   api.open({ id: "05", markdown: "Before\n", focus: false });
   view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.atEnd(view.state.doc)));
