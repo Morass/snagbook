@@ -216,6 +216,53 @@ enum SelfTest {
         check(firstText.components(separatedBy: phrase).count == 3, "words spoken after switching items go to the item dictation began in: \(firstText)")
         check(firstText.components(separatedBy: "level two.\n\nit happens").count == 3, "a spoken new line is a new paragraph in the saved note too")
         check(!read(try! live.noteURL(second)).lowercased().contains(phrase), "the newly shown item gets none of them")
+
+        // Stopping while the speech model is still being prepared.
+        model.dictation.preparationDelay = 1.5
+        model.dictation.start(audioFile: audio)
+        await settle(300)
+        model.dictation.stop()
+        await settle(UInt64((1.5 + seconds + 2) * 1000))
+        check(model.dictation.phase == .idle, "stopping while dictation prepares keeps it stopped (\(model.dictation.phase))")
+        model.dictation.preparationDelay = nil
+        model.dictation.stop()
+        for _ in 0..<600 where model.dictation.phase != .idle { await settle(100) }
+
+        // A phrase recognised while the editor saves on its way to another item.
+        model.select(first)
+        for _ in 0..<50 where model.selectedID != first { await settle(100) }
+        await settle()
+        guard let s3 = model.session, let identity = model.openedItemIdentity(first) else { return check(false, "the first item is shown again") }
+        model.select(second)
+        for _ in 0..<1000 where !model.editor.isFlushing { await Task.yield() }
+        check(model.editor.isFlushing, "the switch to another item is flushing the editor")
+        do { try await model.dictated("Raced phrase", session: s3, item: first, identity: identity) } catch { check(false, "dictated: \(error)") }
+        for _ in 0..<50 where model.selectedID != second { await settle(100) }
+        _ = await model.editor.flush()
+        model.select(first)
+        for _ in 0..<50 where model.selectedID != first { await settle(100) }
+        await settle()
+        _ = await model.editor.flush()
+        check(read(try! s3.noteURL(first)).contains("Raced phrase"), "a phrase heard while switching items is kept in its item: \(read(try! s3.noteURL(first)))")
+
+        // A phrase recognised while the editor page reloads after a crash.
+        guard let s4 = model.session, let identity4 = model.openedItemIdentity(first) else { return check(false, "first item still shown") }
+        model.editor.webViewWebContentProcessDidTerminate(model.editor.webView)
+        do { try await model.dictated("After the crash", session: s4, item: first, identity: identity4) } catch { check(false, "dictated: \(error)") }
+        for _ in 0..<100 where !(await pageReady(model)) { await settle(100) }
+        await settle(700)
+        _ = await model.editor.flush()
+        check(read(try! s4.noteURL(first)).contains("After the crash"), "a phrase heard while the editor reloads is saved")
+        check((await js(model, "snag.markdown()") as? String)?.contains("After the crash") == true, "and shown in the reloaded editor")
+
+        // Quitting while dictating keeps what was said.
+        let spokenBefore = read(try! s4.noteURL(first)).lowercased().components(separatedBy: phrase).count
+        model.dictation.start(audioFile: audio)
+        for _ in 0..<600 where model.dictation.phase != .listening { await settle(100) }
+        await settle(UInt64(seconds * 1000))
+        let quitOK = await model.finishForQuit()
+        check(quitOK && model.dictation.phase == .idle, "quitting stops dictation and saves the editor")
+        check(read(try! s4.noteURL(first)).lowercased().components(separatedBy: phrase).count == spokenBefore + 1, "words spoken just before quitting are saved")
     }
 
     static func pageReady(_ model: AppModel) async -> Bool {

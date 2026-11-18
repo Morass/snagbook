@@ -46,6 +46,18 @@ def run(mode, root, direct=False, audio=None):
         raise SystemExit(1)
 
 
+def dictation():
+    if int(platform.mac_ver()[0].split('.')[0]) < 26:
+        print('Dictation self-test skipped: it needs macOS 26 or newer', flush=True)
+        return
+    root = fixture()
+    (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
+    subprocess.run(['say', '-v', 'Samantha', '-o', str(root / 'speech.aiff'),
+                    'Hello snagbook comma the door is stuck in level two period new line it happens every time period'], check=True)
+    run('dictation', root, audio=root / 'speech.aiff')
+    shutil.rmtree(root)
+
+
 def fixture():
     return Path(tempfile.mkdtemp(prefix='snagbook-selftest-'))
 
@@ -55,6 +67,8 @@ if os.environ.get('SNAGBOOK_SELFTEST_LEGACY_ONLY'):
     (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
     run('1', root)
     shutil.rmtree(root)
+elif os.environ.get('SNAGBOOK_SELFTEST_DICTATION_ONLY'):
+    dictation()
 elif os.environ.get('SNAGBOOK_SELFTEST_BUNDLE_ONLY'):
     root = fixture()
     (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
@@ -77,12 +91,4 @@ else:
     (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
     run('1', root)
     shutil.rmtree(root)
-    if int(platform.mac_ver()[0].split('.')[0]) >= 26:
-        root = fixture()
-        (root / 'config.json').write_text(json.dumps({'sessionsFolder': str(root / 'sessions')}))
-        subprocess.run(['say', '-v', 'Samantha', '-o', str(root / 'speech.aiff'),
-                        'Hello snagbook comma the door is stuck in level two period new line it happens every time period'], check=True)
-        run('dictation', root, audio=root / 'speech.aiff')
-        shutil.rmtree(root)
-    else:
-        print('Dictation self-test skipped: it needs macOS 26 or newer', flush=True)
+    dictation()

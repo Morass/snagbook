@@ -83,8 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .terminateLater
             }
             Task {
-                await model.dictation.stopAndWait()
-                sender.reply(toApplicationShouldTerminate: await model.editor.flush())
+                sender.reply(toApplicationShouldTerminate: await model.finishForQuit())
             }
             return .terminateLater
         }
@@ -95,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let shouldQuit = Self.terminationDecision(phase: capture.phase, saveFailed: capture.saveFailed) {
             guard shouldQuit else { return app.reply(toApplicationShouldTerminate: false) }
             Task {
-                app.reply(toApplicationShouldTerminate: await AppModel.shared.editor.flush())
+                app.reply(toApplicationShouldTerminate: await AppModel.shared.finishForQuit())
             }
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.waitForSave(app) }

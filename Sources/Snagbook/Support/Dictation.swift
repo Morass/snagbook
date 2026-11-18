@@ -16,6 +16,8 @@ final class DictationController: ObservableObject {
     private var tail: AVAudioPCMBuffer?
     private var finish: (() async -> Void)?
     private var generation = 0
+    /// Self-test stand-in for a slow model download, in seconds.
+    var preparationDelay: Double?
 
     init(model: AppModel) { self.model = model }
 
@@ -65,6 +67,7 @@ final class DictationController: ObservableObject {
             do {
                 try await begin(run: run, audioFile: audioFile)
             } catch {
+                guard generation == run else { return }
                 await abandon(run: run)
                 model.show(error)
             }
@@ -72,7 +75,12 @@ final class DictationController: ObservableObject {
     }
 
     func stop() {
-        guard phase == .listening || isPreparing else { return }
+        if isPreparing {
+            generation += 1
+            phase = .idle
+            return
+        }
+        guard phase == .listening else { return }
         phase = .finishing
         engine?.stop()
         engine?.inputNode.removeTap(onBus: 0)
@@ -111,9 +119,13 @@ final class DictationController: ObservableObject {
 
     @available(macOS 26.0, *)
     private func begin(run: Int, audioFile: URL?) async throws {
+        /// Stop (or a newer start) during any wait below abandons this one.
+        func current() throws { if generation != run { throw CancellationError() } }
         let (session, item) = try await model.dictationTarget()
+        try current()
         guard let identity = model.openedItemIdentity(item) else { throw SnagError.noSuchItem(item) }
         if audioFile == nil { try await Self.requireMicrophone() }
+        try current()
 
         let wanted = model.config.dictationLanguage.map { Locale(identifier: $0) } ?? Locale.current
         guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: wanted) else {
@@ -121,13 +133,17 @@ final class DictationController: ObservableObject {
         }
         let name = Self.displayName(locale.identifier(.bcp47))
         let transcriber = DictationTranscriber(locale: locale, preset: .longDictation)
-        if let download = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            guard generation == run else { return }
+        let download = try await AssetInventory.assetInstallationRequest(supporting: [transcriber])
+        if let preparationDelay { try await Task.sleep(nanoseconds: UInt64(preparationDelay * 1e9)) }
+        try current()
+        if let download {
             phase = .preparing("Downloading \(name)…")
             try await download.downloadAndInstall()
+            try current()
         }
-        guard generation == run, isPreparing else { return }
-        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+        let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+        try current()
+        guard let format else {
             throw DictationError("Dictation could not find an audio format for \(name).")
         }
 
@@ -135,6 +151,11 @@ final class DictationController: ObservableObject {
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let inputs = stream.compactMap { ($0 as? AVAudioPCMBuffer).map { AnalyzerInput(buffer: $0) } }
         try await analyzer.start(inputSequence: inputs)
+        guard generation == run else {
+            continuation.finish()
+            await analyzer.cancelAndFinishNow()
+            return
+        }
 
         let model = self.model
         let results = Task { @MainActor in
@@ -142,7 +163,7 @@ final class DictationController: ObservableObject {
                 for try await result in transcriber.results {
                     let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !text.isEmpty else { continue }
-                    try model.dictated(text, session: session, item: item, identity: identity)
+                    try await model.dictated(text, session: session, item: item, identity: identity)
                 }
             } catch {
                 model.show(error)

@@ -13,6 +13,10 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     weak var model: AppModel?
     /// Item currently shown, as the editor knows it.
     private(set) var shownItem: Int?
+    private var flushes = 0
+    /// A flush has taken the page's unsaved change and not yet stored it.
+    var isFlushing: Bool { flushes > 0 }
+    var isReady: Bool { ready }
     /// Part of every media address; see MediaSchemeHandler.
     private var epoch = 0
 
@@ -101,6 +105,8 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             sessionClosed()
             return true
         }
+        flushes += 1
+        defer { flushes -= 1 }
         guard ready, let r = await evaluate("snag.takePending()") as? [String: Any],
               let id = r["id"] as? Int, let md = r["markdown"] as? String else { return true }
         guard model?.noteChanged(id: id, markdown: md) == true else {

@@ -881,6 +881,12 @@ final class AppModel: ObservableObject {
 
     // MARK: - dictation
 
+    /// Everything to put on disk before quitting: dictation's last words, then the editor.
+    func finishForQuit() async -> Bool {
+        await dictation.stopAndWait()
+        return await editor.flush()
+    }
+
     /// The item dictated words go to: the shown one, made first if there is none.
     func dictationTarget() async throws -> (Session, Int) {
         if session == nil, !(await prepareSessionStorage()) { throw DictationError("No session to dictate into.") }
@@ -891,8 +897,10 @@ final class AppModel: ObservableObject {
 
     /// Words recognised while dictating into `id`: at the caret while that item is shown,
     /// otherwise added to the end of its note. A replaced or deleted item gets nothing.
-    func dictated(_ text: String, session source: Session, item id: Int, identity: String) throws {
-        if session?.isSameSession(as: source) == true, selectedID == id, editor.shownItem == id,
+    func dictated(_ text: String, session source: Session, item id: Int, identity: String) async throws {
+        // A flush in progress has already taken the page's text; adding to it now would be lost.
+        while editor.isFlushing { try? await Task.sleep(nanoseconds: 20_000_000) }
+        if editor.isReady, session?.isSameSession(as: source) == true, selectedID == id, editor.shownItem == id,
            editorItemIdentity == identity {
             editor.insertText(text)
             return
