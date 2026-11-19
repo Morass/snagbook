@@ -82,6 +82,70 @@ final class SessionSyncTests: XCTestCase {
         XCTAssertNil(try store.entry(target: entry.target))
     }
 
+    func checkpoint(_ entry: LocalSessionStore.Entry, _ change: (inout SessionSync.Checkpoint) -> Void) throws {
+        var c = try SessionSync.load(entry)
+        change(&c)
+        try SessionSync.save(c, entry: entry)
+    }
+
+    func testARemountedShareStillRetiresADeletedSession() throws {
+        let (local, entry) = try create()
+        try local.addItem()
+        XCTAssertEqual(try worker.run(entry), .synced)
+        try checkpoint(entry) { c in
+            c.parentIdentity = "1:" + (c.parentIdentity?.split(separator: ":").last.map(String.init) ?? "")
+            c.parentVolume = nil
+        }
+        try FileManager.default.removeItem(at: Paths.url(entry.target))
+        XCTAssertEqual(try worker.run(entry), .deleted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: local.url.path))
+    }
+
+    func testAnotherVolumeAtTheSharePathKeepsTheLocalCopy() throws {
+        let (local, entry) = try create()
+        try local.addItem()
+        XCTAssertEqual(try worker.run(entry), .synced)
+        try checkpoint(entry) { c in
+            c.parentIdentity = "1:" + (c.parentIdentity?.split(separator: ":").last.map(String.init) ?? "")
+            c.parentVolume = "smb://elsewhere/share"
+        }
+        try FileManager.default.removeItem(at: Paths.url(entry.target))
+        XCTAssertThrowsError(try worker.run(entry))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: local.url.path))
+    }
+
+    func testASessionRenamedOnTheShareKeepsTheLocalCopy() throws {
+        let (local, entry) = try create()
+        let item = try local.addItem()
+        XCTAssertEqual(try worker.run(entry), .synced)
+        try FileManager.default.moveItem(at: Paths.url(entry.target), to: destination.appendingPathComponent("renamed"))
+        try local.writeNote(item.id, body: "not sent yet")
+        XCTAssertThrowsError(try worker.run(entry))
+        XCTAssertEqual(try local.readNote(item.id), "not sent yet")
+    }
+
+    func testAnEmptySharedFolderRemovedBeforeAnyUploadIsCreatedAgain() throws {
+        let (local, entry) = try create()
+        let item = try local.addItem()
+        try local.writeNote(item.id, body: "only copy")
+        try FileManager.default.createDirectory(at: Paths.url(entry.target), withIntermediateDirectories: false)
+        try checkpoint(entry) { c in c.targetIdentity = try? SessionSync.directoryIdentity(Paths.url(entry.target)); c.files = [:] }
+        try FileManager.default.removeItem(at: Paths.url(entry.target))
+        XCTAssertEqual(try worker.run(entry), .synced)
+        XCTAssertEqual(try Session.open(entry.target).readNote(item.id), "only copy")
+    }
+
+    func testRetiringCleansCopiesLeftByAnInterruptedRetirement() throws {
+        let (first, firstEntry) = try create()
+        try first.addItem()
+        XCTAssertEqual(try worker.run(firstEntry), .synced)
+        let retired = store.root.appendingPathComponent(".retired")
+        try FileManager.default.createDirectory(at: retired.appendingPathComponent("stale-copy"), withIntermediateDirectories: true)
+        try FileManager.default.removeItem(at: Paths.url(firstEntry.target))
+        XCTAssertEqual(try worker.run(firstEntry), .deleted)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: retired.path), [])
+    }
+
     func testAnUnreachableShareKeepsTheLocalCopy() throws {
         let (local, entry) = try create()
         try local.addItem()

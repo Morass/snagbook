@@ -52,6 +52,8 @@ final class AppModel: ObservableObject {
         SessionSync(trash: DestinationTrash.handler(for: Paths.url(entry.target).deletingLastPathComponent()), acknowledgementCheckInterval: 30)
     }
     private var listingRoots: Set<String> = []
+    /// Sessions deleted on the share; a listing read just before the deletion must not bring them back.
+    private var retiredTargets: Set<String> = []
     private var syncGeneration: UInt64 = 0
     private var navigationGeneration: UInt64 = 0
 
@@ -106,6 +108,7 @@ final class AppModel: ObservableObject {
                     }
                     let isOpen = self.session.map({ LocalSessionStore.key(for: $0.url) }) == entry.key
                     if outcome == .deleted, !entry.deleteRequested {
+                        self.retiredTargets.insert(Paths.url(entry.target).standardizedFileURL.path)
                         self.recentSessions.removeAll { $0.path == entry.target }
                         if isOpen {
                             self.closeSession()
@@ -117,7 +120,7 @@ final class AppModel: ObservableObject {
                     } else { self.setSyncMessage(message, for: entry.key) }
                 }
             }
-        } catch { syncMessages[session.map { LocalSessionStore.key(for: $0.url) } ?? "storage"] = error.localizedDescription }
+        } catch { setSyncMessage(error.localizedDescription, for: session.map { LocalSessionStore.key(for: $0.url) } ?? "storage") }
     }
 
     private func readerQueue(for root: String) -> DispatchQueue {
@@ -136,7 +139,7 @@ final class AppModel: ObservableObject {
                 if !entry.deleteRequested, let local = try? Session.summary(at: entry.content, displayPath: entry.target) { sessions.append(local) }
             }
         }
-        return sessions.sorted { $0.created > $1.created }
+        return sessions.filter { !retiredTargets.contains(Paths.url($0.path).standardizedFileURL.path) }.sorted { $0.created > $1.created }
     }
 
     func refreshRecentSessions() {

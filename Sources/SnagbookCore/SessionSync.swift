@@ -19,6 +19,8 @@ public final class SessionSync: Sendable {
         var localStamps: [String: Stamp]? = nil
         var localDigests: [String: String]? = nil
         var parentIdentity: String? = nil
+        /// Survives remounts, unlike `parentIdentity`, whose device number changes on every SMB mount.
+        var parentVolume: String? = nil
         var resolvedParent: String? = nil
         var targetIdentity: String? = nil
         var lastChecked: Date? = nil
@@ -66,18 +68,36 @@ public final class SessionSync: Sendable {
         }
         #endif
         let parentIdentity = try Self.directoryIdentity(parent)
-        if let expected = checkpoint.parentIdentity, expected != parentIdentity,
-           !sameSession, checkpoint.targetIdentity != nil { throw SyncError.conflict("destination folder") }
-        if checkpoint.parentIdentity != parentIdentity || checkpoint.resolvedParent != parent.path {
+        let parentVolume = Self.volumeIdentity(parent)
+        let sameParent = checkpoint.parentIdentity.map { $0 == parentIdentity } ?? true
+            || Self.isRemount(checkpoint, parent: parent, identity: parentIdentity, volume: parentVolume)
+        if !sameParent, !sameSession, checkpoint.targetIdentity != nil { throw SyncError.conflict("destination folder") }
+        if checkpoint.parentIdentity != parentIdentity || checkpoint.resolvedParent != parent.path
+            || (parentVolume != nil && checkpoint.parentVolume != parentVolume) {
             checkpoint.parentIdentity = parentIdentity
             checkpoint.resolvedParent = parent.path
+            checkpoint.parentVolume = parentVolume ?? checkpoint.parentVolume
             try Self.save(checkpoint, entry: entry)
         }
         if !fm.fileExists(atPath: destination.path) {
-            // The share is reachable and is the same folder, so the session was deleted there
-            // (by hand or by a cleanup job): the shared copy is the original, so the local one goes too.
-            if checkpoint.targetIdentity != nil { return try Self.retire(checkpoint, entry: entry) }
             if entry.deleteRequested { return try Self.retire(checkpoint, entry: entry) }
+            if checkpoint.targetIdentity != nil {
+                // A failed lookup also reads as "missing", so absence must come from a full listing
+                // of a parent that is still the same mounted folder afterwards.
+                guard let names = try? fm.contentsOfDirectory(atPath: parent.path), !names.contains(destination.lastPathComponent),
+                      (try? Self.directoryIdentity(parent)) == parentIdentity, Self.isMounted(parent) else { throw SyncError.unavailable }
+                if checkpoint.files.isEmpty {
+                    // The folder never received anything, so the local copy is the only one: start again.
+                    checkpoint.targetIdentity = nil
+                } else {
+                    for name in names where (try? Session.loadManifest(parent.appendingPathComponent(name)).id) == entry.sessionID {
+                        throw SyncError.conflict("session folder renamed to \(name)")
+                    }
+                    // Deleted on the share (by hand or by a cleanup job): the shared session is the
+                    // original, so its local copy goes too, unsent changes included (owner rule).
+                    return try Self.retire(checkpoint, entry: entry)
+                }
+            }
             checkpoint.creatingTarget = true
             try Self.save(checkpoint, entry: entry)
             try fm.createDirectory(at: destination, withIntermediateDirectories: false)
@@ -208,8 +228,38 @@ public final class SessionSync: Sendable {
         _ = try directoryIdentity(retired)
         let target = retired.appendingPathComponent(entry.directory.lastPathComponent)
         try FileManager.default.moveItem(at: entry.directory, to: target)
-        try? FileManager.default.removeItem(at: target)
+        // Also removes copies an earlier run moved here but quit before deleting.
+        for leftover in (try? FileManager.default.contentsOfDirectory(at: retired, includingPropertiesForKeys: nil)) ?? [] {
+            try? FileManager.default.removeItem(at: leftover)
+        }
         return .deleted
+    }
+
+    static func volumeIdentity(_ url: URL) -> String? {
+        #if os(macOS)
+        let values = try? url.resourceValues(forKeys: [.volumeURLForRemountingKey, .volumeUUIDStringKey])
+        return values?.volumeURLForRemounting?.absoluteString ?? values?.volumeUUIDString
+        #else
+        return nil
+        #endif
+    }
+
+    /// The same folder at the same path, mounted again: only the device number differs.
+    /// Checkpoints written before `parentVolume` existed are matched on path and inode alone.
+    static func isRemount(_ checkpoint: Checkpoint, parent: URL, identity: String, volume: String?) -> Bool {
+        guard checkpoint.resolvedParent == parent.path, let old = checkpoint.parentIdentity,
+              old.split(separator: ":").last == identity.split(separator: ":").last else { return false }
+        if let stored = checkpoint.parentVolume { return stored == volume }
+        return true
+    }
+
+    static func isMounted(_ url: URL) -> Bool {
+        #if os(macOS)
+        guard url.path.hasPrefix("/Volumes/") else { return true }
+        return (try? url.resourceValues(forKeys: [.volumeURLKey]).volume?.path).map { $0 != "/" } ?? false
+        #else
+        return true
+        #endif
     }
 
     public static func hasAcknowledgedContent(_ entry: LocalSessionStore.Entry) throws -> Bool {
