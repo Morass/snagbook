@@ -75,7 +75,12 @@ final class AppModel: ObservableObject {
     func markSyncPending() {
         guard let session, isLocalSession(session) else { return }
         syncGeneration &+= 1
-        syncMessages[LocalSessionStore.key(for: session.url)] = "Saved locally · syncing"
+        setSyncMessage("Saved locally · syncing", for: LocalSessionStore.key(for: session.url))
+    }
+
+    /// Every publish re-renders the whole window, and the sync loop reports each session every second.
+    private func setSyncMessage(_ message: String?, for key: String) {
+        if syncMessages[key] != message { syncMessages[key] = message }
     }
 
     func syncInBackground() {
@@ -83,11 +88,11 @@ final class AppModel: ObservableObject {
         do {
             let scan = try localStore.scan()
             let keys = Set(scan.entries.map(\.key)).union(scan.issues.keys)
-            syncMessages = syncMessages.filter { keys.contains($0.key) }
-            for (key, message) in scan.issues { syncMessages[key] = message }
+            if syncMessages.keys.contains(where: { !keys.contains($0) }) { syncMessages = syncMessages.filter { keys.contains($0.key) } }
+            for (key, message) in scan.issues { setSyncMessage(message, for: key) }
             let blocked = capture.syncBlockedSessions.union(Annotator.open.map { LocalSessionStore.key(for: $0.session.url) })
             let entries = scan.entries.filter { !blocked.contains($0.key) }
-            for entry in scan.entries where syncMessages[entry.key] == nil { syncMessages[entry.key] = "Saved locally · syncing" }
+            for entry in scan.entries where syncMessages[entry.key] == nil { setSyncMessage("Saved locally · syncing", for: entry.key) }
             let generation = syncGeneration
             syncRunner.submit(entries) { [weak self] entry, outcome in
                 Task { @MainActor in
@@ -99,9 +104,17 @@ final class AppModel: ObservableObject {
                     case .deleted: message = nil
                     case .failed(let error): message = error
                     }
-                    if message == "Synced", self.session.map({ LocalSessionStore.key(for: $0.url) }) == entry.key, generation != self.syncGeneration {
-                        self.syncMessages[entry.key] = "Saved locally · syncing"
-                    } else { self.syncMessages[entry.key] = message }
+                    let isOpen = self.session.map({ LocalSessionStore.key(for: $0.url) }) == entry.key
+                    if outcome == .deleted, !entry.deleteRequested {
+                        self.recentSessions.removeAll { $0.path == entry.target }
+                        if isOpen {
+                            self.closeSession()
+                            self.alert = AlertInfo(title: "Session closed", message: "The session folder \(entry.target) was deleted outside Snagbook, so its local copy was removed too.")
+                        }
+                    }
+                    if message == "Synced", isOpen, generation != self.syncGeneration {
+                        self.setSyncMessage("Saved locally · syncing", for: entry.key)
+                    } else { self.setSyncMessage(message, for: entry.key) }
                 }
             }
         } catch { syncMessages[session.map { LocalSessionStore.key(for: $0.url) } ?? "storage"] = error.localizedDescription }

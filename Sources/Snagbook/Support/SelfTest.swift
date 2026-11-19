@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Combine
 import KeyboardShortcuts
 import SnagbookCore
 import SnagbookRender
@@ -161,6 +162,24 @@ enum SelfTest {
                 for _ in 0..<100 where model.session?.url == previousSession { await settle(50) }
                 check(model.session.map { model.isLocalSession($0) } == true && model.session?.url != previousSession,
                       "a previously recognized off-disc destination can start a queued session after restart")
+                guard let fresh = model.session else { return }
+                for _ in 0..<150 where model.syncMessage != "Synced" { await settle(100) }
+                check(model.syncMessage == "Synced", "the new session reaches its destination: \(model.syncMessages)")
+                for _ in 0..<100 where model.status != nil { await settle(100) }
+                await settle(1500)
+                var publishes = 0
+                var changed: [String] = []
+                let watch = model.objectWillChange.sink { publishes += 1 }
+                let w2 = [model.$syncMessages.dropFirst().sink { changed.append("sync \($0)") }, model.$status.dropFirst().sink { changed.append("status \($0 ?? "nil")") }, model.$recentSessions.dropFirst().sink { _ in changed.append("recent") }, model.$items.dropFirst().sink { _ in changed.append("items") }]
+                await settle(3000)
+                watch.cancel(); w2.forEach { $0.cancel() }
+                check(publishes == 0, "an idle synced window is not re-rendered by the sync loop (\(publishes) updates in 3 s: \(changed))")
+                try FileManager.default.removeItem(at: Paths.url(fresh.displayPath))
+                // A synced, unchanged session re-checks its destination every 30 s.
+                for _ in 0..<450 where model.session != nil { await settle(100) }
+                check(model.session == nil && model.alert?.title == "Session closed", "a session deleted in the shared folder closes: \(model.alert?.message ?? "no alert") \(model.syncMessages) \(fresh.displayPath) exists \(exists(Paths.url(fresh.displayPath)))")
+                check(!exists(fresh.url) && (try? model.localStore?.entry(target: fresh.displayPath)) == nil, "its local copy is deleted too")
+                model.alert = nil
             } catch { check(false, "new-item hand-off state: \(error)") }
 
         }

@@ -74,10 +74,9 @@ public final class SessionSync: Sendable {
             try Self.save(checkpoint, entry: entry)
         }
         if !fm.fileExists(atPath: destination.path) {
-            if checkpoint.targetIdentity != nil {
-                if entry.deleteRequested { return try Self.retire(checkpoint, entry: entry) }
-                throw SyncError.unavailable
-            }
+            // The share is reachable and is the same folder, so the session was deleted there
+            // (by hand or by a cleanup job): the shared copy is the original, so the local one goes too.
+            if checkpoint.targetIdentity != nil { return try Self.retire(checkpoint, entry: entry) }
             if entry.deleteRequested { return try Self.retire(checkpoint, entry: entry) }
             checkpoint.creatingTarget = true
             try Self.save(checkpoint, entry: entry)

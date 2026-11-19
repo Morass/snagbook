@@ -75,10 +75,33 @@ final class SessionSyncTests: XCTestCase {
         let item = try local.addItem()
         XCTAssertEqual(try worker.run(entry), .synced)
         try FileManager.default.removeItem(at: Paths.url(entry.target))
-        try local.writeNote(item.id, body: "kept locally")
-        XCTAssertThrowsError(try worker.run(entry))
+        try local.writeNote(item.id, body: "written after the shared copy was deleted")
+        XCTAssertEqual(try worker.run(entry), .deleted)
         XCTAssertFalse(FileManager.default.fileExists(atPath: Paths.url(entry.target).path))
-        XCTAssertEqual(try local.readNote(item.id), "kept locally")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: local.url.path))
+        XCTAssertNil(try store.entry(target: entry.target))
+    }
+
+    func testAnUnreachableShareKeepsTheLocalCopy() throws {
+        let (local, entry) = try create()
+        try local.addItem()
+        XCTAssertEqual(try worker.run(entry), .synced)
+        let parked = base.appendingPathComponent("parked")
+        try FileManager.default.moveItem(at: destination, to: parked)
+        XCTAssertThrowsError(try worker.run(entry))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: local.url.path))
+        try FileManager.default.moveItem(at: parked, to: destination)
+        XCTAssertEqual(try worker.run(entry), .synced)
+    }
+
+    func testAnotherFolderAtTheSharePathKeepsTheLocalCopy() throws {
+        let (local, entry) = try create()
+        try local.addItem()
+        XCTAssertEqual(try worker.run(entry), .synced)
+        try FileManager.default.moveItem(at: destination, to: base.appendingPathComponent("parked"))
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try worker.run(entry))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: local.url.path))
     }
 
     func testRenameAndDeleteAreSyncedWithoutRemovingUntrackedDestinationFiles() throws {
@@ -409,13 +432,13 @@ final class SessionSyncTests: XCTestCase {
     }
 
 
-    func testDestinationRemovalIsReportedEvenWhenNoNewLocalEditExists() throws {
+    func testDestinationRemovalRetiresTheLocalCopyEvenWhenNoNewLocalEditExists() throws {
         let (local, entry) = try create()
         try local.addItem()
         XCTAssertEqual(try worker.run(entry), .synced)
         try FileManager.default.removeItem(at: Paths.url(entry.target))
-        XCTAssertThrowsError(try worker.run(entry))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: local.url.path))
+        XCTAssertEqual(try worker.run(entry), .deleted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: local.url.path))
     }
 
     func testCommittedImportSurvivesAnErrorAfterItsCommitMarker() throws {
